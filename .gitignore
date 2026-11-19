@@ -1,0 +1,11 @@
+node_modules
+dist
+.od-frames
+.od-skills
+.file-versions
+index.html.artifact.json
+.agents
+.claude
+skills-lock.json
+srv.log
+body.tmp

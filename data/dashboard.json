@@ -1,0 +1,4396 @@
+{
+  "FIT": {
+    "zero": "Zero-cost",
+    "multi": "Multi-account",
+    "small": "Small budget",
+    "climber": "Leaderboard climber",
+    "community": "Community contributor",
+    "technical": "Technical"
+  },
+  "CARDS": [
+    {
+      "r": 1,
+      "n": "Variational",
+      "t": "VARS",
+      "g": "S",
+      "b": [
+        "live"
+      ],
+      "f": "$171.80M",
+      "tk": "2/6",
+      "h": 8332,
+      "u": "today",
+      "fit": [
+        "climber",
+        "small"
+      ],
+      "best": {
+        "n": "Mainnet",
+        "ty": "mainnet",
+        "c": "$15",
+        "m": "10 min"
+      },
+      "sc": 100,
+      "sub": [
+        10,
+        7,
+        10
+      ],
+      "url": "https://omni.variational.io/?ref=OMNIRANK"
+    },
+    {
+      "r": 2,
+      "n": "entropy",
+      "t": null,
+      "g": "S",
+      "b": [
+        "early",
+        "zero"
+      ],
+      "f": "$14.00M",
+      "tk": "2/2",
+      "h": 4033,
+      "u": "2d",
+      "fit": [
+        "zero",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Discord Roles",
+        "ty": "role",
+        "c": "Free",
+        "m": "25 min"
+      },
+      "sc": 96,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://discord.gg/ujbAfJZTQF"
+    },
+    {
+      "r": 3,
+      "n": "Lighter",
+      "t": "LIT",
+      "g": "S",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$68.03M",
+      "tk": "2/2",
+      "h": 13635,
+      "u": "5d",
+      "fit": [
+        "multi"
+      ],
+      "best": {
+        "n": "Arkada Quest",
+        "ty": "bounty",
+        "c": "$1",
+        "m": "5 min"
+      },
+      "sc": 94,
+      "sub": [
+        10,
+        7,
+        10
+      ],
+      "url": "https://app.arkada.gg/campaign/robinhoodchain-lighter?utm_source=cryptorank&ref=Cryptorank"
+    },
+    {
+      "r": 4,
+      "n": "ZetaChain",
+      "t": "ZETA",
+      "g": "S",
+      "b": [
+        "live",
+        "risk",
+        "token"
+      ],
+      "f": "$27.06M",
+      "tk": "1/1",
+      "h": 3602,
+      "u": "5d",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 94,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://labs.zetachain.com/"
+    },
+    {
+      "r": 5,
+      "n": "WalletConnect Network",
+      "t": "WCT",
+      "g": "S",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$8.00M",
+      "tk": "1/1",
+      "h": 6069,
+      "u": "5d",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 92,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://walletconnect.com/connectivity/ai-agents"
+    },
+    {
+      "r": 6,
+      "n": "QFEX",
+      "t": null,
+      "g": "S",
+      "b": [
+        "rerun",
+        "early",
+        "zero",
+        "risk"
+      ],
+      "f": "$9.50M",
+      "tk": "3/3",
+      "h": 2531,
+      "u": "5d",
+      "fit": [
+        "zero",
+        "climber",
+        "community"
+      ],
+      "best": {
+        "n": "Discord",
+        "ty": "role",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 92,
+      "sub": [
+        6,
+        9,
+        10
+      ],
+      "url": "https://discord.gg/qfex"
+    },
+    {
+      "r": 7,
+      "n": "DogeOS",
+      "t": null,
+      "g": "S",
+      "b": [
+        "live"
+      ],
+      "f": "$6.90M",
+      "tk": "3/7",
+      "h": 2003,
+      "u": "5d",
+      "fit": [
+        "zero",
+        "multi",
+        "technical"
+      ],
+      "best": {
+        "n": "Wheel of Doge",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 92,
+      "sub": [
+        9,
+        10,
+        10
+      ],
+      "url": "https://wheel.dogeos.com/"
+    },
+    {
+      "r": 8,
+      "n": "42 (prev. Alkimiya)",
+      "t": null,
+      "g": "S",
+      "b": [
+        "live"
+      ],
+      "f": "$7.20M",
+      "tk": "5/15",
+      "h": 5565,
+      "u": "6d",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Tickets",
+        "ty": "bounty",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 91,
+      "sub": [
+        10,
+        10,
+        10
+      ],
+      "url": "https://ticket.42.space/"
+    },
+    {
+      "r": 9,
+      "n": "Jumper",
+      "t": "JUMP",
+      "g": "S",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$2.98M",
+      "tk": "1/3",
+      "h": 6066,
+      "u": "5d",
+      "fit": [],
+      "best": {
+        "n": "Point Farming",
+        "ty": "trading",
+        "c": "$100",
+        "m": "20 min"
+      },
+      "sc": 90,
+      "sub": [
+        10,
+        4,
+        10
+      ],
+      "url": "https://jumper.exchange/"
+    },
+    {
+      "r": 10,
+      "n": "Canton Network",
+      "t": "CC",
+      "g": "S",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$812.20M",
+      "tk": "1/5",
+      "h": 4963,
+      "u": "12d",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Community Research Grants",
+        "ty": "social",
+        "c": "Free",
+        "m": "30 min"
+      },
+      "sc": 87,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://canton.foundation/introducing-the-canton-community-research-grants/"
+    },
+    {
+      "r": 11,
+      "n": "De1",
+      "t": null,
+      "g": "S",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$500.00K",
+      "tk": "1/1",
+      "h": 3150,
+      "u": "5d",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 87,
+      "sub": [
+        9,
+        9,
+        10
+      ],
+      "url": null
+    },
+    {
+      "r": 12,
+      "n": "HelloTrade",
+      "img": "https://images.asksurf.ai/WS3oi7d-cBlO_Pa5mEaoSDEQURYETQBZx3liEKlZr50/aHR0cHM6Ly9wYnMudHdpbWcuY29tL3Byb2ZpbGVfaW1hZ2VzLzIxMDU2MzY4OTE4NTI5NjM4NDAvRnVFVkxjbkwuanBn",
+      "t": null,
+      "g": "S",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$4.60M",
+      "tk": "1/1",
+      "h": 2838,
+      "u": "12d",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist Form",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 84,
+      "sub": [
+        9,
+        9,
+        10
+      ],
+      "url": "https://www.hello.trade/waitlist?ref=JFY43FM8O6"
+    },
+    {
+      "r": 13,
+      "n": "Rome Protocol",
+      "t": null,
+      "g": "S",
+      "b": [
+        "live"
+      ],
+      "f": "$9.00M",
+      "tk": "6/13",
+      "h": 2255,
+      "u": "14d",
+      "fit": [
+        "zero",
+        "multi",
+        "community",
+        "technical"
+      ],
+      "best": {
+        "n": "Testnet (New)",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 83,
+      "sub": [
+        9,
+        10,
+        10
+      ],
+      "url": "https://deposit.testnet.romeprotocol.xyz/"
+    },
+    {
+      "r": 14,
+      "n": "BULK",
+      "t": null,
+      "g": "S",
+      "b": [
+        "rerun",
+        "live",
+        "zero",
+        "risk"
+      ],
+      "f": "$8.00M",
+      "tk": "3/9",
+      "h": 5052,
+      "u": "15d",
+      "fit": [
+        "zero",
+        "climber",
+        "community"
+      ],
+      "best": {
+        "n": "Discord roles",
+        "ty": "role",
+        "c": "Free",
+        "m": "30 min"
+      },
+      "sc": 82,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://discord.gg/bulk"
+    },
+    {
+      "r": 15,
+      "n": "Hibachi",
+      "chain": "Arbitrum",
+      "t": null,
+      "g": "S",
+      "b": [
+        "rerun",
+        "live",
+        "zero",
+        "risk"
+      ],
+      "x": "AB2",
+      "f": "$5.00M",
+      "tk": "3/4",
+      "h": 2486,
+      "u": "15d",
+      "fit": [
+        "zero",
+        "climber",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "4 min"
+      },
+      "sc": 81,
+      "sub": [
+        9,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSdqmb5MNGPqgu7FqWNvr4hPNnh94-bpaPVJQzAFlisnQ8s16Q/viewform"
+    },
+    {
+      "r": 16,
+      "n": "Pudgy Penguins",
+      "chain": "Abstract",
+      "t": "PENGU",
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "x": "A1",
+      "f": "$20.00M",
+      "tk": "11/14",
+      "h": 19758,
+      "u": "23d",
+      "fit": [
+        "zero",
+        "multi",
+        "small"
+      ],
+      "best": {
+        "n": "Cold Storage SBT",
+        "ty": "mint",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 76,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://revoke.cash/cold-storage-sbt?chainId=1"
+    },
+    {
+      "r": 17,
+      "n": "Melee",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$3.50M",
+      "tk": "2/9",
+      "h": 4184,
+      "u": "21d",
+      "fit": [
+        "zero",
+        "technical"
+      ],
+      "best": {
+        "n": "Beta Phase 3",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "20 min"
+      },
+      "sc": 74,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://beta.melee.markets/"
+    },
+    {
+      "r": 18,
+      "n": "Forte",
+      "chain": "Arbitrum",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero"
+      ],
+      "x": "A1",
+      "f": "$910.00M",
+      "tk": "4/16",
+      "h": 1768,
+      "u": "22d",
+      "fit": [
+        "zero",
+        "climber",
+        "technical"
+      ],
+      "best": {
+        "n": "XP Farming",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "15 min"
+      },
+      "sc": 73,
+      "sub": [
+        9,
+        10,
+        10
+      ],
+      "url": "https://fairground.fi/"
+    },
+    {
+      "r": 19,
+      "n": "fomo",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "$94.00M",
+      "tk": "3/3",
+      "h": 15544,
+      "u": "28d",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Form for Testers",
+        "ty": "form",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 72,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://forms.gle/dUvK2hJd5AQGqUfx6"
+    },
+    {
+      "r": 20,
+      "n": "LayerZero",
+      "t": "ZRO",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$318.33M",
+      "tk": "1/1",
+      "h": 23922,
+      "u": "26mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "LayerZero Community Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "120 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://discord-layerzero.netlify.app/discord"
+    },
+    {
+      "r": 21,
+      "n": "Polymarket",
+      "chain": "Ethereum",
+      "t": null,
+      "g": "A",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "x": "EP2",
+      "f": "$3.88B",
+      "tk": "1/1",
+      "h": 22986,
+      "u": "2mo",
+      "fit": [],
+      "best": {
+        "n": "Interaction with the project",
+        "ty": "predictions",
+        "c": "$200",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        4,
+        10
+      ],
+      "url": "https://polymarket.com/?r=cryptorank"
+    },
+    {
+      "r": 22,
+      "n": "Phantom",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "$268.00M",
+      "tk": "3/3",
+      "h": 20219,
+      "u": "1mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small"
+      ],
+      "best": {
+        "n": "Phantom card Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://phantom.com/cash"
+    },
+    {
+      "r": 23,
+      "n": "KuCoin Token",
+      "t": "KCS",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$205.00M",
+      "tk": "2/2",
+      "h": 19711,
+      "u": "5mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "ambassador",
+        "c": "Free",
+        "m": "4 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeA5EhRCcAsqiC_tW6sgSVVQxDNoMj5v82aPzm0vIer1nj7HA/viewform"
+    },
+    {
+      "r": 24,
+      "n": "Farcaster",
+      "chain": "Base",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero",
+        "risk"
+      ],
+      "x": "B1",
+      "f": "$180.00M",
+      "tk": "6/8",
+      "h": 17739,
+      "u": "12mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Mint Warplet NFT",
+        "ty": "mint",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://farcaster.xyz/farcaster/0x8af4a768"
+    },
+    {
+      "r": 25,
+      "n": "Aave",
+      "t": "AAVE",
+      "g": "A",
+      "b": [
+        "live",
+        "risk",
+        "token"
+      ],
+      "f": "$49.30M",
+      "tk": "1/1",
+      "h": 17520,
+      "u": "4mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist: Aave App",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://aave.com/app?lang=en"
+    },
+    {
+      "r": 26,
+      "n": "Sonic",
+      "t": "S",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$101.54M",
+      "tk": "1/1",
+      "h": 17155,
+      "u": "8mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Ambassador Grant Program",
+        "ty": "form",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeTF8uKRxE-QF7GGjZphMGUEZ49Y4ILC9628gTWvaPZkDDQ1g/viewform"
+    },
+    {
+      "r": 27,
+      "n": "Wormhole",
+      "chain": "Base",
+      "t": "W",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "x": "O+15",
+      "f": "$225.00M",
+      "tk": "2/4",
+      "h": 16819,
+      "u": "13mo",
+      "fit": [
+        "climber",
+        "small"
+      ],
+      "best": {
+        "n": "Staking Rewards Program",
+        "ty": "staking",
+        "c": "$1",
+        "m": "6 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        8,
+        10
+      ],
+      "url": "https://w.wormhole.com/"
+    },
+    {
+      "r": 28,
+      "n": "Yuga Labs",
+      "chain": "ApeChain",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "x": "A1",
+      "f": "$450.00M",
+      "tk": "1/4",
+      "h": 15841,
+      "u": "24mo",
+      "fit": [
+        "zero",
+        "technical"
+      ],
+      "best": {
+        "n": "Yuga Labs Testnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "20 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://curtis.hub.caldera.xyz/"
+    },
+    {
+      "r": 29,
+      "n": "Immutable",
+      "t": "IMX",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$322.38M",
+      "tk": "5/5",
+      "h": 14888,
+      "u": "8mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Referral Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        10,
+        10
+      ],
+      "url": "https://play.immutable.com/referral/share/HnJ3TV?utm_source=referral"
+    },
+    {
+      "r": 30,
+      "n": "MoonPay",
+      "t": null,
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$1.24B",
+      "tk": "1/1",
+      "h": 14761,
+      "u": "3mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "PayBox",
+        "ty": "check-wallet",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://app.paybox.sh/"
+    },
+    {
+      "r": 31,
+      "n": "Kalshi",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early",
+        "risk"
+      ],
+      "f": "$1.57B",
+      "tk": "2/2",
+      "h": 14585,
+      "u": "8mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Perfect Bracket Challenge",
+        "ty": "predictions",
+        "c": "Free",
+        "m": "7 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://kalshi.com/march-matchups"
+    },
+    {
+      "r": 32,
+      "n": "Doodles",
+      "t": "DOOD",
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$54.50M",
+      "tk": "1/2",
+      "h": 14143,
+      "u": "15mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Telegram game",
+        "ty": "game",
+        "c": "Free",
+        "m": "15 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://import-command-query-8ca052.surf.computer/t.me/DoodlesUP_bot"
+    },
+    {
+      "r": 33,
+      "n": "Lens Protocol",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "$46.00M",
+      "tk": "9/12",
+      "h": 13099,
+      "u": "1mo",
+      "fit": [
+        "zero",
+        "climber",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Open Doors Day",
+        "ty": "mint",
+        "c": "Free",
+        "m": "2 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://gm.lens.xyz/"
+    },
+    {
+      "r": 34,
+      "n": "ether.fi",
+      "t": "ETHFI",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$32.32M",
+      "tk": "1/1",
+      "h": 13031,
+      "u": "25mo",
+      "fit": [],
+      "best": {
+        "n": "ether.fi Staking",
+        "ty": "staking",
+        "c": "$4",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        8,
+        10
+      ],
+      "url": "https://app.ether.fi/eeth"
+    },
+    {
+      "r": 35,
+      "n": "StarkNet",
+      "chain": "Starknet",
+      "t": "STRK",
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "x": "S1",
+      "f": "$282.50M",
+      "tk": "1/2",
+      "h": 12217,
+      "u": "23mo",
+      "fit": [],
+      "best": {
+        "n": "StarkNet Staking",
+        "ty": "staking",
+        "c": "$1",
+        "m": "8 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        8,
+        10
+      ],
+      "url": "https://voyager.online/"
+    },
+    {
+      "r": 36,
+      "n": "Manta Network",
+      "t": "MANTA",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$60.31M",
+      "tk": "1/1",
+      "h": 11798,
+      "u": "27mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "8 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSeI39oz7AuFxVbH1lG0kBDschwkgj7fA8fJgEzigaLiUXPKsQ/viewform"
+    },
+    {
+      "r": 37,
+      "n": "DeBank",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero"
+      ],
+      "f": "$25.00M",
+      "tk": "4/4",
+      "h": 11795,
+      "u": "16mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "DeBank Badges",
+        "ty": "social",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://debank.com/badge"
+    },
+    {
+      "r": 38,
+      "n": "Privy",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$41.30M",
+      "tk": "1/1",
+      "h": 11750,
+      "u": "15mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Interaction with Privy",
+        "ty": "social",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://home.privy.io/"
+    },
+    {
+      "r": 39,
+      "n": "Aztec",
+      "t": "AZTEC",
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "$217.26M",
+      "tk": "7/11",
+      "h": 11082,
+      "u": "9mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community",
+        "technical"
+      ],
+      "best": {
+        "n": "New testnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://testnet.stake.aztec.network/"
+    },
+    {
+      "r": 40,
+      "n": "Ondo Finance",
+      "t": "ONDO",
+      "g": "A",
+      "b": [
+        "live",
+        "risk",
+        "token"
+      ],
+      "f": "$46.04M",
+      "tk": "1/1",
+      "h": 11082,
+      "u": "2mo",
+      "fit": [],
+      "best": {
+        "n": "Point Farming",
+        "ty": "trading",
+        "c": "$70",
+        "m": "25 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        4,
+        10
+      ],
+      "url": "https://app.ondoperps.xyz/?ref=KCYF6S"
+    },
+    {
+      "r": 41,
+      "n": "The Sandbox",
+      "t": "SAND",
+      "g": "A",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$120.96M",
+      "tk": "1/1",
+      "h": 11013,
+      "u": "26mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "\"Alpha S4\" Registration",
+        "ty": "social",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://register.sandbox.game/as4-pre-register/"
+    },
+    {
+      "r": 42,
+      "n": "Injective",
+      "t": "INJ",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$59.70M",
+      "tk": "2/2",
+      "h": 8795,
+      "u": "2mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSd5v9hi2pZz8lI3PEhd3_oQXs4QZm6Mq5tPPO5pGQUgHCCWTQ/viewform"
+    },
+    {
+      "r": 43,
+      "n": "Arc",
+      "chain": "Arc",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "x": "A1",
+      "f": "$222.00M",
+      "tk": "5/11",
+      "h": 8519,
+      "u": "2mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community",
+        "technical"
+      ],
+      "best": {
+        "n": "Genesis Pad",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "8 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://create.genesispad.xyz/"
+    },
+    {
+      "r": 44,
+      "n": "Celo",
+      "t": "CELO",
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$104.50M",
+      "tk": "1/1",
+      "h": 8128,
+      "u": "28mo",
+      "fit": [
+        "zero",
+        "technical"
+      ],
+      "best": {
+        "n": "\"Dango\" Testnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://faucet.celo.org/dango"
+    },
+    {
+      "r": 45,
+      "n": "Mocaverse",
+      "t": "MOCA",
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero"
+      ],
+      "f": "$46.89M",
+      "tk": "5/5",
+      "h": 8028,
+      "u": "8mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "MocaProof Beta",
+        "ty": "mainnet",
+        "c": "Free",
+        "m": "15 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        10,
+        10
+      ],
+      "url": "https://app.moca.network/r/DR6CWP"
+    },
+    {
+      "r": 46,
+      "n": "Tempo",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "$500.00M",
+      "tk": "3/3",
+      "h": 7964,
+      "u": "9mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "technical"
+      ],
+      "best": {
+        "n": "Tempo Testnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "6 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        10,
+        10
+      ],
+      "url": "https://docs.tempo.xyz/quickstart/faucet"
+    },
+    {
+      "r": 47,
+      "n": "Aleo",
+      "t": "ALEO",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$298.00M",
+      "tk": "1/1",
+      "h": 7087,
+      "u": "10mo",
+      "fit": [
+        "zero",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "ambassador",
+        "c": "Free",
+        "m": "4 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://fbzm3m88x25.typeform.com/AleoAmbassador?typeform-source=t.co"
+    },
+    {
+      "r": 48,
+      "n": "GTE",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$25.94M",
+      "tk": "3/5",
+      "h": 7066,
+      "u": "2mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small"
+      ],
+      "best": {
+        "n": "Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://waitlist.gte.xyz/r/1YNTE"
+    },
+    {
+      "r": 49,
+      "n": "Blockchain.com",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$600.00M",
+      "tk": "2/2",
+      "h": 7046,
+      "u": "13mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "June AI Quests",
+        "ty": "social",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://askjune.ai/app/chat"
+    },
+    {
+      "r": 50,
+      "n": "Vana",
+      "t": "VANA",
+      "g": "A",
+      "b": [
+        "early",
+        "token"
+      ],
+      "f": "$25.00M",
+      "tk": "1/1",
+      "h": 6583,
+      "u": "13mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Vana app",
+        "ty": "social",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://www.vana.org/app"
+    },
+    {
+      "r": 51,
+      "n": "CertiK",
+      "t": null,
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$240.40M",
+      "tk": "1/1",
+      "h": 6564,
+      "u": "29mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Social tasks",
+        "ty": "social",
+        "c": "Free",
+        "m": "20 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://skynet.certik.com/quest/signup?referralId=7e9c2eaf-0106-4518-bccf-28d276b2beb1"
+    },
+    {
+      "r": 52,
+      "n": "Polyhedra Network",
+      "t": "ZKJ",
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$45.04M",
+      "tk": "1/1",
+      "h": 6485,
+      "u": "23mo",
+      "fit": [
+        "zero",
+        "technical"
+      ],
+      "best": {
+        "n": "Polyhedra Testnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://bridge.expchain.ai/"
+    },
+    {
+      "r": 53,
+      "n": "KAST",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero",
+        "risk"
+      ],
+      "f": "$90.00M",
+      "tk": "3/3",
+      "h": 6458,
+      "u": "5mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small"
+      ],
+      "best": {
+        "n": "Pengu Card Waitlist",
+        "ty": "form",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://www.kast.xyz/PUDGY-PENGUINS?R=K2LAL"
+    },
+    {
+      "r": 54,
+      "n": "Praxis Society",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early",
+        "risk"
+      ],
+      "f": "$544.20M",
+      "tk": "1/1",
+      "h": 6367,
+      "u": "7mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Praxis Citizenship form",
+        "ty": "form",
+        "c": "Free",
+        "m": "7 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://www.praxisnation.com/join?utm_source=website&utm_medium=citizenship"
+    },
+    {
+      "r": 55,
+      "n": "SynFutures",
+      "t": "F",
+      "g": "A",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$36.08M",
+      "tk": "1/1",
+      "h": 6155,
+      "u": "29mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Social Ambassador Role",
+        "ty": "bounty",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://app.galxe.com/quest/synfutures/GCpZLtdUz8"
+    },
+    {
+      "r": 56,
+      "n": "Sahara AI",
+      "t": "SAHARA",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$51.50M",
+      "tk": "1/1",
+      "h": 5178,
+      "u": "27mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://forms.gle/jTy47ZtFDLmEk9Cg7"
+    },
+    {
+      "r": 57,
+      "n": "Sui",
+      "chain": "Sui",
+      "t": "SUI",
+      "g": "A",
+      "b": [
+        "early",
+        "token"
+      ],
+      "x": "S1",
+      "f": "$405.37M",
+      "tk": "2/8",
+      "h": 5152,
+      "u": "6mo",
+      "fit": [
+        "zero",
+        "multi",
+        "technical"
+      ],
+      "best": {
+        "n": "Hashi Devnet",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://devnet.hashi.sui.io/"
+    },
+    {
+      "r": 58,
+      "n": "Enjin Coin",
+      "t": "ENJ",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$73.96M",
+      "tk": "1/1",
+      "h": 4840,
+      "u": "4mo",
+      "fit": [
+        "zero",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "ambassador",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSc6yVgdwJbvbmJ6nSn5SYcvqzlZN18fpKCdr_fKFSUitDPXlA/viewform"
+    },
+    {
+      "r": 59,
+      "n": "Backed (xStocks)",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero",
+        "risk"
+      ],
+      "f": "$12.70M",
+      "tk": "4/8",
+      "h": 4749,
+      "u": "28d",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Registration in the xPoints Program",
+        "ty": "form",
+        "c": "Free",
+        "m": "2 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://defi.xstocks.fi/points?ref=KWIOVROE"
+    },
+    {
+      "r": 60,
+      "n": "Ellipsis Labs (Phoenix Trade)",
+      "chain": "Solana",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early",
+        "zero"
+      ],
+      "x": "S1",
+      "f": "$44.30M",
+      "tk": "1/1",
+      "h": 4652,
+      "u": "31mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Interaction with the protocol",
+        "ty": "mainnet",
+        "c": "Free",
+        "m": "—"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://app.phoenix.trade/market/4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg"
+    },
+    {
+      "r": 61,
+      "n": "XMTP",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$40.00M",
+      "tk": "1/1",
+      "h": 4320,
+      "u": "13mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Interaction with the project",
+        "ty": "social",
+        "c": "Free",
+        "m": "20 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://xmtp.chat/welcome"
+    },
+    {
+      "r": 62,
+      "n": "Hedera",
+      "t": "HBAR",
+      "g": "A",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$286.10M",
+      "tk": "2/2",
+      "h": 4236,
+      "u": "2mo",
+      "fit": [
+        "zero",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "ambassador",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://hedera.com/ambassador-program/"
+    },
+    {
+      "r": 63,
+      "n": "Walrus",
+      "chain": "Sui",
+      "t": "WAL",
+      "g": "A",
+      "b": [
+        "rerun",
+        "live",
+        "zero",
+        "token"
+      ],
+      "x": "S1",
+      "f": "$140.00M",
+      "tk": "8/9",
+      "h": 4032,
+      "u": "14mo",
+      "fit": [
+        "zero",
+        "climber",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "OnlyFins Access Pass",
+        "ty": "mint",
+        "c": "Free",
+        "m": "2 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        10,
+        10
+      ],
+      "url": "https://only-fins.wal.app/"
+    },
+    {
+      "r": 64,
+      "n": "Metric",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero"
+      ],
+      "f": "—",
+      "tk": "4/4",
+      "h": 3914,
+      "u": "today",
+      "fit": [
+        "zero",
+        "climber",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Discord Roles",
+        "ty": "role",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": null
+    },
+    {
+      "r": 65,
+      "n": "Polymer Labs",
+      "t": null,
+      "g": "A",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$26.60M",
+      "tk": "2/2",
+      "h": 3871,
+      "u": "18mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Discord roles",
+        "ty": "role",
+        "c": "Free",
+        "m": "30 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://discord.gg/polymerlabs"
+    },
+    {
+      "r": 66,
+      "n": "Neon",
+      "chain": "Neon EVM",
+      "t": "NEON",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "x": "N1",
+      "f": "$45.00M",
+      "tk": "1/1",
+      "h": 3836,
+      "u": "25mo",
+      "fit": [],
+      "best": {
+        "n": "Neon EVM Points",
+        "ty": "mainnet",
+        "c": "$1",
+        "m": "36 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        8,
+        10
+      ],
+      "url": "https://points.absinthe.network/neon?utm_source=cryptorank&utm_medium=drophunting&utm_campaign=Neonpp"
+    },
+    {
+      "r": 67,
+      "n": "Azra Games",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early",
+        "risk"
+      ],
+      "f": "$67.70M",
+      "tk": "1/1",
+      "h": 3517,
+      "u": "25mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist Form",
+        "ty": "form",
+        "c": "Free",
+        "m": "2 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://azragames.com/"
+    },
+    {
+      "r": 68,
+      "n": "Daylight",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$84.00M",
+      "tk": "2/2",
+      "h": 3416,
+      "u": "11mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "form",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://sunnyside.godaylight.com/"
+    },
+    {
+      "r": 69,
+      "n": "Tabi",
+      "t": "SEED",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$27.08M",
+      "tk": "2/14",
+      "h": 3375,
+      "u": "15mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "SBT Recognition Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "10 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://www.tabichain.com/join"
+    },
+    {
+      "r": 70,
+      "n": "Andrena (DAWN)",
+      "t": null,
+      "g": "A",
+      "b": [
+        "rerun",
+        "early",
+        "zero",
+        "risk"
+      ],
+      "f": "$48.50M",
+      "tk": "3/5",
+      "h": 3361,
+      "u": "1mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Browser Node (new)",
+        "ty": "depin",
+        "c": "Free",
+        "m": "4 min"
+      },
+      "sc": 70,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://chromewebstore.google.com/detail/dawn-validator-chrome-ext/fpdkjdnhkakefebpekbdhillbhonfjjp"
+    },
+    {
+      "r": 71,
+      "n": "Zentry",
+      "t": "ZENT",
+      "g": "A",
+      "b": [
+        "live"
+      ],
+      "f": "$145.84M",
+      "tk": "1/1",
+      "h": 3350,
+      "u": "28mo",
+      "fit": [
+        "zero",
+        "multi",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "social",
+        "c": "Free",
+        "m": "27 min"
+      },
+      "sc": 70,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://pzt9znxed4z.typeform.com/zentryamb?typeform-source=medium.com"
+    },
+    {
+      "r": 72,
+      "n": "Miden",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early"
+      ],
+      "f": "$25.00M",
+      "tk": "5/5",
+      "h": 2881,
+      "u": "1mo",
+      "fit": [
+        "zero",
+        "technical"
+      ],
+      "best": {
+        "n": "Domain registration",
+        "ty": "testnet",
+        "c": "Free",
+        "m": "1 min"
+      },
+      "sc": 70,
+      "sub": [
+        6,
+        10,
+        10
+      ],
+      "url": "https://miden.name/"
+    },
+    {
+      "r": 73,
+      "n": "Halliday",
+      "t": null,
+      "g": "A",
+      "b": [
+        "live",
+        "risk"
+      ],
+      "f": "$26.00M",
+      "tk": "1/1",
+      "h": 2279,
+      "u": "20mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Waitlist Form",
+        "ty": "form",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 70,
+      "sub": [
+        9,
+        9,
+        10
+      ],
+      "url": "https://halliday.xyz/earlyaccess"
+    },
+    {
+      "r": 74,
+      "n": "OneBalance",
+      "chain": "Ethereum",
+      "t": null,
+      "g": "A",
+      "b": [
+        "early",
+        "zero"
+      ],
+      "x": "A+48",
+      "f": "$25.00M",
+      "tk": "2/2",
+      "h": 2238,
+      "u": "16mo",
+      "fit": [
+        "zero",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Discord roles",
+        "ty": "role",
+        "c": "Free",
+        "m": "30 min"
+      },
+      "sc": 70,
+      "sub": [
+        6,
+        9,
+        10
+      ],
+      "url": "https://discord.gg/3sv5VBrMcS"
+    },
+    {
+      "r": 75,
+      "n": "BNB",
+      "t": "BNB",
+      "g": "B",
+      "b": [
+        "live",
+        "token"
+      ],
+      "f": "$15.00M",
+      "tk": "1/1",
+      "h": 36782,
+      "u": "26mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Telegram game",
+        "ty": "game",
+        "c": "Free",
+        "m": "60 min"
+      },
+      "sc": 69,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://t.me/Binance_Moonbix_bot/start?startApp=ref_745565606&startapp=ref_745565606&utm_medium=web_share_copy"
+    },
+    {
+      "r": 76,
+      "n": "Arkham",
+      "t": "ARKM",
+      "g": "B",
+      "b": [
+        "live",
+        "risk",
+        "token"
+      ],
+      "f": "$14.50M",
+      "tk": "1/3",
+      "h": 20522,
+      "u": "21mo",
+      "fit": [],
+      "best": {
+        "n": "Arkham Points (Season 2)",
+        "ty": "trading",
+        "c": "$50",
+        "m": "20 min"
+      },
+      "sc": 69,
+      "sub": [
+        10,
+        6,
+        10
+      ],
+      "url": "https://auth.arkm.com/register?ref=0fe2ce3e-27e1-459a-8282-8e65af9fb5cd"
+    },
+    {
+      "r": 77,
+      "n": "Ostium",
+      "t": null,
+      "g": "B",
+      "b": [
+        "rerun",
+        "live"
+      ],
+      "f": "$23.50M",
+      "tk": "5/5",
+      "h": 10156,
+      "u": "7mo",
+      "fit": [
+        "climber",
+        "multi",
+        "small"
+      ],
+      "best": {
+        "n": "Farming Ostium points",
+        "ty": "liquidity",
+        "c": "$1",
+        "m": "10 min"
+      },
+      "sc": 69,
+      "sub": [
+        10,
+        7,
+        10
+      ],
+      "url": "https://app.ostium.com/trade?from=SPX&to=USD&ref=0M9L6"
+    },
+    {
+      "r": 78,
+      "n": "SlingShot",
+      "t": null,
+      "g": "B",
+      "b": [
+        "early",
+        "risk"
+      ],
+      "f": "$18.10M",
+      "tk": "1/2",
+      "h": 9669,
+      "u": "22mo",
+      "fit": [
+        "zero",
+        "multi"
+      ],
+      "best": {
+        "n": "Early Access Form",
+        "ty": "form",
+        "c": "Free",
+        "m": "3 min"
+      },
+      "sc": 69,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLScyfPrL_rICurXy_Xbrq-gghTTz96NxbTZsv26_eQtulwWSLQ/viewform"
+    },
+    {
+      "r": 79,
+      "n": "LI.FI",
+      "chain": "Optimism",
+      "t": null,
+      "g": "B",
+      "b": [
+        "early",
+        "zero"
+      ],
+      "x": "F4",
+      "f": "$23.00M",
+      "tk": "1/2",
+      "h": 8816,
+      "u": "28mo",
+      "fit": [
+        "zero"
+      ],
+      "best": {
+        "n": "Interaction with the protocol",
+        "ty": "mainnet",
+        "c": "Free",
+        "m": "—"
+      },
+      "sc": 69,
+      "sub": [
+        7,
+        9,
+        10
+      ],
+      "url": "https://jumper.exchange/"
+    },
+    {
+      "r": 80,
+      "n": "Reya Labs (Voltz)",
+      "chain": "Arbitrum",
+      "t": "REYA",
+      "g": "B",
+      "b": [
+        "rerun",
+        "live",
+        "zero"
+      ],
+      "x": "O+15",
+      "f": "$19.00M",
+      "tk": "4/9",
+      "h": 6125,
+      "u": "7mo",
+      "fit": [
+        "zero",
+        "climber",
+        "multi",
+        "small",
+        "community"
+      ],
+      "best": {
+        "n": "Ambassador Program",
+        "ty": "ambassador",
+        "c": "Free",
+        "m": "5 min"
+      },
+      "sc": 69,
+      "sub": [
+        10,
+        9,
+        10
+      ],
+      "url": "https://docs.google.com/forms/d/e/1FAIpQLSdQNMJreD36s3GIUVkKxgQAfT2h77buHdoCh896ZiJAxnTADw/viewform"
+    }
+  ],
+  "BADGES": {
+    "live": "Live · announced",
+    "token": "Token live",
+    "early": "Early upside",
+    "zero": "Zero-cost path",
+    "rerun": "Re-run",
+    "risk": "1 risk flag"
+  },
+  "TGE": [
+    {
+      "n": "predict.fun $PREDICT",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-11-18"
+    },
+    {
+      "n": "Extended $XTEN",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-11-11"
+    },
+    {
+      "n": "Saturn",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-11-10"
+    },
+    {
+      "n": "KOR Protocol $KOR",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-11-04"
+    },
+    {
+      "n": "InfiniFi",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-11-04"
+    },
+    {
+      "n": "MemeBitcoin $MBTC",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-10-28"
+    },
+    {
+      "n": "ChimpX AI $CHIMP",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-10-28"
+    },
+    {
+      "n": "Ritual $RITUAL",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-26"
+    },
+    {
+      "n": "MINTED $MNTD",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-20"
+    },
+    {
+      "n": "GenLayer",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-10-21"
+    },
+    {
+      "n": "Axis Robotics $AXIS",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-21"
+    },
+    {
+      "n": "MindGamesAI",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-14"
+    },
+    {
+      "n": "Incentiv $CENT",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-11"
+    },
+    {
+      "n": "Yield Fields",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-10-12"
+    },
+    {
+      "n": "Concrete $CT",
+      "t": "",
+      "s": "可领取 TGE",
+      "d": "2026-09-30"
+    },
+    {
+      "n": "BitX",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-09-25"
+    },
+    {
+      "n": "Gyndore $GYNDORE",
+      "t": "",
+      "s": "可领取",
+      "d": "2026-09-22"
+    },
+    {
+      "n": "aka.fun",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-09-14"
+    },
+    {
+      "n": "Tread.fi",
+      "t": "",
+      "s": "资格核验",
+      "d": "2026-09-02"
+    }
+  ],
+  "TABS": [
+    {
+      "id": "airdrops",
+      "label": "Project Airdrops"
+    },
+    {
+      "id": "crypto",
+      "label": "Crypto Market"
+    },
+    {
+      "id": "stocks",
+      "label": "Stock Market"
+    },
+    {
+      "id": "doge",
+      "label": "DOGE Monitor"
+    },
+    {
+      "id": "contests",
+      "label": "Trading Contests"
+    },
+    {
+      "id": "predictions",
+      "label": "Prediction Markets"
+    },
+    {
+      "id": "analysis",
+      "label": "Market Analysis"
+    },
+    {
+      "id": "x-traffic",
+      "label": "X Traffic"
+    },
+    {
+      "id": "defi",
+      "label": "DeFi Rankings"
+    },
+    {
+      "id": "liquidity",
+      "label": "Liquidity Pools"
+    },
+    {
+      "id": "sectors",
+      "label": "Sector Moves"
+    },
+    {
+      "id": "onchain-stocks",
+      "label": "On-chain Stocks"
+    },
+    {
+      "id": "yields",
+      "label": "Web3 Yields"
+    },
+    {
+      "id": "vc",
+      "label": "VC Investors"
+    },
+    {
+      "id": "wallets",
+      "label": "Wallet Users"
+    },
+    {
+      "id": "ai",
+      "label": "AI Resources"
+    },
+    {
+      "id": "toolbox",
+      "label": "Toolbox"
+    },
+    {
+      "id": "github",
+      "label": "GitHub Repos"
+    }
+  ],
+  "TYPES": [
+    "Trading",
+    "Token airdrop",
+    "Points",
+    "Whitelist",
+    "NFT",
+    "Testnet",
+    "Mainnet",
+    "Social",
+    "Staking",
+    "DePIN / Node",
+    "Stock tokens",
+    "Betting"
+  ],
+  "COUNTS": {
+    "active": 373,
+    "preToken": 345
+  },
+  "CATEGORIES": [
+    "OKX Boost",
+    "Binance Alpha",
+    "Gate Airdrops",
+    "Token Presales"
+  ],
+  "TYPE_MAP": {
+    "Trading": [
+      "trading",
+      "liquidity",
+      "check-wallet"
+    ],
+    "Token airdrop": [
+      "mint",
+      "ambassador",
+      "game",
+      "bounty",
+      "social",
+      "role"
+    ],
+    "Points": [
+      "trading",
+      "liquidity",
+      "staking",
+      "mainnet",
+      "testnet",
+      "depin"
+    ],
+    "Whitelist": [
+      "form"
+    ],
+    "NFT": [
+      "mint"
+    ],
+    "Testnet": [
+      "testnet"
+    ],
+    "Mainnet": [
+      "mainnet"
+    ],
+    "Social": [
+      "social",
+      "ambassador",
+      "role"
+    ],
+    "Staking": [
+      "staking"
+    ],
+    "DePIN / Node": [
+      "depin"
+    ],
+    "Stock tokens": [],
+    "Betting": [
+      "predictions"
+    ]
+  },
+  "DEMO": [
+    {
+      "id": "crypto",
+      "blurb": "Spot prices and 24h flows for major coins.",
+      "cols": [
+        "Coin",
+        "Price",
+        "24h",
+        "24h volume",
+        "Market cap"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "BTC · Bitcoin",
+            "$97,300",
+            "▲ 2.1%",
+            "$48.2B",
+            "$1.93T"
+          ],
+          "chain": "Bitcoin"
+        },
+        {
+          "cells": [
+            "ETH · Ethereum",
+            "$3,412",
+            "▲ 1.4%",
+            "$21.7B",
+            "$411B"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "SOL · Solana",
+            "$214.60",
+            "▼ 0.8%",
+            "$5.9B",
+            "$103B"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "XRP · XRP",
+            "$2.41",
+            "▲ 0.6%",
+            "$6.2B",
+            "$138B"
+          ],
+          "chain": "XRP Ledger"
+        },
+        {
+          "cells": [
+            "DOGE · Dogecoin",
+            "$0.204",
+            "▲ 3.8%",
+            "$2.4B",
+            "$30B"
+          ],
+          "chain": "Dogecoin"
+        }
+      ]
+    },
+    {
+      "id": "stocks",
+      "blurb": "US equity tickers tracked by the dashboard.",
+      "cols": [
+        "代码 / 名称",
+        "现价",
+        "市值",
+        "振幅",
+        "52周区间位置",
+        "成交量",
+        "主力净流入",
+        "AI 热度",
+        "日线连阳/连阴",
+        "24H 涨跌↓"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "美股 AMD 超威半导体 MI300X GPU 挑战者",
+            "$530.14",
+            "$869.48B",
+            "7.34%",
+            "188 73% 659",
+            "34.03M",
+            "+$8.86亿",
+            "27",
+            "—",
+            "+5.31%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 AMZN 亚马逊 AWS · Anthropic 投资",
+            "$267.74",
+            "$2.90T",
+            "3.40%",
+            "196 79% 287",
+            "41.29M",
+            "+$5.65亿",
+            "50",
+            "—",
+            "+3.82%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 AVGO 博通 定制 ASIC · TPU 制造",
+            "$354.05",
+            "$1.69T",
+            "4.86%",
+            "290 31% 495",
+            "26.11M",
+            "+$6.05亿",
+            "74",
+            "—",
+            "+3.64%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 MDB MongoDB 向量搜索原生 DB",
+            "$306.71",
+            "$24.71B",
+            "3.83%",
+            "216 35% 473",
+            "1.05M",
+            "+$4.24亿",
+            "83",
+            "—",
+            "+2.71%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 SNOW Snowflake Cortex AI 数据云",
+            "$279.62",
+            "$98.65B",
+            "4.07%",
+            "118 61% 385",
+            "3.63M",
+            "+$3.64亿",
+            "74",
+            "—",
+            "+2.45%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 DDOG Datadog AI 可观测性",
+            "$167.11",
+            "$60.35B",
+            "4.88%",
+            "98 34% 301",
+            "3.90M",
+            "+$2.47亿",
+            "27",
+            "—",
+            "+1.17%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 SMCI 超微电脑 AI 服务器 OEM",
+            "$24.37",
+            "$16.07B",
+            "5.05%",
+            "19 15% 51",
+            "27.22M",
+            "+$2.08亿",
+            "59",
+            "—",
+            "+0.95%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 TSLA 特斯拉 FSD · Optimus 机器人",
+            "$383.72",
+            "$1.52T",
+            "2.87%",
+            "297 43% 499",
+            "26.89M",
+            "+$2.85亿",
+            "17",
+            "—",
+            "+0.95%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 GOOGL 谷歌 Gemini · TPU · DeepMind",
+            "$282.44",
+            "$3.43T",
+            "1.88%",
+            "272 8% 409",
+            "27.40M",
+            "+$2.39亿",
+            "60",
+            "—",
+            "+0.80%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 AI C3.ai 企业级 AI 应用",
+            "$10.02",
+            "$1.58B",
+            "4.22%",
+            "8 27% 16",
+            "3.16M",
+            "+$1.58亿",
+            "56",
+            "—",
+            "+0.70%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 AAPL 苹果 Apple Intelligence",
+            "$352.45",
+            "$5.12T",
+            "1.41%",
+            "243 93% 361",
+            "34.21M",
+            "+$1.82亿",
+            "52",
+            "—",
+            "+0.15%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 PLTR Palantir AIP 企业 AI 平台",
+            "$156.67",
+            "$377.50B",
+            "3.16%",
+            "106 47% 213",
+            "14.92M",
+            "+$1.00亿",
+            "65",
+            "—",
+            "+0.07%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 MSFT 微软 OpenAI 战略股东 / Copilot",
+            "$507.31",
+            "$3.77T",
+            "0.00%",
+            "349 75% 559",
+            "152.08K",
+            "-$1.78亿",
+            "48",
+            "—",
+            "-0.19%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 META Meta Llama 开源 · AI 基建",
+            "$616.38",
+            "$1.58T",
+            "1.70%",
+            "520 37% 780",
+            "10.43M",
+            "-$9878.70万",
+            "42",
+            "—",
+            "-0.40%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 INTC 英特尔 代工 · Gaudi 加速器",
+            "$54.67",
+            "$290.57B",
+            "4.64%",
+            "33 20% 142",
+            "81.36M",
+            "-$2.49亿",
+            "56",
+            "—",
+            "-0.91%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 ORCL 甲骨文 OCI 自建 AI 集群",
+            "$113.89",
+            "$344.37B",
+            "3.62%",
+            "109 3% 250",
+            "15.39M",
+            "-$1.71亿",
+            "79",
+            "—",
+            "-0.97%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 MU 美光 HBM 高带宽内存",
+            "$705.27",
+            "$797.96B",
+            "5.00%",
+            "193 48% 1255",
+            "27.51M",
+            "-$2.46亿",
+            "51",
+            "—",
+            "-1.00%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 IBM IBM Watsonx 企业基础模型",
+            "$228.53",
+            "$215.99B",
+            "1.92%",
+            "199 22% 332",
+            "4.23M",
+            "-$1.73亿",
+            "40",
+            "—",
+            "-1.11%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 SOUN SoundHound AI 语音 AI / 客户对话",
+            "$3.01",
+            "$1.47B",
+            "5.56%",
+            "3 1% 13",
+            "16.35M",
+            "-$2.86亿",
+            "46",
+            "—",
+            "-1.63%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 CRM Salesforce Einstein GPT / Agentforce",
+            "$190.40",
+            "$156.70B",
+            "3.62%",
+            "146 36% 269",
+            "10.19M",
+            "-$3.76亿",
+            "41",
+            "—",
+            "-2.12%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 MRVL 迈威尔 数据中心互联芯片",
+            "$145.54",
+            "$127.62B",
+            "6.57%",
+            "71 29% 330",
+            "19.53M",
+            "-$3.49亿",
+            "37",
+            "—",
+            "-2.15%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 NOW ServiceNow Now Assist 企业 AI",
+            "$90.59",
+            "$94.03B",
+            "4.77%",
+            "81 10% 175",
+            "19.92M",
+            "-$5.45亿",
+            "80",
+            "—",
+            "-2.49%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 BBAI BigBear.ai 政府防务 AI",
+            "$1.75",
+            "$842.43M",
+            "6.67%",
+            "2 0% 7",
+            "14.44M",
+            "-$5.58亿",
+            "19",
+            "—",
+            "-2.78%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 U Unity 游戏引擎 + AI 工具链",
+            "$48.96",
+            "$21.73B",
+            "4.57%",
+            "17 86% 54",
+            "7.52M",
+            "-$3.91亿",
+            "61",
+            "—",
+            "-2.78%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 NVDA 英伟达 AI 芯片绝对龙头",
+            "$150.96",
+            "$3.64T",
+            "5.98%",
+            "149 2% 243",
+            "349.77M",
+            "-$4.25亿",
+            "71",
+            "—",
+            "-2.89%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 ADBE Adobe Firefly 创意生成",
+            "$226.20",
+            "$88.04B",
+            "4.20%",
+            "190 21% 363",
+            "4.04M",
+            "-$6.60亿",
+            "27",
+            "—",
+            "-3.97%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 QCOM 高通 端侧 AI · 骁龙 X",
+            "$159.81",
+            "$171.00B",
+            "5.25%",
+            "122 27% 260",
+            "9.18M",
+            "-$6.18亿",
+            "76",
+            "—",
+            "-4.12%"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "美股 PATH UiPath 机器人流程自动化",
+            "$11.73",
+            "$6.11B",
+            "6.17%",
+            "9 24% 20",
+            "40.19M",
+            "-$7.85亿",
+            "75",
+            "—",
+            "-5.33%"
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    },
+    {
+      "id": "doge",
+      "blurb": "Real-time watch on the DOGE ticker.",
+      "cols": [
+        "时间",
+        "输入 / 输出",
+        "金额 (DOGE)",
+        "USD",
+        "手续费",
+        "TX"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "1d 前 2026-11-17 13:23:45",
+            "6 → 2",
+            "1.49B",
+            "$87.98M",
+            "$0.0033",
+            "fe8310…eb65"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 07:36:58",
+            "1 → 2",
+            "646.55M",
+            "$38.85M",
+            "$0.0007",
+            "46930a…e868"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "2d 前 2026-11-17 07:35:10",
+            "6 → 2",
+            "655.48M",
+            "$38.62M",
+            "$0.0033",
+            "c701a3…651e"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "4d 前 2026-11-14 16:11:16",
+            "9 → 2",
+            "585.20M",
+            "$37.71M",
+            "$0.0778",
+            "c8db75…dba4"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 00:11:09",
+            "2 → 2",
+            "581.80M",
+            "$34.96M",
+            "$0.0179",
+            "ca00c7…c5bf"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 02:15:14",
+            "1 → 2",
+            "581.26M",
+            "$34.93M",
+            "$0.0101",
+            "9f71c1…5a63"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 04:11:27",
+            "1 → 2",
+            "581.26M",
+            "$34.93M",
+            "$0.0101",
+            "72b726…0a2e"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 10:15:11",
+            "2 → 2",
+            "581.26M",
+            "$34.93M",
+            "$0.0179",
+            "c130e5…b570"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "1d 前 2026-11-18 12:13:27",
+            "1 → 2",
+            "581.26M",
+            "$34.93M",
+            "$0.0101",
+            "fb89c4…dcd7"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "22h 前 2026-11-18 14:20:33",
+            "1 → 2",
+            "581.26M",
+            "$34.93M",
+            "$0.0101",
+            "139ff8…f896"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "2d 前 2026-11-16 18:11:31",
+            "2 → 2",
+            "580.98M",
+            "$34.76M",
+            "$0.0178",
+            "2dc97e…cba1"
+          ],
+          "chain": "Dogecoin"
+        },
+        {
+          "cells": [
+            "3d 前 2026-11-16 12:16:18",
+            "2 → 2",
+            "580.89M",
+            "$34.75M",
+            "$0.0178",
+            "c575cc…b409"
+          ],
+          "chain": "Dogecoin"
+        }
+      ]
+    },
+    {
+      "id": "contests",
+      "blurb": "Active trading competitions and prize pools.",
+      "cols": [
+        "Contest",
+        "Prize pool",
+        "Participants",
+        "Ends"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Alpha Sprint",
+            "$200K",
+            "12,480",
+            "3d"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "Perp Cup",
+            "$150K",
+            "8,921",
+            "5d"
+          ],
+          "chain": "Arbitrum"
+        },
+        {
+          "cells": [
+            "Boost Race",
+            "$80K",
+            "5,302",
+            "7d"
+          ],
+          "chain": "Base"
+        }
+      ]
+    },
+    {
+      "id": "predictions",
+      "blurb": "Polymarket-style prediction markets.",
+      "cols": [
+        "section",
+        "name",
+        "raise",
+        "investors",
+        "ecosystem",
+        "potential",
+        "date",
+        "stars",
+        "heat_score",
+        "watch_level",
+        "description",
+        "status",
+        "interaction_steps",
+        "reward_type",
+        "project_status",
+        "multi_account",
+        "cost",
+        "link",
+        "invite_code",
+        "tge_quarter"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "预测市场",
+            "PolyMarket",
+            "28亿",
+            "Polychain",
+            "预测",
+            "明确发币",
+            "25年",
+            "5",
+            "",
+            "公正实时的预测市场",
+            "重点参与",
+            "交易",
+            "套利插件 / 交易量",
+            "持续",
+            "精品号",
+            "手续费",
+            "https://polymarket.com/",
+            "",
+            "/",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Predict",
+            "未知",
+            "YZi Labs",
+            "预测",
+            "明确发币",
+            "25年",
+            "4",
+            "",
+            "基于 BNB Chain 的预测市场",
+            "在参与",
+            "交易",
+            "积分",
+            "持续",
+            "精品号",
+            "手续费",
+            "https://predict.fun/",
+            "",
+            "/",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "42",
+            "720万",
+            "YZi Labs",
+            "预测",
+            "潜力小",
+            "25年",
+            "3",
+            "",
+            "链上预测市场平台",
+            "在参与",
+            "交易",
+            "/",
+            "待开",
+            "精品号",
+            "手续费",
+            "https://42.space/",
+            "",
+            "/",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "XO Market",
+            "650万",
+            "",
+            "预测",
+            "潜力中",
+            "5.02",
+            "0",
+            "",
+            "XO Market 是一个无许可的信念市场",
+            "关注状态",
+            "交易",
+            "",
+            "测试",
+            "",
+            "手续费",
+            "https://beta.xo.market/markets",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "fireplace",
+            "150万",
+            "Frachtis",
+            "预测",
+            "潜力中",
+            "2.24",
+            "1",
+            "",
+            "预测市场",
+            "未参与",
+            "交易",
+            "",
+            "早期",
+            "单独号",
+            "手续费",
+            "https://pro.fireplace.gg?code=6NAMAK",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Outcome",
+            "未知",
+            "",
+            "预测",
+            "潜力小",
+            "1月",
+            "1",
+            "",
+            "预测市场平台",
+            "未参与",
+            "交易",
+            "",
+            "早期",
+            "单独号",
+            "手续费",
+            "https://testnet.outcome.xyz/events",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Space",
+            "2300万",
+            "",
+            "预测",
+            "潜力中",
+            "1月",
+            "3",
+            "",
+            "杠杆预测市场",
+            "未参与",
+            "交易",
+            "",
+            "测试",
+            "精品号",
+            "手续费",
+            "https://into.space/",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Bento",
+            "未知",
+            "",
+            "预测",
+            "潜力小",
+            "25年",
+            "3",
+            "",
+            "Web3 创作交易平台",
+            "未参与",
+            "交易",
+            "积分",
+            "待开",
+            "精品号",
+            "手续费",
+            "https://waitlist.bento.fun/",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Probable",
+            "未知",
+            "",
+            "预测",
+            "潜力中",
+            "25年",
+            "3",
+            "",
+            "基于 BNB Chain 的预测市场",
+            "未参与",
+            "交易",
+            "积分",
+            "持续",
+            "精品号",
+            "手续费",
+            "https://probable.markets/",
+            "",
+            "/",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "Kairos",
+            "250万",
+            "a16zCSX",
+            "预测",
+            "明确发币",
+            "2月",
+            "3",
+            "",
+            "预测市场交易终端",
+            "未参与",
+            "候补",
+            "白名单",
+            "待开",
+            "精品号",
+            "无消耗",
+            "https://kairos.trade/",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "predit.market",
+            "280万",
+            "",
+            "预测",
+            "潜力小",
+            "3.14",
+            "1",
+            "",
+            "跨越加密政治等领域的实时预测",
+            "未参与",
+            "任务",
+            "交易 / 积分",
+            "早期",
+            "单独号",
+            "无消耗",
+            "https://predit.market?invitecode=aRh8XU",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "预测市场",
+            "MYRIAD",
+            "未知",
+            "MoonPay",
+            "预测",
+            "潜力中",
+            "3.25",
+            "2",
+            "",
+            "预测市场",
+            "未参与",
+            "交易",
+            "",
+            "早期",
+            "可多号",
+            "手续费",
+            "myriad.markets",
+            "",
+            "",
+            ""
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    },
+    {
+      "id": "analysis",
+      "blurb": "Signal feed generated from trend and momentum.",
+      "cols": [
+        "Pair",
+        "Signal",
+        "Confidence",
+        "Updated"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "BTC/USDT",
+            "Bullish ▲",
+            "78%",
+            "5 min ago"
+          ],
+          "chain": "Bitcoin"
+        },
+        {
+          "cells": [
+            "ETH/USDT",
+            "Neutral —",
+            "54%",
+            "12 min ago"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "SOL/USDT",
+            "Bearish ▼",
+            "61%",
+            "18 min ago"
+          ],
+          "chain": "Solana"
+        }
+      ]
+    },
+    {
+      "id": "x-traffic",
+      "blurb": "X (Twitter) traction per tracked project.",
+      "cols": [
+        "Project",
+        "Followers",
+        "24h posts",
+        "Engagement"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Lighter",
+            "412K",
+            "1,240",
+            "8.2%"
+          ],
+          "chain": "Arbitrum"
+        },
+        {
+          "cells": [
+            "Polymarket",
+            "986K",
+            "2,110",
+            "6.5%"
+          ],
+          "chain": "Base"
+        },
+        {
+          "cells": [
+            "LayerZero",
+            "890K",
+            "640",
+            "4.1%"
+          ],
+          "chain": "Ethereum"
+        }
+      ]
+    },
+    {
+      "id": "defi",
+      "blurb": "Protocol TVL leaderboard.",
+      "cols": [
+        "Protocol",
+        "Chain",
+        "TVL",
+        "24h"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Aave",
+            "Ethereum",
+            "$38.1B",
+            "▲ 1.2%"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "Lido",
+            "Ethereum",
+            "$33.9B",
+            "▼ 0.4%"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "EigenLayer",
+            "Ethereum",
+            "$18.6B",
+            "▲ 0.8%"
+          ],
+          "chain": "Ethereum"
+        }
+      ]
+    },
+    {
+      "id": "liquidity",
+      "blurb": "Deepest pools by TVL and volume.",
+      "cols": [
+        "Pool",
+        "TVL",
+        "APR",
+        "24h volume"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "ETH/USDC · Uniswap v3",
+            "$412M",
+            "18.4%",
+            "$96M"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "SOL/USDC · Orca",
+            "$188M",
+            "24.1%",
+            "$61M"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "WBTC/ETH · Curve",
+            "$96M",
+            "6.2%",
+            "$12M"
+          ],
+          "chain": "Ethereum"
+        }
+      ]
+    },
+    {
+      "id": "sectors",
+      "blurb": "Which crypto sectors are moving today.",
+      "cols": [
+        "Sector",
+        "24h",
+        "Movers"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "AI agents",
+            "▲ 5.8%",
+            "VIRTUAL · TAO"
+          ],
+          "chain": "Base"
+        },
+        {
+          "cells": [
+            "L2s",
+            "▲ 3.2%",
+            "ARB · OP · STRK"
+          ],
+          "chain": "Arbitrum"
+        },
+        {
+          "cells": [
+            "Memecoins",
+            "▼ 1.9%",
+            "DOGE · WIF"
+          ],
+          "chain": "Solana"
+        }
+      ]
+    },
+    {
+      "id": "onchain-stocks",
+      "blurb": "Tokenized US equities (xStocks-style).",
+      "cols": [
+        "Token",
+        "Underlying",
+        "Price",
+        "Premium",
+        "24h volume"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "SPYx",
+            "SPY",
+            "$602.40",
+            "+0.05%",
+            "$8.4M"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "NVDAx",
+            "NVDA",
+            "$138.61",
+            "+0.12%",
+            "$3.1M"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "TSLAx",
+            "TSLA",
+            "$422.90",
+            "+0.26%",
+            "$5.6M"
+          ],
+          "chain": "Solana"
+        }
+      ]
+    },
+    {
+      "id": "yields",
+      "blurb": "Lending and staking yields across venues.",
+      "cols": [
+        "Protocol",
+        "Asset",
+        "APY",
+        "TVL",
+        "Risk"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Aave v3",
+            "USDC",
+            "6.8%",
+            "$8.2B",
+            "Low"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "Kamino",
+            "SOL-USDC LP",
+            "12.4%",
+            "$640M",
+            "Med"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "ether.fi",
+            "eETH",
+            "4.1%",
+            "$4.9B",
+            "Med"
+          ],
+          "chain": "Ethereum"
+        }
+      ]
+    },
+    {
+      "id": "vc",
+      "blurb": "Most active investors over the last 90 days.",
+      "cols": [
+        "Fund",
+        "Deals 90d",
+        "Notable deal",
+        "Last deal"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "a16z crypto",
+            "12",
+            "LayerZero",
+            "2d ago"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "Paradigm",
+            "9",
+            "Monad",
+            "6d ago"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "Polychain",
+            "7",
+            "Walrus",
+            "11d ago"
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    },
+    {
+      "id": "wallets",
+      "blurb": "Wallet activity per application.",
+      "cols": [
+        "Protocol",
+        "Active wallets",
+        "30d",
+        "Category"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Phantom",
+            "3.1M",
+            "▲ 8.4%",
+            "Wallet"
+          ],
+          "chain": "Solana"
+        },
+        {
+          "cells": [
+            "MetaMask",
+            "2.4M",
+            "▼ 1.2%",
+            "Wallet"
+          ],
+          "chain": "Ethereum"
+        },
+        {
+          "cells": [
+            "Jupiter",
+            "1.2M",
+            "▲ 12.9%",
+            "DEX"
+          ],
+          "chain": "Solana"
+        }
+      ]
+    },
+    {
+      "id": "ai",
+      "blurb": "Curated AI tooling for airdrop farming.",
+      "cols": [
+        "Resource",
+        "Type",
+        "Cost",
+        "Link"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Signal summarizer prompts",
+            "Prompt set",
+            "Free",
+            "—"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "Project research playbooks",
+            "Playbook",
+            "Free",
+            "—"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "On-chain analytics assistant",
+            "API",
+            "$19/mo",
+            "—"
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    },
+    {
+      "id": "toolbox",
+      "blurb": "Everyday utilities referenced by the dashboard.",
+      "cols": [
+        "Tool",
+        "Category",
+        "Pricing"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "Portfolio tracker",
+            "Analytics",
+            "Free"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "Entity explorer",
+            "Intel",
+            "Freemium"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "Dashboard builder",
+            "Data viz",
+            "Freemium"
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    },
+    {
+      "id": "github",
+      "blurb": "Repos the author tracks for early signals.",
+      "cols": [
+        "Repo",
+        "Language",
+        "Activity"
+      ],
+      "rows": [
+        {
+          "cells": [
+            "meta/astryx",
+            "TypeScript",
+            "Active"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "react-component libs watchlist",
+            "Mixed",
+            "Weekly"
+          ],
+          "chain": "Off-chain"
+        },
+        {
+          "cells": [
+            "airdrop-farmer tooling",
+            "Rust",
+            "Monthly"
+          ],
+          "chain": "Off-chain"
+        }
+      ]
+    }
+  ],
+  "IMGS": {
+    "1": "https://images.asksurf.ai/Y65E1_FT207D6mMxP7J27EcTMeXiKvSboyjVa05PdUY/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy92YXJpYXRpb25hbDE3Mjk2OTY5MDk5MzIucG5n",
+    "2": "https://images.asksurf.ai/Gk1P5Kxg5_X1nmbXkSyiRE-7k4R_QSFnhtXgEaOop80/aHR0cHM6Ly9pbWFnZXMuY3J5cHRvcmFuay5pby9jb2lucy8xNTB4MTUwLmVudHJvcHkxNzg2OTc0MzMyMDgxLnBuZw",
+    "3": "https://images.asksurf.ai/huk3J_OULv6yfcOcCobg8X8pDMCfNZOYgBDEh3DzEcU/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9saWdodGVyMTc1ODg3NzI2NjY0NC5wbmc",
+    "4": "https://images.asksurf.ai/e85MBWTnpJzvo7bcq7cUwqhPQpEVmHpCNkGr5w0fmWE/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy96ZXRhX2NoYWluMTcwNjUyMzczNjQwOC5wbmc",
+    "5": "https://images.asksurf.ai/90xR_k8NHNJ5hpfdMdLkhkV5lflnfKQ2WWotTDGbD-U/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy93YWxsZXRfY29ubmVjdDE3MjkwNjExODk4MjcucG5n",
+    "6": "https://images.asksurf.ai/HzBUcrvMtB9LF3FdLtP3BIDhFnvzbdedI62SdTihvd0/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9xZmV4MTc3MjcxNjEzODI3NC5wbmc",
+    "7": "https://images.asksurf.ai/HchFbYLy9MhB9vhi3UjqU_UcRTnyC3YcA4Q-ViSLKFA/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9kb2dlX29zMTc0NjUzNzcwOTE5MS5wbmc",
+    "8": "https://images.asksurf.ai/XemG1Lz2t6W6Eoe7S_8QVlogb29ZFFlOILfbh1Er1MU/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy80Ml9wcmV2X2Fsa2ltaXlhMTc2MzU2MjMyNTkwNy5wbmc",
+    "10": "https://images.asksurf.ai/Du1aPN6xZjttL2EMuBS70qQ4sa3nzXG9an6Q2eZNg/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9jYW50b25fbmV0d29yazE3NjE5MjkyMDk4MzgucG5n",
+    "13": "https://images.asksurf.ai/WS3oi7d-cBlO_Pa5mEaoSDEQURYETQBZx3liEKlZr50/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9yb21lX3Byb3RvY29sMTcyMzc5OTg5NDk4Ni5wbmc",
+    "14": "https://images.asksurf.ai/ZNJpKzg6E_J0LkrOxxoKjXiP-_gpdM1fZ1ryplC-i0s/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9idWxrMTc1ODc1MDM0MTcyNS5wbmc",
+    "15": "https://images.asksurf.ai/QkCeNWN4iqMBUzfnUvaz4vluZVOmUM9wr2WA9mAwWrY/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9oaWJhY2hpMTc0MjQ1NTM2NzQ5NC5wbmc",
+    "16": "https://images.asksurf.ai/FzX3DYFbIXruiUMKoUhMkdmxCtS6H-D2-lIT56KK-H4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wdWRneV9wZW5ndWluczE3MzQ0NDQxMTA0MjcucG5n",
+    "17": "https://images.asksurf.ai/-KE0X4AskbQ2PJ3ZZhT9comIGVAESr_aDKPJqQY1U8M/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9tZWVsZTE3NTg3NTE2ODY2MTEucG5n",
+    "18": "https://images.asksurf.ai/JZtbPLqH17J81jj8x2Za0wLBxgvkL8frIpP90VI57nk/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9mb3J0ZTE2NjgwODg2MjgyNTQucG5n",
+    "19": "https://images.asksurf.ai/GTCSRRTRpQtA82Zb77v_Ico-Afjot5uCd3tJg7LdqfA/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9mb21vMTczOTk2NDA2MjIzNC5wbmc",
+    "20": "https://images.asksurf.ai/b7ykWobHbFIcUYWtO2b2ZDOEylRPvTJ_FdA2U5uCdi4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9sYXllcl96ZXJvMTY2ODA5MjgwODI0Mi5wbmc",
+    "21": "https://images.asksurf.ai/440Me8SsVCNq7-SCmD8ZgXmz87YLQlFwCzXT_CdqPIA/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wb2x5bWFyMTY3MTAwNjM4NDQ2MC5wbmc",
+    "22": "https://images.asksurf.ai/G-uPWwtoJU8em_1ztwqejl1qLX0a3AUQrYWzgOmunLc/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9waGFudG9tMTcxOTIzNDQzMzQ5Ny5wbmc",
+    "23": "https://images.asksurf.ai/A61P19tThtsxkVWCA_HsdmUU6pF8InykEOFoNzB5F8/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9rdV9jb2luX3Rva2VuMTY3OTM4ODc2MjAzOC5wbmc",
+    "24": "https://images.asksurf.ai/5nr5kkuQK4pzn_ZOFI-DI7CTpe5W7LEuiePuytXVbsM/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9mYXJjYXN0ZXIxNzYxMzE3MDQ1NDQ1LnBuZw",
+    "25": "https://images.asksurf.ai/tXGWewAIeoBasYRGtj3MXfKjYc-OD10fzu0n9JimAEk/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9hYXZlMTcyMDUxOTkxMzgzNi5wbmc",
+    "26": "https://images.asksurf.ai/3Q9_InwwPShtuJqqKrhvteezhdEZmyTKR8YW_gKU98qY/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zb25pYzE3MjI2MDgwNzUxMzgucG5n",
+    "27": "https://images.asksurf.ai/GF2ef_oKeDxguQmUkj3XAgipGshbEA3k3XzxhwXAqeE/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy93b3JtaG9sZTE3MjY4Mjk4MzEzMTgucG5n",
+    "28": "https://images.asksurf.ai/60TPVdrxtPrLutrxeMKfLGk6kbo3aF5_UfWt50gmPLw/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy95dWdhX2xhYnMxNjY3ODMyMDI0NzMwLnBuZw",
+    "29": "https://images.asksurf.ai/ZbeC4NHPjydc-i2dCISmiS4vpzZySkk6rixkW-03XA/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9pbW11dGFibGUxNjk5NjEzMzY5MTczLnBuZw",
+    "30": "https://images.asksurf.ai/OQIcF89FaHuueScnttffKoECOazazFBMJEJrCMe1Z7Q/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9tb29uX3BheTE2Njg0OTYzNTY2MDgucG5n",
+    "31": "https://images.asksurf.ai/3GZ0wOCmHkyDDeZpsFOIdBYBgmMx2vjMnNQEp9eg-Ho/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9rYWxzaGkxNzUwOTI0MDUwNzg2LnBuZw",
+    "32": "https://images.asksurf.ai/rPJyBVnarv57XS87EvwuqKyXQvBqXEA0I4bftij5h0s/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9kb29kbGVzMTc1NzY5NjA5Mzg4NC5wbmc",
+    "33": "https://images.asksurf.ai/x0pzxPihrF9Ep_dyZXO6dB5tdvmf_46h8iz6yJNiVjg/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9sZW5zX3Byb3RvY29sMTczMzg0NTEyNTY5Mi5wbmc",
+    "34": "https://images.asksurf.ai/ZheHUl11hQ929XAr-bWPE0TIXxbER6Nr2QWpxzp-MEM/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9ldGhlcl9maTE3MjU2MjcxMzU5ODcucG5n",
+    "35": "https://images.asksurf.ai/fFvBWl9kFYvYMbua_CuFdzlMxM39fv24qABrk544Jz0/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zdGFya19uZXQxNjU4ODI0OTIxMjQ0LnBuZw",
+    "36": "https://images.asksurf.ai/m_Uaz-b7ivL3zbwSHqJhBS217xI6PdAewC3na_1oaPQ/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9tYW50YSBuZXR3b3JrMTY0NDU3NzMwNjM3Ny5wbmc",
+    "37": "https://images.asksurf.ai/6pjXT1mLoDNvoJwsGRhzFVbY6lCy-h0cYQqvzmMeQ/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9kZV9iYW5rMTY2Njg1Nzk3MDI3Ni5wbmc",
+    "38": "https://images.asksurf.ai/xWjf_eFGAi3dD3orIiCCU-E0IA7Y47rk2TRLZLRi50/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wcml2eTE3NDk2NTUxODI2NTUucG5n",
+    "39": "https://images.asksurf.ai/EZkcjzm_UqdHgWuD4X5BeI66ibKXDIg239M1NeMkiWI/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9henRlYzE3NjMwOTcxNzM0NzIucG5n",
+    "40": "https://images.asksurf.ai/uiSADBO_-aOCwzoVaeAFTt2bBhtGn_cS1f7t2-yk_7Y/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9vbmRvX2ZpbmFuY2UxNjkyMjU3NjUyNzA2LnBuZw",
+    "41": "https://images.asksurf.ai/Ch3X8iqloIXFJHUIlUG8MmrrHV9NLlLUjUPrEqsvI/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zYW5kYm94MTU5NjcyNjkwODE2Ni5wbmc",
+    "42": "https://images.asksurf.ai/0X519nxV8JlQeCq4XEZNZsruttle3BoAmaThMLw2UF4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9pbmplY3RpdmUxNzM4NjgyODM5MjUzLnBuZw",
+    "43": "https://images.asksurf.ai/6yOJEiM-dU9q3xrzV_dT6UEWocqoBlapfqhioTvEJ4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9hcmMxNzU1NTk2MzM2MjMzLnBuZw",
+    "44": "https://images.asksurf.ai/KbSuQcVOu8Mm41AVA5JtBVrulEEwJllgBBlmPvG7CA4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9jZWxvMTY3Mzg4MzE3NjE2NC5wbmc",
+    "45": "https://images.asksurf.ai/69zsZmITuOVkD5x_sn2eJYFmgL4hUZN62WfR9M70/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9tb2NhMTcxNDEyMDExODkzNi5wbmc",
+    "46": "https://images.asksurf.ai/cG42OCtipTdo_ojuS3BorR0gCMXOYv2gme849v-YHV4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy90ZW1wbzE3NTcwNjA4MDc4OTEucG5n",
+    "47": "https://images.asksurf.ai/j0WFIOR8tkAK5GFYQhZgNzdLhhZXoD_1-KSmUkRNu/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9hbGVvMTczMzIyMzY0NjI3MS5wbmc",
+    "48": "https://images.asksurf.ai/qMtEJ2v4p7IohHDsms-dGv1JqmZMDgVcyceaFSLSWqI/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9ndGUxNzM3MDQ0MTUzMzM0LnBuZw",
+    "49": "https://images.asksurf.ai/3U7fLbX3DvIoNYKn9BJTlSAEuk30RGRTQ2-lEnp2ohs/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9ibG9ja2NoYWluX2NvbTE2NjczMDI3ODI3NzEucG5n",
+    "50": "https://images.asksurf.ai/9Pm3ZDzFXZXBwRFRyMcyK4I8pZQLFIFKPN9O-XFsys/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy92YW5hMTcyNjY0OTY0NDc1OS5wbmc",
+    "51": "https://images.asksurf.ai/rImrK2W8V-b0oYqidTjDjnMTnDFyskCRyeG7VjDbqk/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9jZXJ0aV9rMTY2NzkxMzU4NTg1OS5wbmc",
+    "52": "https://images.asksurf.ai/wX5MhJeDGDcLHMVT8ZhyUa0dZcQTpOQ55ElWtJsZV0A/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wb2x5aGVkcmFfbmV0d29yazE3MzM4MTkxMDgxODUucG5n",
+    "53": "https://images.asksurf.ai/qyomW_bt-CGMM_MVPOdjJjSydigWBQIsKZ12dOgyf24/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9rYXN0MTczMzkxNjA4OTE4MC5wbmc",
+    "54": "https://images.asksurf.ai/WKwFD2ioTzjUGNCUHX_EhhsOD9t2_aaESZY5EjTuNYE/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wcmF4aXNfc29jaWV0eTE2NjYwOTg1ODkyMjcucG5n",
+    "55": "https://images.asksurf.ai/lNOMV0IkNAJJY5lZ03YdPhP77ctv_rZY4Ay2oX3k49k/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zeW5fZnV0dXJlczE3MzcwNDA2MDgzNjEucG5n",
+    "56": "https://images.asksurf.ai/Z9d0rHJfaZfmr3bRNsMT8z4s5nVduGwHd0EdmivUhTE/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zYWhhcmExNzIzNjM1NTQ4NzU0LnBuZw",
+    "57": "https://images.asksurf.ai/KldMoJDOUjEHfeAWWeW0xPvuBYAR3qXSQkn42CChQY4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zdWkxNzUwMjY4NDc0MTkyLnBuZw",
+    "58": "https://images.asksurf.ai/454jUAFRq6HfRP0L3s6uOQo-az285uIcVqitQdXSlGw/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9lbmppbiBjb2luMTYxNDY5MzM4OTE5NS5wbmc",
+    "59": "https://images.asksurf.ai/lIA_B_WGQt2ztG1ckEmU9P4swRWuJoyAppLvR3JDsOo/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9iYWNrZWQxNjcyMjEwMjQwNjg4LnBuZw",
+    "60": "https://images.asksurf.ai/BncGjbYz2J-fFGDkjinDiAVtLHUKGYTXHoRq45rMKwk/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9lbGxpcHNpc19sYWJzMTY5MjM0ODk1NTM0My5wbmc",
+    "61": "https://images.asksurf.ai/iJzwzm1QPhlkQbnuwea3eD9umtLUksKpkHnuWqGw5kg/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy94bXRwMTc1Mjc2MjgxNTcyMy5wbmc",
+    "62": "https://images.asksurf.ai/b71YVjn472LsX3PO68cEnfoW2tFp-b0ivqJdWBcbpoI/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9oZWRlcmExNjQ1MDA2MDA2OTI4LnBuZw",
+    "63": "https://images.asksurf.ai/o9BA5yOr3lGkvNqbxhCMXZDVSbKlt-CWRKy0KWUUXdA/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy93YWxydXMxNzI3ODY0NDc5NzY4LnBuZw",
+    "65": "https://images.asksurf.ai/PVX3ZSERTEyed8OL9iTozSoUJlfXn305gddpmYpLS3s/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9wb2x5bWVyX2xhYnMxNjY2MDA2Mzc0MDMwLnBuZw",
+    "66": "https://images.asksurf.ai/PHTuj0UPueVyhBNCbQpWh_B9yLFw8mUIfLRQBZ10fxk/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9uZW9uMTc1Njk2OTM4NzY1Ny5wbmc",
+    "67": "https://images.asksurf.ai/Uamytx5L7OAqdG73ZOJmfGWk5KffjGyLh8u2Ba1kfj8/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9henJhX2dhbWVzMTY3MjE0ODUxOTMyMi5wbmc",
+    "68": "https://images.asksurf.ai/SfnY1jiytGkL1K4H_jHDo0RmT-vxAT1jDL5Wqps7IgU/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9kYXlsaWdodDE3MjI0OTk3NjQ4MzcucG5n",
+    "69": "https://images.asksurf.ai/YhVXDZshLjq7jVGzdnIB280SLX_U7GQcKiyQ2Svld_g/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy90YWJpMTcwNjAxMDk2MTc0NC5wbmc",
+    "70": "https://images.asksurf.ai/wFBYfTNHYCiUfUfGJjXi7agx8-XY6GlQr2gc5oh8UnX4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9hbmRyZW5hX2Rhd24xNzQ1NTgzNjU0NDY3LnBuZw",
+    "71": "https://images.asksurf.ai/1O6C9tgWwwN-2xGh45hc5BThdjdPMskOfMzLiwhYmts/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy96ZW50cnkxNzE0NDg1NjEyMDA0LnBuZw",
+    "72": "https://images.asksurf.ai/H1MQ7fxI2TVK0H0VoUy0Im7JZg8XDY_tysqiL6ne0uY/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9taWRlbjE3NDU5MjgwNzI0NTAucG5n",
+    "73": "https://images.asksurf.ai/4wPeOfZmmBTsRDUFFi9iTODWU5mHsdczLJt4OWXBdr8/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9oYWxsaWRheTE2NjQxODcyMTU0MDQucG5n",
+    "74": "https://images.asksurf.ai/xcfCTWYviwgjQ5H5JaA_DsBeUYp0DQYGhDpD8TbVZEE/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9vbmVfYmFsYW5jZTE3MjQ3NDI2MjM5MDgucG5n",
+    "75": "https://images.asksurf.ai/aNSPhC6Fwvyhnun0bNwWYV1z1obgna0HB6uWBFJTzIs/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9ibmIxNzMyNTMwMzI0NDA3LnBuZw",
+    "76": "https://images.asksurf.ai/owWOO_vH6cssHRLjF6UNbGD_UyulwemlsRhBzzi7OUw/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9hcmtoYW0xNjg4OTg3OTk5MjY0LnBuZw",
+    "77": "https://images.asksurf.ai/JIVzUb2_dJ1Dw0Yys9F2TaDYmjsFE2nQGxFeEqGz5O4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9vc3RpdW1fbGFiczE2OTY2MDcxMDcwMzYucG5n",
+    "78": "https://images.asksurf.ai/m2XmxWEvtDVjSic38Fb4AYZ3zDijMV2udT3BPirEtU4/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9zbGluZ19zaG90MTY2OTExODc1NzM2OS5wbmc",
+    "79": "https://images.asksurf.ai/20-gvMgu0gJx4DNCWvLmH2Xwi3XWv8iGFXA9hrD-IM8/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9saV9maTE2NjQ4OTc2NzM3NzYucG5n",
+    "80": "https://images.asksurf.ai/gJGNgqvwmi9C-exY54rlBT5RziYsQY9eZq7JUuctvz8/aHR0cHM6Ly9pbWcuY3J5cHRvcmFuay5pby9jb2lucy9yZXlhX2xhYnNfdm9sdHoxNzMzODk1NzI2MDgxLnBuZw"
+  }
+}

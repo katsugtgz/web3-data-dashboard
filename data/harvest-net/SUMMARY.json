@@ -1,0 +1,47 @@
+{
+  "target": "https://import-command-query-8ca052.surf.computer/",
+  "capturedAt": "2026-11-19T12:55:00.230Z",
+  "counts": {
+    "active": 373,
+    "tge": 19,
+    "airdropDoitWithLink": 373,
+    "sheetSections": 19,
+    "sheetRows": 415,
+    "airdropDoitInPriorHarvest80": 79,
+    "airdropDoitTotalBeforeFilter": 373
+  },
+  "sources": {
+    "airdrops": "raw/0002.json (/api/airdrops)",
+    "sheet": "raw/0008.json (/api/airdrop-sheet)",
+    "whalesMarket": "raw/0007.json (/api/whales-market, empty lists)"
+  },
+  "noNetworkData": [],
+  "notes": [
+    "airdrop-doit.json: all 373 /api/airdrops active[] items with best_task.external_link. The '80' target not reproduced by any filter tried (status/tier/launched/reward_type); in_prior_harvest_80 flags the 79 overlapping prior harvest/airdrop-doit.json links (1 prior link absent from API).",
+    "tge.json: /api/airdrops tge[] (19).",
+    "section-*.json: /api/airdrop-sheet sections[].items, header = keys of first item.",
+    "Page UI shows no literal 'Do it' text; links are anchors. Network capture covered load + 3 tabs (项目空投, TGE 盘前, 表格项目) with 15 scroll steps each.",
+    "/api/whales-market returned empty lists (raw/0007.json)."
+  ],
+  "sections": [
+    "钱包",
+    "交易类",
+    "预测市场",
+    "AI_机器人",
+    "挂机",
+    "主网生态",
+    "测试网生态",
+    "另类测试网",
+    "跨链桥",
+    "嘴撸",
+    "博彩",
+    "存款",
+    "模板项目",
+    "高频任务类",
+    "未分类",
+    "候补",
+    "下面这些项目已经发币_The_project_that_has_been_TGE_",
+    "下面这些项目是跑路的_A_project_that_has_gone_bankrupt_",
+    "放弃项目"
+  ]
+}

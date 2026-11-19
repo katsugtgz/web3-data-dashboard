@@ -1,0 +1,116 @@
+[
+  {
+    "name": "predict.fun $PREDICT",
+    "status": "可领取 TGE",
+    "date": "2026-11-18",
+    "raw": "predict.fun $PREDICT 可领取 TGE 2026-11-18"
+  },
+  {
+    "name": "Extended $XTEN",
+    "status": "资格核验",
+    "date": "2026-11-11",
+    "raw": "Extended $XTEN 资格核验 2026-11-11"
+  },
+  {
+    "name": "Saturn",
+    "status": "可领取 TGE",
+    "date": "2026-11-10",
+    "raw": "S Saturn 可领取 TGE 2026-11-10"
+  },
+  {
+    "name": "KOR Protocol $KOR",
+    "status": "可领取 TGE",
+    "date": "2026-11-04",
+    "raw": "KOR Protocol $KOR 可领取 TGE 2026-11-04"
+  },
+  {
+    "name": "InfiniFi",
+    "status": "资格核验",
+    "date": "2026-11-04",
+    "raw": "InfiniFi 资格核验 2026-11-04"
+  },
+  {
+    "name": "MemeBitcoin $MBTC",
+    "status": "资格核验",
+    "date": "2026-10-28",
+    "raw": "MemeBitcoin $MBTC 资格核验 2026-10-28"
+  },
+  {
+    "name": "ChimpX AI $CHIMP",
+    "status": "资格核验",
+    "date": "2026-10-28",
+    "raw": "ChimpX AI $CHIMP 资格核验 2026-10-28"
+  },
+  {
+    "name": "Ritual $RITUAL",
+    "status": "可领取 TGE",
+    "date": "2026-10-26",
+    "raw": "Ritual $RITUAL 可领取 TGE 2026-10-26"
+  },
+  {
+    "name": "MINTED $MNTD",
+    "status": "可领取 TGE",
+    "date": "2026-10-20",
+    "raw": "M MINTED $MNTD 可领取 TGE 2026-10-20"
+  },
+  {
+    "name": "GenLayer",
+    "status": "资格核验",
+    "date": "2026-10-21",
+    "raw": "GenLayer 资格核验 2026-10-21"
+  },
+  {
+    "name": "Axis Robotics $AXIS",
+    "status": "可领取 TGE",
+    "date": "2026-10-21",
+    "raw": "Axis Robotics $AXIS 可领取 TGE 2026-10-21"
+  },
+  {
+    "name": "MindGamesAI",
+    "status": "可领取 TGE",
+    "date": "2026-10-14",
+    "raw": "M MindGamesAI 可领取 TGE 2026-10-14"
+  },
+  {
+    "name": "Incentiv $CENT",
+    "status": "可领取 TGE",
+    "date": "2026-10-11",
+    "raw": "Incentiv $CENT 可领取 TGE 2026-10-11"
+  },
+  {
+    "name": "Yield Fields",
+    "status": "可领取 TGE",
+    "date": "2026-10-12",
+    "raw": "Y Yield Fields 可领取 TGE 2026-10-12"
+  },
+  {
+    "name": "Concrete $CT",
+    "status": "可领取 TGE",
+    "date": "2026-09-30",
+    "raw": "Concrete $CT 可领取 TGE 2026-09-30"
+  },
+  {
+    "name": "BitX",
+    "status": "资格核验",
+    "date": "2026-09-25",
+    "raw": "B BitX 资格核验 2026-09-25"
+  },
+  {
+    "name": "Gyndore $GYNDORE",
+    "status": "可领取",
+    "date": "2026-09-22",
+    "raw": "G Gyndore $GYNDORE 可领取 2026-09-22"
+  },
+  {
+    "name": "aka.fun",
+    "status": "资格核验",
+    "date": "2026-09-14",
+    "raw": "A aka.fun 资格核验 2026-09-14"
+  },
+  {
+    "name": "Tread.fi",
+    "status": "资格核验",
+    "date": "2026-09-02",
+    "raw": "Tread.fi 资格核验 2026-09-02"
+  }
+]
