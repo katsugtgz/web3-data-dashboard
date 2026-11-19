@@ -22,7 +22,7 @@ export function useDashboard(): { data: Dashboard | null; error: string | null }
       if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
     };
 
-    if (process.env.VITE_STATIC) {
+    if (import.meta.env.VITE_STATIC) {
       // Static Pages build: fetch the bundled snapshot only.
       fetch(`${import.meta.env.BASE_URL}data/dashboard.json`, { signal: ctrl.signal })
         .then(loadJson)

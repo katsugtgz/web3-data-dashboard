@@ -7,8 +7,8 @@ An English, accessible clone of an 18-section Web3 data dashboard — project ai
 ## Features
 
 - 18 dashboard sections covering airdrops, markets (crypto/stocks), DeFi protocol rankings, VC investors, X traffic, on-chain stocks, AI resources and more
-- Two harvest sources with 21 + 23 scraped section snapshots in `data/harvest/` and `data/harvest-net/`
-- Live airdrop feed polled from an upstream dashboard endpoint
+- Two harvest sources with 21 + 34 scraped section snapshots in `data/harvest/` and `data/harvest-net/`
+- Live airdrop feed polled from `https://import-command-query-8ca052.surf.computer/api/airdrops` (`src/lib/airdrops.ts`)
 - Local API server serving the dashboard snapshot and per-section JSON
 
 ## Tech stack
@@ -28,7 +28,7 @@ bun run typecheck
 bun run doctor
 ```
 
-Requires [Bun](https://bun.sh) ≥ 1.x.
+Requires [Bun](https://bun.sh) 1.4.0 or newer.
 
 ## Project structure
 
