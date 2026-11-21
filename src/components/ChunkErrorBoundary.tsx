@@ -23,8 +23,8 @@ export class ChunkErrorBoundary extends Component<Props, State> {
   override render() {
     if (this.state.hasError) {
       return (
-        <div className="empty" role="alert">
-          <p>Failed to load {this.props.label}. Check your connection and reload the page.</p>
+        <div className="empty">
+          <p role="alert">Failed to load {this.props.label}. Check your connection and reload the page.</p>
           <button type="button" className="btn" style={{ marginTop: 10 }} onClick={this.handleReload}>
             Reload page
           </button>

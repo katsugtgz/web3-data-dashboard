@@ -58,10 +58,11 @@ async function getGzipped(filePath: string, file: ReturnType<typeof Bun.file>): 
     return cached.data;
   }
   const compressed = Bun.gzipSync(new Uint8Array(await file.arrayBuffer()));
-  if (gzipCache.size >= GZIP_CACHE_MAX) {
+  if (!gzipCache.has(filePath) && gzipCache.size >= GZIP_CACHE_MAX) {
     const oldest = gzipCache.keys().next().value;
     if (oldest !== undefined) gzipCache.delete(oldest);
   }
+  gzipCache.delete(filePath);
   gzipCache.set(filePath, { mtime, size, data: compressed });
   return compressed;
 }
@@ -94,18 +95,22 @@ async function respondFile(
   const mime = headers['content-type'] ?? file.type;
   const compressible = COMPRESSIBLE_RE.test(mime) && file.size > 1024;
   if (compressible && acceptsGzip(acceptEncoding)) {
+    const compressed = await getGzipped(filePath, file);
     const gzipHeaders = {
       ...headers,
       'content-type': mime,
       'content-encoding': 'gzip',
+      'content-length': String(compressed.byteLength),
       vary: 'Accept-Encoding',
     };
-    if (isHead) return new Response(null, { headers: gzipHeaders });
-    const compressed = await getGzipped(filePath, file);
-    return new Response(compressed, { headers: gzipHeaders });
+    return new Response(isHead ? null : compressed, { headers: gzipHeaders });
   }
   const finalHeaders = compressible ? { ...headers, vary: 'Accept-Encoding' } : headers;
-  if (isHead) return new Response(null, { headers: { ...finalHeaders, 'content-type': mime } });
+  if (isHead) {
+    return new Response(null, {
+      headers: { ...finalHeaders, 'content-type': mime, 'content-length': String(file.size) },
+    });
+  }
   return new Response(file, { headers: finalHeaders });
 }
 
