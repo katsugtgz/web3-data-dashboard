@@ -14,12 +14,12 @@ interface FormProps {
 
 function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pendingCopyName, onCopyPending }: FormProps) {
   const [form, setForm] = useState<AgentProfile>(initialProfile);
+  const [timeCap, setTimeCap] = useState(String(initialProfile.maxMinutes));
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    // Save only; App owns close timing — during a pending copy the dialog
-    // stays up until the copy outcome is shown inside it.
-    onSave(form);
+    const maxMinutes = timeCap === '' ? initialProfile.maxMinutes : Math.min(480, Math.max(1, Number(timeCap)));
+    onSave({ ...form, maxMinutes });
   };
 
   return (
@@ -38,7 +38,7 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
         Stored locally in your browser only. Never enter seed phrases, private keys, passwords, or cookies.
       </p>
 
-      {copyStatus && <CopyStatusBanner status={copyStatus} />}
+      <CopyStatusBanner status={copyStatus} />
 
       {pendingCopyName && !copyStatus && (
         <p className="privacy-banner">
@@ -164,6 +164,7 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
             type="number"
             min={0}
             max={10000}
+            step="any"
             value={form.budgetUsd}
             onChange={e => setForm({ ...form, budgetUsd: Math.max(0, Number(e.target.value) || 0) })}
           />
@@ -174,10 +175,8 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
           <input
             id="profile-time-cap"
             type="number"
-            min={1}
-            max={480}
-            value={form.maxMinutes}
-            onChange={e => setForm({ ...form, maxMinutes: Math.max(1, Number(e.target.value) || 30) })}
+            value={timeCap}
+            onChange={e => setTimeCap(e.target.value)}
           />
         </label>
       </div>

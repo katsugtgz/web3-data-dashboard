@@ -84,13 +84,14 @@ export function useAgentProfile() {
 
   const saveProfile = useCallback((next: AgentProfile) => {
     const normalized = normalizeProfile(next);
+    let persisted = true;
     try {
       localStorage.setItem(AGENT_PROFILE_KEY, JSON.stringify(normalized));
     } catch {
-      // Ignore storage quota errors while updating in-memory state
+      persisted = false;
     }
     setState({ profile: normalized, hasConfigured: true });
-    return normalized;
+    return { profile: normalized, persisted };
   }, []);
 
   return {

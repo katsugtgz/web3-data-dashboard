@@ -16,7 +16,7 @@ export type ToastState = { message: string; tone: 'ok' | 'warn' };
 interface CopyControllerInput {
   hasConfigured: boolean;
   profile: AgentProfile;
-  saveProfile: (next: AgentProfile) => AgentProfile;
+  saveProfile: (next: AgentProfile) => { profile: AgentProfile; persisted: boolean };
   /** Freshness source for first-copy: validate risk against the CURRENT feed. */
   getVisibleItems: () => FeedItem[];
 }
@@ -39,8 +39,7 @@ export interface CopyController {
 }
 
 const COPY_STATUS_MS = 4500;
-/** How long the profile dialog lingers after the copy banner appears, so users see it. */
-const PROFILE_CLOSE_DELAY_MS = 600;
+const SESSION_PROFILE_MESSAGE = 'Profile saved for this session only. Browser storage is unavailable.';
 
 const nameOf = (target: FeedItem | Card): string => (isFeedItem(target) ? target.project : target.n);
 
@@ -61,13 +60,11 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   const pendingCopyTargetRef = useRef<{ target: FeedItem | Card; region: CopyRegion } | null>(null);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const copyStatusTimerRef = useRef<number | undefined>(undefined);
-  const profileCloseTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     return () => {
       clearTimeout(toastTimerRef.current);
       clearTimeout(copyStatusTimerRef.current);
-      clearTimeout(profileCloseTimerRef.current);
     };
   }, []);
 
@@ -92,40 +89,34 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   );
 
   const executeCopyBrief = useCallback(
-    (target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion): Promise<void> => {
+    (target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
       const md = buildBrief(target, activeProfile);
       if (!md) {
-        reportOutcome(region, 'Brief unavailable for RISK items.', 'warn');
-        return Promise.resolve();
+        reportOutcome(region, `Brief unavailable for RISK items.${notice}`, 'warn');
+        return;
       }
-      return copyText(md).then(ok => {
-        const isWarn = isFeedItem(target) ? target.risk.level === 'warn' : target.b.includes('risk');
+      void copyText(md).then(ok => {
+        const isWarn = isFeedItem(target) && target.risk.level === 'warn';
         const label = nameOf(target);
-        if (ok) {
-          reportOutcome(
-            region,
-            isWarn
-              ? `Copied ${label} brief (WARN item — verify links before running).`
-              : `Copied ${label} agent brief to clipboard.`,
-            isWarn ? 'warn' : 'ok',
-          );
-        } else {
-          reportOutcome(region, 'Clipboard blocked — open Preview in details to copy.', 'warn');
-        }
+        const message = !ok
+          ? 'Clipboard blocked — open Preview in details to copy.'
+          : isWarn
+            ? `Copied ${label} brief (WARN item: verify links before running).`
+            : `Copied ${label} agent brief to clipboard.`;
+        reportOutcome(region, `${message}${notice}`, !ok || isWarn || notice ? 'warn' : 'ok');
       });
     },
     [reportOutcome],
   );
 
-  /** Risk may have changed since the first-copy request: always re-look-up by id. */
-  const freshenTarget = useCallback(
-    (target: FeedItem | Card): FeedItem | Card => {
-      if (!isFeedItem(target)) return target;
-      const current = getVisibleItems().find(it => it.id === target.id);
-      return current ?? target;
-    },
-    [getVisibleItems],
-  );
+  const copyCurrent = useCallback((target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
+    const current = isFeedItem(target) ? getVisibleItems().find(it => it.id === target.id) : target;
+    if (!current) {
+      reportOutcome(region, `Brief unavailable. This drop is no longer in the feed.${notice}`, 'warn');
+      return;
+    }
+    executeCopyBrief(current, activeProfile, region, notice);
+  }, [executeCopyBrief, getVisibleItems, reportOutcome]);
 
   const handleCopyBrief = useCallback(
     (target: FeedItem | Card, region: CopyRegion = 'page') => {
@@ -135,37 +126,31 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
         setProfileOpen(true);
         return;
       }
-      void executeCopyBrief(target, profile, region);
+      copyCurrent(target, profile, region);
     },
-    [hasConfigured, profile, executeCopyBrief],
+    [hasConfigured, profile, copyCurrent],
   );
 
   const copyPendingNow = useCallback(() => {
     const pending = pendingCopyTargetRef.current;
-    if (!pending || !hasConfigured) return;
-    void executeCopyBrief(freshenTarget(pending.target), profile, 'profile');
-  }, [hasConfigured, profile, executeCopyBrief, freshenTarget]);
+    if (!pending) return;
+    copyCurrent(pending.target, profile, 'profile');
+  }, [profile, copyCurrent]);
 
   const handleSaveProfile = useCallback(
     (next: AgentProfile) => {
-      const savedProfile = saveProfile(next);
+      const { profile: savedProfile, persisted } = saveProfile(next);
       const pending = pendingCopyTargetRef.current;
       pendingCopyTargetRef.current = null;
       setPendingCopyName(null);
       if (pending) {
-        // Keep the dialog open until the outcome banner is up; the page is
-        // inert behind showModal(), so the banner inside the dialog is the
-        // only channel the user (and screen readers) can perceive.
-        executeCopyBrief(freshenTarget(pending.target), savedProfile, 'profile').finally(() => {
-          clearTimeout(profileCloseTimerRef.current);
-          profileCloseTimerRef.current = Number(setTimeout(() => setProfileOpen(false), PROFILE_CLOSE_DELAY_MS));
-        });
+        copyCurrent(pending.target, savedProfile, 'profile', persisted ? '' : ` ${SESSION_PROFILE_MESSAGE}`);
         return;
       }
-      showToast('Agent environment profile saved locally.');
+      showToast(persisted ? 'Agent environment profile saved locally.' : SESSION_PROFILE_MESSAGE, persisted ? 'ok' : 'warn');
       setProfileOpen(false);
     },
-    [saveProfile, executeCopyBrief, showToast, freshenTarget],
+    [saveProfile, copyCurrent, showToast],
   );
 
   const openProfile = useCallback(() => {
