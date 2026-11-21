@@ -144,7 +144,8 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
       pendingCopyTargetRef.current = null;
       setPendingCopyName(null);
       if (pending) {
-        copyCurrent(pending.target, savedProfile, 'profile', persisted ? '' : ` ${SESSION_PROFILE_MESSAGE}`);
+        setProfileOpen(false);
+        copyCurrent(pending.target, savedProfile, pending.region, persisted ? '' : ` ${SESSION_PROFILE_MESSAGE}`);
         return;
       }
       showToast(persisted ? 'Agent environment profile saved locally.' : SESSION_PROFILE_MESSAGE, persisted ? 'ok' : 'warn');

@@ -65,7 +65,7 @@ export function MarketPanel({ section, sectors }: Props) {
       .sort((a, b) => cmpRows(a, b, sort.col, sort.dir));
   }, [section.rows, chain, query, sort]);
 
-  // Match repeated source ids by row content before falling back to an ordinal for identical rows.
+  // Duplicate source ids use identity fields, not live prices or volumes.
   const rowKeys = useMemo(() => {
     const ids = new Set<string>();
     const duplicates = new Set<string>();
@@ -78,7 +78,7 @@ export function MarketPanel({ section, sectors }: Props) {
     const seen = new Map<string, number>();
     for (const r of section.rows) {
       const id = rowKey(r, section.id);
-      const base = duplicates.has(id) ? JSON.stringify([id, r.chain, r.href, r.cells]) : id;
+      const base = duplicates.has(id) ? JSON.stringify([id, r.chain, r.href, r.cells[0]]) : id;
       const n = seen.get(base) ?? 0;
       seen.set(base, n + 1);
       keys.set(r, n === 0 ? base : `${base}#${n}`);

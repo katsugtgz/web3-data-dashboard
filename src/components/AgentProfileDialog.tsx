@@ -18,8 +18,7 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const maxMinutes = timeCap === '' ? initialProfile.maxMinutes : Math.min(480, Math.max(1, Number(timeCap)));
-    onSave({ ...form, maxMinutes });
+    onSave({ ...form, maxMinutes: Number(timeCap) });
   };
 
   return (
@@ -175,6 +174,9 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
           <input
             id="profile-time-cap"
             type="number"
+            min={1}
+            max={480}
+            required
             value={timeCap}
             onChange={e => setTimeCap(e.target.value)}
           />

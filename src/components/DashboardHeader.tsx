@@ -26,7 +26,8 @@ function FeedStatusText({
   if (fetchedAt !== null) {
     return (
       <span>
-        {failed ? 'Refresh failed · showing last data' : isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span>{' '}
+        {failed ? 'Refresh failed · showing last data' : isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span>
+        {failed ? ' · ' : ' synced '}
         <span className="mono">{formatClock(fetchedAt)}</span>
       </span>
     );
