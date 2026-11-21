@@ -310,6 +310,8 @@ export interface FeedQueryOptions {
   limit?: number;
   risk?: 'include' | 'exclude';
   sort?: 'score' | 'new';
+  /** Content-derived payload timestamp (excluded from the ETag digest). */
+  contentTs?: number;
 }
 
 export async function queryFeed(
@@ -320,7 +322,11 @@ export async function queryFeed(
   const limit = Math.min(200, Math.max(1, opts.limit ?? 100));
   const since = Number.isFinite(opts.since) ? Number(opts.since) : 0;
   const riskClause = opts.risk === 'exclude' ? `AND risk_level != 'risk'` : '';
-  const orderCol = opts.sort === 'new' ? 'last_seen DESC, score DESC' : 'score DESC, last_seen DESC';
+  // Deterministic total order: score/last_seen ties are broken by id, so two
+  // cache-miss builds of the same data produce byte-identical bodies (and
+  // therefore the same ETag) regardless of row return order.
+  const orderCol =
+    opts.sort === 'new' ? 'last_seen DESC, score DESC, id ASC' : 'score DESC, last_seen DESC, id ASC';
 
   const clusterRows = await db
     .prepare(
@@ -353,7 +359,10 @@ export async function queryFeed(
 
   const clusters = clusterRows.results ?? [];
   if (clusters.length === 0) {
-    return { generatedAt: Date.now(), items: [] };
+    // Constant: an empty payload must produce a byte-identical body (and ETag)
+    // on every cache miss. Date.now() here would invalidate the validator even
+    // though no content changed.
+    return { generatedAt: opts.contentTs ?? 0, items: [] };
   }
 
   const clusterIds = clusters.map(c => c.id);
@@ -364,7 +373,7 @@ export async function queryFeed(
        FROM posts p
        LEFT JOIN sources s ON s.id = p.source_id
        WHERE p.cluster_id IN (${placeholders})
-       ORDER BY p.posted_at DESC`,
+       ORDER BY p.posted_at DESC, p.post_url ASC`,
     )
     .bind(...clusterIds)
     .all<{
@@ -434,8 +443,12 @@ export async function queryFeed(
     return item;
   });
 
+  // Content-derived freshness: newest cluster activity, kept stable while the
+  // payload is unchanged so the ETag (which excludes generatedAt) stays valid.
+  const contentTs = opts.contentTs ?? items.reduce((m, it) => Math.max(m, it.lastSeen), 0);
+
   return {
-    generatedAt: Date.now(),
+    generatedAt: contentTs,
     items,
   };
 }

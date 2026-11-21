@@ -60,10 +60,32 @@ const REGISTERED_TG_HANDLES = new Set(
   SEED_SOURCES.filter(s => s.platform === 'telegram').map(s => s.handle.toLowerCase()),
 );
 
+/**
+ * Parses a non-negative integer env var; falls back to `fallback` when unset,
+ * non-numeric, or negative. Unlike `parseInt(...) || fallback`, an explicit
+ * `0` is honored (0 is a real cap, not a missing value).
+ */
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 interface CryptoSnapshotBody {
   section: MarketSection;
   sectors: MarketSector[];
 }
+
+/**
+ * Digest over the *exact response body*, so cache-miss requests produce the
+ * same ETag as the stored 200 (and across isolates) whenever the payload is
+ * unchanged. Loaders therefore exclude volatile clock fields from the body
+ * itself (content-derived `generatedAt` for the feed; per-section
+ * `fetchedAt` for markets) instead of omitting fields at digest time.
+ */
+async function bodyEtag(body: string): Promise<string> {
+  return `"${await sha1Hex(body)}"`;
+}
+export { bodyEtag };
 
 function jsonResponse(body: string, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(body, {
@@ -143,7 +165,7 @@ async function postProcessIngest(env: Env, ingested: IngestPostResult[], nowMs: 
   await Promise.all(candidateJobs);
 
   // 2. Workers AI summaries for eligible new / non-English non-RISK clusters (bounded per tick)
-  const dailyMax = Math.max(0, Number.parseInt(env.AI_DAILY_MAX ?? '300', 10) || 300);
+  const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
   const eligible = ingested
     .filter(r => r.riskLevel !== 'risk' && (r.isNewCluster || r.isNonLatinSource))
     .slice(0, 6);
@@ -211,7 +233,7 @@ function isSectionStale(id: MarketSectionId, ok: number, fetchedAt: number, nowM
   return nowMs - fetchedAt > maxAge;
 }
 
-async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag: string } | null> {
+async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag?: string } | null> {
   const rows = await listSnapshots(db);
   const byKey = new Map(rows.map(r => [r.key, r]));
   const sections: MarketSection[] = [];
@@ -236,17 +258,19 @@ async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ bod
 
   if (sections.length === 0) return null;
 
-  const payload: MarketsResponse = { generatedAt: nowMs, sections, sectors };
+  // generatedAt = newest source fetchedAt: content-derived, so the exact body
+  // (and its ETag) is stable across cache misses while no section updates.
+  const generatedAt = sections.reduce((m, s) => Math.max(m, s.fetchedAt), 0);
+  const payload: MarketsResponse = { generatedAt, sections, sectors };
   const body = JSON.stringify(payload);
-  const etag = `"${await sha1Hex(body)}"`;
-  return { body, etag };
+  return { body, etag: await bodyEtag(body) };
 }
 
 async function handleCachedJson(
   request: Request,
   ctx: ExecutionContext,
   cacheControl: string,
-  loader: () => Promise<{ body: string; etag: string } | null>,
+  loader: () => Promise<{ body: string; etag?: string } | null>,
 ): Promise<Response> {
   const cache = caches.default;
   const cacheKey = new Request(request.url, { method: 'GET' });
@@ -270,12 +294,14 @@ async function handleCachedJson(
     });
   }
 
-  if (etagMatches(ifNoneMatch, loaded.etag)) {
-    return notModified(loaded.etag, cacheControl);
+  const etag = loaded.etag ?? (await bodyEtag(loaded.body));
+
+  if (etagMatches(ifNoneMatch, etag)) {
+    return notModified(etag, cacheControl);
   }
 
   const res = jsonResponse(loaded.body, 200, {
-    ETag: loaded.etag,
+    ETag: etag,
     'Cache-Control': cacheControl,
   });
   ctx.waitUntil(cache.put(cacheKey, res.clone()));
@@ -346,8 +372,7 @@ export default {
             sort: sortParam,
           });
           const body = JSON.stringify(feed);
-          const etag = `"${await sha1Hex(body)}"`;
-          return { body, etag };
+          return { body };
         }),
       );
     }
@@ -355,11 +380,9 @@ export default {
     if (url.pathname === '/sources.json') {
       return stripBodyIfHead(
         await handleCachedJson(request, ctx, cacheControl, async () => {
-          await syncSources(env.DB, SEED_SOURCES);
           const list = await querySourcesHealth(env.DB);
           const body = JSON.stringify(list);
-          const etag = `"${await sha1Hex(body)}"`;
-          return { body, etag };
+          return { body };
         }),
       );
     }
@@ -369,8 +392,7 @@ export default {
         await handleCachedJson(request, ctx, cacheControl, async () => {
           const list = await getTopCandidates(env.DB, 50);
           const body = JSON.stringify(list);
-          const etag = `"${await sha1Hex(body)}"`;
-          return { body, etag };
+          return { body };
         }),
       );
     }
