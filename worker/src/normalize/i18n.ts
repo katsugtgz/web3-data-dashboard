@@ -109,6 +109,10 @@ export function stripOrTranslateCjk(raw: string): string {
       .replace(/\p{Script=Hiragana}+/gu, '')
       .replace(/\p{Script=Katakana}+/gu, '')
       .replace(/\p{Script=Hangul}+/gu, '')
+      // Leftover CJK punctuation/whitespace-only remains (已结束。 → '。')
+      // are not a usable label.
+      .replace(/^[\s\u3000-\u303F\uFF01-\uFF20]+/u, '')
+      .replace(/[\s\u3000-\u303F\uFF01-\uFF20]+$/u, '')
       .replace(/\s+/g, ' ')
       .trim();
     if (stripped) return stripped;

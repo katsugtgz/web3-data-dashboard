@@ -86,8 +86,9 @@ export async function recordCandidates(
            last_seen = excluded.last_seen,
            from_sources = (
              SELECT json_group_array(DISTINCT value)
-             FROM (SELECT value FROM json_each(source_candidates.from_sources)
-                   UNION SELECT value FROM json_each(excluded.from_sources))
+             FROM (SELECT DISTINCT value FROM json_each(source_candidates.from_sources)
+                   UNION SELECT DISTINCT value FROM json_each(excluded.from_sources)
+                   ORDER BY value)
            )`,
       )
       .bind(h, nowMs, fromSourceId),

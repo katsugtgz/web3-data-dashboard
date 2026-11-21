@@ -151,9 +151,9 @@ export async function syncSources(db: D1Database, sources: SourceConfig[] = SEED
     stmts.push(db.prepare('UPDATE sources SET enabled = 0 WHERE id = ?1 AND enabled IS NOT 0').bind(storedId));
   }
 
-  // D1 caps a batch at ~100 bound parameters: 6 per upsert, 4 per update →
-  // chunks of 16. Chunks write disjoint rows and are order-independent, so
-  // they run in parallel.
+  // D1 caps a batch at ~100 bound parameters: 7 per upsert, 5 per update →
+  // chunks of 16 stay under the cap. Chunks write disjoint rows and are
+  // order-independent, so they run in parallel.
   await Promise.all(
     Array.from({ length: Math.ceil(stmts.length / 16) }, (_, i) =>
       db.batch(stmts.slice(i * 16, (i + 1) * 16)),

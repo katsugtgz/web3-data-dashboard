@@ -384,12 +384,10 @@ export default {
           const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
           const sortParam = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
           const { allKnownDomains } = await loadKnownDomains(env.DB);
-          // Non-numeric limit=abc would bind NaN into LIMIT and fail the query;
-          // parseInt-or-default mirrors parseNonNegativeInt's env handling.
-          const limit = Number.parseInt(limitParam ?? '', 10);
+          // queryFeed clamps non-finite limits to the default itself.
           const feed = await queryFeed(env.DB, allKnownDomains, {
             since: sinceParam ? Number(sinceParam) || 0 : 0,
-            limit: Number.isFinite(limit) ? limit : 100,
+            limit: limitParam ? Number(limitParam) : 100,
             risk: riskParam,
             sort: sortParam,
           });

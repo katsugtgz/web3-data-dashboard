@@ -57,7 +57,7 @@ jobs:
           # treats ANY nonzero exit as "no match" — a ripgrep failure passed
           # silently. Fail on anything but 0/1, matching check-no-cjk.sh.
           set +e
-          rg --pcre2 '\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}' dist/
+          rg --pcre2 '\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{FF01}-\x{FF60}]' dist/
           STATUS=$?
           set -e
           if [ "$STATUS" -eq 0 ]; then

@@ -15,8 +15,10 @@ async function loadCandidates(): Promise<CandidateSource[]> {
     return JSON.parse(await readFile(inputPath, 'utf8')) as CandidateSource[];
   }
   if (!apiBase) {
+    if (dryRun) return [];
     // An empty candidate list published to the issue reads as "nothing
     // qualified"; a missing config must fail the run instead of wiping it.
+    // Local --dry-run previews without a worker stay possible.
     throw new Error('VITE_API_BASE / WORKER_URL is not set — refusing to publish an empty candidates issue');
   }
   const res = await fetch(`${apiBase}/sources/candidates.json`, {

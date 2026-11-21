@@ -11,8 +11,12 @@ export function fmtUsd(amount: number): string {
   if (amount >= 1) return `$${amount.toFixed(2)}`;
   if (amount >= 0.01) return `$${amount.toFixed(4)}`;
   // toPrecision(3) emits exponential notation below 1e-6 ($8.9e-8): fixed
-  // decimals keep the cell ASCII-parseable for the sort contract.
-  return `$${amount.toFixed(Math.min(12, 2 + Math.ceil(-Math.log10(amount))))}`;
+  // decimals keep the cell ASCII-parseable for the sort contract. Below
+  // 5e-13 two significant digits are unrepresentable in 12 decimals —
+  // collapse to the em dash rather than printing a false zero.
+  const decimals = Math.min(12, 2 + Math.ceil(-Math.log10(amount)));
+  if (decimals >= 12 && amount < 5e-13) return '—';
+  return `$${amount.toFixed(decimals)}`;
 }
 
 export function fmtPrice(price: number): string {
