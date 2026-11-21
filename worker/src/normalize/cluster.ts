@@ -270,7 +270,20 @@ export async function ingestPostIntoCluster(
              WHEN clusters.risk_level = 'warn' OR ?9 = 'warn' THEN 'warn'
              ELSE 'ok'
            END,
-           score = ?11, source_count = MAX(clusters.source_count, ?12),
+           -- The racing writer computed ?11 from its stale (pre-escalation)
+           -- risk view. If the MERGED level is risk, the penalty must apply:
+           -- take the smaller (penalized) score; a legitimately higher score
+           -- from a risk-free concurrent path still wins via MAX semantics.
+           score = CASE
+             WHEN CASE
+                    WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
+                    WHEN clusters.risk_level = 'warn' OR ?9 = 'warn' THEN 'warn'
+                    ELSE 'ok'
+                  END = 'risk'
+             THEN MIN(clusters.score, ?11)
+             ELSE MAX(clusters.score, ?11)
+           END,
+           source_count = MAX(clusters.source_count, ?12),
            surf_tier = COALESCE(?13, clusters.surf_tier), surf_rank = COALESCE(?14, clusters.surf_rank),
            first_seen = MIN(clusters.first_seen, ?15), last_seen = MAX(clusters.last_seen, ?16),
            project = ?2, ticker = COALESCE(?3, clusters.ticker), domain = COALESCE(?4, clusters.domain)

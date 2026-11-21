@@ -100,10 +100,19 @@ export function stripOrTranslateCjk(raw: string): string {
     // Keep the Latin remainder of mixed-script names instead of dropping the
     // whole value: callers fall back to the raw CJK string when this returns
     // '', which defeats the zero-CJK contract.
-    const latin = trimmed.replace(/\p{Script=Han}+/gu, '').replace(/\s+/g, ' ').trim();
-    if (latin) return latin;
-    // Fully non-Latin and unmapped: ASCII placeholder, never the raw input.
-    return 'Unknown';
+    // Strip Han first (negation/timing chars make Latin-remainder unsafe to
+    // trust alone), then any remaining CJK scripts (Kana, Hangul). If nothing
+    // ASCII-safe remains, return '' so CALLERS apply their own fallbacks
+    // ('Unknown project', '—') instead of a hardcoded global placeholder.
+    const stripped = trimmed
+      .replace(/\p{Script=Han}+/gu, '')
+      .replace(/\p{Script=Hiragana}+/gu, '')
+      .replace(/\p{Script=Katakana}+/gu, '')
+      .replace(/\p{Script=Hangul}+/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (stripped) return stripped;
+    return '';
   }
   return trimmed;
 }

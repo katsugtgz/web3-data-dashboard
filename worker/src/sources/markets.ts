@@ -408,7 +408,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
       return {
         // id must stay zero-CJK too: the p.name fallback can carry Han
         // (slug/id absent on some payloads) and then leaks into snapshots.
-        id: p.slug ?? (p.id != null ? String(p.id) : stripOrTranslateCjk(p.name ?? '') || 'protocol'),
+        id: p.slug ?? (p.id != null ? String(p.id) : stripOrTranslateCjk(p.name ?? '') || `protocol-${Array.from(p.name ?? '').reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(36)}`),
         cells: [
           stripOrTranslateCjk(p.name ?? '') || 'Protocol',
           stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',
@@ -470,7 +470,7 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
       // DefiLlama's stable pool UUID; distinct pools of one protocol get
       // distinct ids. Fallback is a lossy slug only when the upstream omits
       // `pool` (should not happen on current API).
-      id: p.pool ?? `${(p.project ?? 'multi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${p.symbol ?? ''}`,
+      id: p.pool ?? `${(p.project ?? 'multi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${stripOrTranslateCjk(p.symbol ?? '') || 'pool'}`,
       cells: [
         stripOrTranslateCjk(p.symbol ?? '') || 'Pool',
         stripOrTranslateCjk(p.project ?? '') || 'Protocol',

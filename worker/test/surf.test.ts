@@ -31,9 +31,9 @@ describe('surf normalizer + i18n', () => {
     const warnings: unknown[] = [];
     console.warn = (...args: unknown[]) => warnings.push(args);
     try {
-      // Unmapped pure-CJK now yields a safe ASCII placeholder (zero-CJK
-      // contract); mixed names keep their Latin remainder.
-      expect(stripOrTranslateCjk('未知中文字符串')).toBe('Unknown');
+      // Unmapped pure-CJK yields '' so the CALLER's fallback applies
+      // (surf.ts: 'Unknown project'); mixed names keep their Latin remainder.
+      expect(stripOrTranslateCjk('未知中文字符串')).toBe('');
       expect(stripOrTranslateCjk('KiteAI 铭文')).toBe('KiteAI');
       expect(warnings.length).toBe(2);
     } finally {
