@@ -11,10 +11,12 @@ export function sortVal(s: string): number | null {
     M: 1e6,
     B: 1e9,
     T: 1e12,
-    '\u4e07': 1e4,
-    '\u4ebf': 1e8,
   };
-  const value = parseFloat(m[1]) * mult[m[2].toUpperCase()];
+  // Numeric checks keep the minifier from emitting literal Han object keys.
+  const suffix = m[2].toUpperCase();
+  const code = suffix.charCodeAt(0);
+  const multiplier = code === 0x4e07 ? 1e4 : code === 0x4ebf ? 1e8 : mult[suffix];
+  const value = parseFloat(m[1]) * multiplier;
   return /▼/.test(s) ? -Math.abs(value) : value;
 }
 
