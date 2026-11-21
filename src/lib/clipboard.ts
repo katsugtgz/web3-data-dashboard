@@ -15,10 +15,12 @@ export async function copyText(text: string): Promise<boolean> {
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
+    try {
+      ta.select();
+      return document.execCommand('copy');
+    } finally {
+      ta.remove();
+    }
   } catch {
     return false;
   }
@@ -33,5 +35,7 @@ export function downloadMarkdown(filename: string, content: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Defer the revoke: browsers may not have started the download when
+  // click() returns, and an immediate revoke can abort it.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
