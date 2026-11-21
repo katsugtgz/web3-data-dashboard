@@ -1,0 +1,72 @@
+.github/workflows/discover-sources.yml
+  h_cc1f32aec57e6b 1-29
+README.md
+  h_cc1f32aec57e6b 3,7-14,17-22,33-34,45,56
+data/snapshot/airdrops.json
+  h_cc1f32aec57e6b 1
+data/snapshot/feed.json
+  h_cc1f32aec57e6b 1
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+data/snapshot/sources.json
+  h_cc1f32aec57e6b 1
+scripts/discover-sources-issue.mts
+  h_cc1f32aec57e6b 1-107
+src/App.tsx
+  h_cc1f32aec57e6b 191-192,236
+src/components/DashboardPanels.tsx
+  h_cc1f32aec57e6b 61
+src/components/DropsFilterDock.tsx
+  h_cc1f32aec57e6b 111
+src/components/DropsPanel.tsx
+  h_cc1f32aec57e6b 13,21-82,88,101,103,128-134
+src/components/FeedCard.tsx
+  h_cc1f32aec57e6b 36-41
+src/components/SourcesHealthPopover.tsx
+  h_cc1f32aec57e6b 16-17,34
+src/hooks/useFeed.ts
+  h_cc1f32aec57e6b 3,17-22,24-25,27-28,35-39,57,62,80-81,108
+src/lib/api.ts
+  h_cc1f32aec57e6b 10
+src/main.tsx
+  h_cc1f32aec57e6b 6-20
+src/styles.css
+  h_cc1f32aec57e6b 2237-2250
+worker/migrations/0003_p4.sql
+  h_cc1f32aec57e6b 1-15
+worker/schema.sql
+  h_cc1f32aec57e6b 21-23,65-77
+worker/sources.json
+  h_cc1f32aec57e6b 54-64
+worker/src/index.ts
+  h_cc1f32aec57e6b 18,20,22,33,37,39-40,59-62,131-166,171-172,198-203,367-377
+worker/src/normalize/cluster.ts
+  h_cc1f32aec57e6b 82-84,298-300
+worker/src/normalize/summarize.ts
+  h_cc1f32aec57e6b 1-160
+worker/src/sources/discover.ts
+  h_cc1f32aec57e6b 1-114
+worker/src/sources/x.ts
+  h_cc1f32aec57e6b 1-296
+worker/test/discover.test.ts
+  h_cc1f32aec57e6b 1-81
+worker/test/sources.test.ts
+  h_cc1f32aec57e6b 8,10-15
+worker/test/summarize.test.ts
+  h_cc1f32aec57e6b 1-145
+worker/test/x.test.ts
+  h_cc1f32aec57e6b 1-101
+worker/wrangler.toml
+  h_cc1f32aec57e6b 7-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0966129301ef37c32d6a196b6ff17e1bc7e5a152",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
