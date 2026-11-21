@@ -23,17 +23,17 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
             ticker = m[2];
           }
         }
-        return { ...it, name, ticker, statusLabel: st.label, claimable: st.claimable };
+        return { ...it, name, ticker, statusLabel: st.label, statusKind: st.kind, claimable: st.claimable };
       }),
     [items],
   );
 
-  const claimableCount = useMemo(() => normalized.filter(i => i.claimable).length, [normalized]);
-  const verifyCount = normalized.length - claimableCount;
+  const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
+  const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
 
   const visible = useMemo(() => {
-    if (filter === 'claimable') return normalized.filter(i => i.claimable);
-    if (filter === 'verify') return normalized.filter(i => !i.claimable);
+    if (filter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
+    if (filter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
     return normalized;
   }, [normalized, filter]);
 
@@ -105,9 +105,9 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
                 href={it.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label={`Open ${it.name} TGE page (opens in a new tab)`}
+                aria-label={`Open ${it.name} link (opens in a new tab)`}
               >
-                Open claim ↗
+                Open link ↗
               </a>
             )}
           </article>

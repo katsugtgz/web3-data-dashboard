@@ -11,19 +11,40 @@ export const BADGE_LABEL: Record<Badge, string> = {
 
 export const GRADE_ORDER: Grade[] = ['S', 'A', 'B', 'C'];
 
-export const TGE_STATUS_MAP: Record<string, { label: string; claimable: boolean }> = {
-  REWARD_AVAILABLE: { label: 'Claimable', claimable: true },
-  VERIFICATION: { label: 'Eligibility check', claimable: false },
-  '可领取 TGE': { label: 'Claimable TGE', claimable: true },
-  可领取: { label: 'Claimable', claimable: true },
-  资格核验: { label: 'Eligibility check', claimable: false },
-  Claimable: { label: 'Claimable', claimable: true },
+export type TgeStatusKind = 'claimable' | 'verify' | 'other';
+
+export interface TgeStatusInfo {
+  label: string;
+  kind: TgeStatusKind;
+  claimable: boolean;
+}
+
+export const TGE_STATUS_MAP: Record<string, TgeStatusInfo> = {
+  REWARD_AVAILABLE: { label: 'Claimable', kind: 'claimable', claimable: true },
+  VERIFICATION: { label: 'Eligibility check', kind: 'verify', claimable: false },
+  '可领取 TGE': { label: 'Claimable TGE', kind: 'claimable', claimable: true },
+  可领取: { label: 'Claimable', kind: 'claimable', claimable: true },
+  资格核验: { label: 'Eligibility check', kind: 'verify', claimable: false },
+  Claimable: { label: 'Claimable', kind: 'claimable', claimable: true },
+  'Eligibility check': { label: 'Eligibility check', kind: 'verify', claimable: false },
 };
 
-export function formatTgeStatus(raw: string): { label: string; claimable: boolean } {
-  const mapped = TGE_STATUS_MAP[raw.trim()];
-  if (mapped) return mapped;
-  return { label: raw || 'Upcoming', claimable: /claim|可领取/i.test(raw) };
+const NEGATED_CLAIM_RE =
+  /\b(?:unclaimable|not\s+claimable|non[- ]?claimable|cannot\s+claim|can't\s+claim|claim\s+(?:closed|ended))\b|不可领取|无法领取/i;
+const POSITIVE_CLAIM_RE = /\bclaim(?:able)?\b|可领取/i;
+const VERIFY_RE = /\b(?:verif(?:y|ication)|eligib(?:le|ility)|check)\b|核验|资格/i;
+
+export function formatTgeStatus(raw: string): TgeStatusInfo {
+  const trimmed = raw.trim();
+  if (!trimmed) return { label: 'Upcoming', kind: 'other', claimable: false };
+  if (Object.hasOwn(TGE_STATUS_MAP, trimmed)) return TGE_STATUS_MAP[trimmed];
+  if (!NEGATED_CLAIM_RE.test(trimmed) && POSITIVE_CLAIM_RE.test(trimmed)) {
+    return { label: trimmed, kind: 'claimable', claimable: true };
+  }
+  if (VERIFY_RE.test(trimmed)) {
+    return { label: trimmed, kind: 'verify', claimable: false };
+  }
+  return { label: trimmed, kind: 'other', claimable: false };
 }
 
 export const DEMO_COL_LABELS: Record<string, string> = {
@@ -67,5 +88,5 @@ export const DEMO_COL_LABELS: Record<string, string> = {
 };
 
 export function translateColumn(col: string): string {
-  return DEMO_COL_LABELS[col] ?? col;
+  return Object.hasOwn(DEMO_COL_LABELS, col) ? DEMO_COL_LABELS[col] : col;
 }

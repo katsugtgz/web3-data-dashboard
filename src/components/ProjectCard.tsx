@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import type { Badge, Card, Dashboard } from '../../shared/types';
-import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { taskStorageKey } from '../hooks/useWatchlist';
+import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
 
 const BADGE_CLASS: Partial<Record<Badge, string>> = {
   live: 'badge badge-live',
@@ -53,12 +52,10 @@ export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSav
   const cost = c.best.c !== 'Free' ? `${c.best.c}${mins}` : `Free${mins}`;
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
-  const totalTasks = c.tasks?.length ?? 1;
-  const doneCount = c.tasks
-    ? c.tasks.filter((t, i) => doneTasks.has(taskStorageKey(c.n, t.title, t.type, i))).length
-    : doneTasks.has(taskStorageKey(c.n, c.best.n, c.best.ty, 0))
-      ? 1
-      : 0;
+  const tasks = getCardTasks(c);
+  const taskKeys = getTaskStorageKeys(c.n, tasks);
+  const totalTasks = tasks.length;
+  const doneCount = taskKeys.filter(k => doneTasks.has(k)).length;
 
   return (
     <article className={`cardx${saved ? ' is-saved' : ''}`}>
@@ -94,8 +91,8 @@ export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSav
             type="button"
             className="iconbtn starbtn"
             aria-pressed={saved}
-            aria-label={saved ? `Remove ${c.n} from watchlist` : `Save ${c.n} to watchlist`}
-            title={saved ? 'Saved in watchlist' : 'Save to watchlist'}
+            aria-label={`Save ${c.n} to watchlist`}
+            title="Save to watchlist"
             onClick={() => onToggleSaved(c.n)}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -196,12 +193,15 @@ export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSav
             {c.sc}
             <span className="score-max">/100</span>
           </b>
-          <span
-            className="subs"
-            aria-label={`Sub-scores: launch ${c.sub[0]} of 10, value ${c.sub[1]} of 10, heat ${orDash(c.sub[2])} of 10`}
-          >
-            L {c.sub[0]} · V {c.sub[1]}
-            {c.sub[2] != null ? ` · H ${c.sub[2]}` : ''}
+          <span className="subs">
+            <span aria-hidden="true">
+              L {c.sub[0]} · V {c.sub[1]}
+              {c.sub[2] != null ? ` · H ${c.sub[2]}` : ''}
+            </span>
+            <span className="sr">
+              Sub-scores: launch {c.sub[0]} of 10, value {c.sub[1]} of 10
+              {c.sub[2] != null ? `, heat ${c.sub[2]} of 10` : ''}
+            </span>
           </span>
         </div>
       </div>

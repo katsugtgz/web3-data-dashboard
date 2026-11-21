@@ -13,7 +13,7 @@ An English, accessible clone of an 18-section Web3 data dashboard — live airdr
 - **17 snapshot data sections** — searchable, sortable, sticky-header tables with English column labels, auto-linked URLs, and semantic gain/loss indicators
 - **Dual Light / Dark theme** — follows OS `prefers-color-scheme` by default with `<meta name="color-scheme">` FOUC prevention and header toggle
 - **URL hash navigation** — deep-link directly to any section (`#airdrops`, `#predictions`, `#defi`, etc.)
-- **Local Bun API server** — serves the dashboard snapshot, per-section JSON (with UTF-8 URI decoding), and `/api/health`
+- **Local Bun API server** — serves the dashboard snapshot, per-section JSON, and `/api/health`
 
 ## Tech stack
 

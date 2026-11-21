@@ -66,11 +66,18 @@ export function hostnameLabel(url: string): string {
   }
 }
 
+export function parseMinutes(m: string): number | null {
+  const match = m.trim().match(/^(\d+)\s*min$/i);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export function formatRaiseShort(amount: number): string {
   if (!Number.isFinite(amount) || amount <= 0) return '—';
-  if (amount >= 1e9) return `$${(amount / 1e9).toFixed(2)}B`;
-  if (amount >= 1e6) return `$${(amount / 1e6).toFixed(2)}M`;
-  if (amount >= 1e3) return `$${(amount / 1e3).toFixed(0)}K`;
+  if (amount >= 999_995_000) return `$${(amount / 1e9).toFixed(2)}B`;
+  if (amount >= 999_500) return `$${(amount / 1e6).toFixed(2)}M`;
+  if (amount >= 999.5) return `$${(amount / 1e3).toFixed(0)}K`;
   return `$${amount.toFixed(0)}`;
 }
 

@@ -196,7 +196,7 @@ function mapProject(p: UpstreamProject, rank: number): Card {
 }
 
 function mapTge(p: UpstreamProject): Tge {
-  const dateTs = safeNum(p.reward_date, 0) || safeNum(p.last_status_update, 0);
+  const dateTs = safeNum(p.reward_date, 0);
   const raise = safeNum(p.total_raise, 0);
   return {
     n: p.project_name,

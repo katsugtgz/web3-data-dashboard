@@ -16,9 +16,9 @@ type SortKey = 'rank' | 'funding' | 'heat' | 'updated' | 'cost';
 
 const PAGE_STEP = 24;
 
-function readHashTab(tabs: Dashboard['TABS']): string {
+function findHashTab(tabs: Dashboard['TABS']): string | null {
   const raw = window.location.hash.replace(/^#/, '');
-  return tabs.some(t => t.id === raw) ? raw : tabs[0].id;
+  return tabs.some(t => t.id === raw) ? raw : null;
 }
 
 export default function App() {
@@ -51,10 +51,10 @@ function DashboardView({ data }: { data: Dashboard }) {
   const theme = useTheme();
 
   const cards = feed?.cards ?? data.CARDS;
-  const tgeItems = feed?.tge.length ? feed.tge : data.TGE;
+  const tgeItems = feed ? feed.tge : data.TGE;
   const isLive = feed !== null;
 
-  const [tab, setTab] = useState<string>(() => readHashTab(data.TABS));
+  const [tab, setTab] = useState<string>(() => findHashTab(data.TABS) ?? data.TABS[0].id);
   const [status, setStatus] = useState<StatusFilter>('all');
   const [type, setType] = useState('All');
   const [chain, setChain] = useState('All');
@@ -88,7 +88,10 @@ function DashboardView({ data }: { data: Dashboard }) {
   }, []);
 
   useEffect(() => {
-    const onHash = () => setTab(readHashTab(data.TABS));
+    const onHash = () => {
+      const next = findHashTab(data.TABS);
+      if (next) setTab(next);
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, [data.TABS]);

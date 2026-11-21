@@ -41,7 +41,7 @@ export function useTheme() {
     mq.addEventListener('change', onChange);
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
+      if (e.key === STORAGE_KEY || e.key === null) {
         const next = readStored();
         setOverride(next);
         applyMeta(next);
@@ -56,7 +56,7 @@ export function useTheme() {
 
   const toggle = useCallback(() => {
     const currentSystem = getSystemScheme();
-    const currentRendered = readStored() ?? currentSystem;
+    const currentRendered = readStored() ?? override ?? currentSystem;
     const target: Scheme = currentRendered === 'dark' ? 'light' : 'dark';
     const nextOverride = target === currentSystem ? null : target;
     try {
@@ -67,7 +67,7 @@ export function useTheme() {
     }
     setOverride(nextOverride);
     applyMeta(nextOverride);
-  }, []);
+  }, [override]);
 
   return { resolved, isOverride: override !== null, toggle };
 }

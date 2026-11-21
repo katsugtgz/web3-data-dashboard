@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { Card, Dashboard } from '../../shared/types';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { taskStorageKey } from '../hooks/useWatchlist';
+import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
 import { Avatar, BadgeChip } from './ProjectCard';
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
-  onToggleTask: (projectName: string, taskTitle: string, taskType?: string, index?: number) => void;
+  onToggleTask: (taskKey: string) => void;
   onClose: () => void;
 }
 
@@ -39,37 +39,38 @@ export function DetailDialog({
   useEffect(() => {
     const dlg = ref.current;
     if (!dlg || 'closedBy' in HTMLDialogElement.prototype) return;
-    const onClick = (event: MouseEvent) => {
-      if (event.target !== dlg) return;
+    let mouseDownOnBackdrop = false;
+    const isOnBackdrop = (event: MouseEvent): boolean => {
+      if (event.target !== dlg) return false;
       const rect = dlg.getBoundingClientRect();
-      const inside =
+      return !(
         rect.top <= event.clientY &&
         event.clientY <= rect.top + rect.height &&
         rect.left <= event.clientX &&
-        event.clientX <= rect.left + rect.width;
-      if (!inside) dlg.close();
+        event.clientX <= rect.left + rect.width
+      );
     };
+    const onMouseDown = (event: MouseEvent) => {
+      mouseDownOnBackdrop = isOnBackdrop(event);
+    };
+    const onClick = (event: MouseEvent) => {
+      const shouldClose = mouseDownOnBackdrop && isOnBackdrop(event);
+      mouseDownOnBackdrop = false;
+      if (shouldClose) dlg.close();
+    };
+    dlg.addEventListener('mousedown', onMouseDown);
     dlg.addEventListener('click', onClick);
-    return () => dlg.removeEventListener('click', onClick);
+    return () => {
+      dlg.removeEventListener('mousedown', onMouseDown);
+      dlg.removeEventListener('click', onClick);
+    };
   }, []);
 
   const icon = card ? (card.img !== undefined ? (card.img ?? '') : (icons[String(card.r)] ?? '')) : '';
   const chains = card ? (card.chains?.length ? card.chains : card.chain ? [card.chain] : []) : [];
 
-  const taskList = card
-    ? card.tasks?.length
-      ? card.tasks
-      : [
-          {
-            title: card.best.n,
-            type: card.best.ty,
-            status: 'OPEN',
-            cost: card.costNum ?? 0,
-            timeMinutes: null,
-            url: card.url,
-          },
-        ]
-    : [];
+  const taskList = card ? getCardTasks(card) : [];
+  const taskKeys = card ? getTaskStorageKeys(card.n, taskList) : [];
 
   const rows: [string, string | number][] = card
     ? [
@@ -113,7 +114,7 @@ export function DetailDialog({
                 aria-pressed={saved}
                 onClick={() => onToggleSaved(card.n)}
               >
-                {saved ? '★ Saved' : '☆ Save'}
+                <span aria-hidden="true">{saved ? '★' : '☆'}</span> Save
               </button>
               <button
                 type="button"
@@ -176,10 +177,13 @@ export function DetailDialog({
             </div>
             <ul className="task-list">
               {taskList.map((t, i) => {
-                const key = taskStorageKey(card.n, t.title, t.type, i);
+                const key = taskKeys[i];
                 const checked = doneTasks.has(key);
-                const isClosed = t.status.toUpperCase() === 'CLOSED';
-                const costLabel = t.cost > 0 ? `$${t.cost}` : 'Free';
+                const normStatus = t.status.trim().toUpperCase();
+                const isClosed = normStatus === 'CLOSED';
+                const isOpen = normStatus === 'OPEN';
+                const showStatus = isOpen || isClosed;
+                const costLabel = t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
                 const timeLabel = t.timeMinutes ? ` · ${t.timeMinutes} min` : '';
                 return (
                   <li key={key} className={`task-item${checked ? ' is-done' : ''}${isClosed ? ' is-closed' : ''}`}>
@@ -187,14 +191,16 @@ export function DetailDialog({
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => onToggleTask(card.n, t.title, t.type, i)}
+                        onChange={() => onToggleTask(key)}
                       />
                       <span className="task-meta">
                         <span className="task-title">{t.title}</span>
                         <span className="task-sub">
-                          <span className={`task-status ${isClosed ? 'closed' : 'open'}`}>
-                            {isClosed ? 'Closed' : 'Open'}
-                          </span>
+                          {showStatus && (
+                            <span className={`task-status ${isClosed ? 'closed' : 'open'}`}>
+                              {isClosed ? 'Closed' : 'Open'}
+                            </span>
+                          )}
                           {t.type && <span className="typetip">{t.type}</span>}
                           <span className="mono">
                             {costLabel}

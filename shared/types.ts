@@ -29,6 +29,7 @@ export interface Card {
   tk: string;
   h: number;
   u: string;
+  /** Unix timestamp in seconds. */
   updatedTs?: number;
   fit: FitKey[];
   best: { n: string; ty: string; c: string; m: string };
@@ -79,6 +80,7 @@ export interface AirdropFeed {
   cards: Card[];
   tge: Tge[];
   counts: Counts;
+  /** Unix timestamp in milliseconds (Date.now()). */
   fetchedAt: number;
 }
 

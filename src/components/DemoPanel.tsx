@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import type { DemoSection } from '../../shared/types';
 import { cmpCells, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
 import { translateColumn } from '../lib/labels';
@@ -12,6 +12,7 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
   const [chain, setChain] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort>({ col: -1, dir: 1 });
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const searchId = useId();
   const captionId = useId();
 
@@ -38,13 +39,13 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
     const filtered = section.rows.filter(r => {
       if (chain !== 'All' && r.chain !== chain) return false;
       if (!q) return true;
-      return r.cells.some(cell => cell.toLowerCase().includes(q));
+      return visibleColIndices.some(i => (r.cells[i] ?? '').toLowerCase().includes(q));
     });
     if (sort.col < 0) return filtered;
     return filtered
       .slice()
       .sort((a, b) => sort.dir * cmpCells(a.cells[sort.col] ?? '', b.cells[sort.col] ?? ''));
-  }, [section.rows, chain, query, sort]);
+  }, [section.rows, chain, query, sort, visibleColIndices]);
 
   const toggleSort = (col: number) =>
     setSort(s => ({ col, dir: s.col === col ? (-s.dir as 1 | -1) : 1 }));
@@ -56,7 +57,7 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
           <div className="paneltitle">
             <h2 className="section">{label}</h2>
             <span className="badge badge-demo">Snapshot</span>
-            <span className="countchip mono">
+            <span className="countchip mono" role="status" aria-live="polite" aria-atomic="true">
               {rows.length} / {section.rows.length} rows
             </span>
           </div>
@@ -86,6 +87,7 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
             Filter {label}
           </label>
           <input
+            ref={searchInputRef}
             id={searchId}
             type="search"
             placeholder={`Search ${label.toLowerCase()}…`}
@@ -93,7 +95,14 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
             onChange={e => setQuery(e.target.value)}
           />
           {query && (
-            <button type="button" className="chip" onClick={() => setQuery('')}>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                setQuery('');
+                searchInputRef.current?.focus();
+              }}
+            >
               Clear
             </button>
           )}

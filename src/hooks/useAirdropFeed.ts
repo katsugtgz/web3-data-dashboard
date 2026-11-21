@@ -15,46 +15,54 @@ export function useAirdropFeed(): AirdropFeedState {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const ctrlRef = useRef<AbortController | null>(null);
+  const inFlightRef = useRef(false);
   const lastFetchedRef = useRef<number>(0);
 
-  const load = useCallback(() => {
+  const load = useCallback((mode: 'initial' | 'manual' | 'background' = 'manual') => {
+    if (mode === 'background' && inFlightRef.current) return;
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
-    setLoading(true);
+    inFlightRef.current = true;
+    if (mode !== 'background') setLoading(true);
     fetchAirdrops(ctrl.signal)
       .then(next => {
         if (ctrl.signal.aborted) return;
+        inFlightRef.current = false;
         lastFetchedRef.current = next.fetchedAt;
         setFeed(next);
         setFailed(false);
-        setLoading(false);
+        if (mode !== 'background') setLoading(false);
       })
       .catch(() => {
         if (ctrl.signal.aborted) return;
+        inFlightRef.current = false;
         setFailed(true);
-        setLoading(false);
+        if (mode !== 'background') setLoading(false);
       });
   }, []);
 
   useEffect(() => {
-    load();
+    load('initial');
     const id = setInterval(() => {
-      if (document.visibilityState === 'visible') load();
+      if (document.visibilityState === 'visible') load('background');
     }, POLL_MS);
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible' && Date.now() - lastFetchedRef.current >= POLL_MS) {
-        load();
+        load('background');
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       ctrlRef.current?.abort();
+      inFlightRef.current = false;
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [load]);
 
-  return { feed, loading, failed, refresh: load };
+  const refresh = useCallback(() => load('manual'), [load]);
+
+  return { feed, loading, failed, refresh };
 }

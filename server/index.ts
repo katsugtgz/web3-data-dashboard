@@ -41,11 +41,16 @@ async function serveStatic(pathname: string): Promise<Response> {
   const safePath = resolve(DIST, '.' + pathname);
   const file = pathname === '/' ? null : Bun.file(safePath);
   if (file && safePath.startsWith(DIST + sep) && (await file.exists())) {
+    const isHtml = file.type.startsWith('text/html') || safePath.toLowerCase().endsWith('.html');
     const immutable = pathname.startsWith('/assets/');
     return new Response(file, {
       headers: {
         ...BASE_HEADERS,
-        'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'public, max-age=300',
+        'cache-control': isHtml
+          ? 'no-cache'
+          : immutable
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=300',
       },
     });
   }
@@ -69,14 +74,8 @@ Bun.serve({
     '/api/cards': () => json(dashboard.CARDS),
     '/api/sections': async () => json(await listSections()),
     '/api/sections/:source/:name': async req => {
-      const { source } = req.params;
+      const { source, name } = req.params;
       if (!(source in SOURCES)) return notFound('Unknown source');
-      let name: string;
-      try {
-        name = decodeURIComponent(req.params.name);
-      } catch {
-        return notFound('Invalid section name');
-      }
       const listed = (await listSections()).some(s => s.source === source && s.name === name);
       if (!listed) return notFound('Unknown section');
       return new Response(Bun.file(join(SOURCES[source as Source], name)), {
