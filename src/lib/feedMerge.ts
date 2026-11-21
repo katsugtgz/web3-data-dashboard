@@ -2,6 +2,7 @@ import type { FeedItem } from '../../shared/types';
 
 /**
  * Decides what a background fetch result means for the pending queue.
+ * `knownIds` describes the displayed feed, not a previous background response.
  *
  * Returns the items to queue, or null when nothing should be queued:
  * - a background result with brand-new ids queues the FULL latest list while

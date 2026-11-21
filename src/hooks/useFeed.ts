@@ -72,7 +72,6 @@ export function useFeed(): FeedState {
             // and clear any stale queue: the newest fetch supersedes it.
             const queued = selectPending(res.body.items, known);
             setPendingItems(queued ?? []);
-            for (const it of res.body.items) known.add(it.id);
             setItems(prev => (prev.length === 0 ? prev : mergeVisibleUpdates(prev, res.body.items)));
           }
         }
