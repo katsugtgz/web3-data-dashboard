@@ -1,0 +1,20 @@
+worker/src/index.ts
+  h_cc1f32aec57e6b 63-72,78-89,168,236,261-264,266,273,297-300,304,375,385,395
+worker/src/normalize/cluster.ts
+  h_cc1f32aec57e6b 313-314,325-329,362-365,376,446-449,451
+worker/test/etag.test.ts
+  h_cc1f32aec57e6b 1-19
+worker/test/feed-determinism.test.ts
+  h_cc1f32aec57e6b 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39efa54cb9d9872d7b11a4051e14fc17a1e0e0a9",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
