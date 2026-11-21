@@ -32,7 +32,7 @@ export function useFeed(): FeedState {
   const [loading, setLoading] = useState(!initial);
   const [failed, setFailed] = useState(false);
 
-  const poll = createPollLifecycle();
+  const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
   const knownIdsRef = useRef<Set<string> | null>(null);
   if (knownIdsRef.current === null) {

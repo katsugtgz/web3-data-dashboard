@@ -19,7 +19,7 @@ export function useAirdropFeed(): AirdropFeedState {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
-  const poll = createPollLifecycle();
+  const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
 
   const fetchNow = useCallback((mode: PollMode) => {

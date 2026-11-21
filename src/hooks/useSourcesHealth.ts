@@ -9,7 +9,7 @@ export function useSourcesHealth() {
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const poll = createPollLifecycle();
+  const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
 
   const fetchNow = useCallback((mode: PollMode) => {
