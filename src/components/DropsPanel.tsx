@@ -10,6 +10,7 @@ interface Props {
   totalCount: number;
   pendingCount: number;
   generatedAt: number | null;
+  xUnavailable: boolean;
   loading: boolean;
   failed: boolean;
   searchRef: RefObject<HTMLInputElement | null>;
@@ -17,11 +18,74 @@ interface Props {
   onCopyBrief: (item: FeedItem) => void;
 }
 
+function DropsBody({
+  filters,
+  totalCount,
+  loading,
+  failed,
+  onCopyBrief,
+}: {
+  filters: DropsFiltersState;
+  totalCount: number;
+  loading: boolean;
+  failed: boolean;
+  onCopyBrief: (item: FeedItem) => void;
+}) {
+  if (loading && totalCount === 0) {
+    return (
+      <div className="loading-shell" role="status" aria-live="polite">
+        <div className="loading-bar" />
+        <p className="note">Loading live drops…</p>
+      </div>
+    );
+  }
+  if (failed && totalCount === 0) {
+    return (
+      <p className="empty" role="alert">
+        Unable to load live drops feed. Please refresh to retry.
+      </p>
+    );
+  }
+  if (filters.visible.length === 0) {
+    return (
+      <div className="empty" role="status">
+        <p>No drops match your current filters.</p>
+        {filters.hasAnyFilter && (
+          <button type="button" className="btn" style={{ marginTop: 10 }} onClick={filters.resetFilters}>
+            Reset filters
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid">
+        {filters.rendered.map(item => (
+          <FeedCard key={item.id} item={item} onCopyBrief={onCopyBrief} />
+        ))}
+      </div>
+      {filters.remaining > 0 && (
+        <div className="loadmore-bar">
+          <button type="button" className="btn btn-subtle" onClick={filters.showMore}>
+            Show {Math.min(DROPS_PAGE_STEP, filters.remaining)} more ({filters.remaining} left)
+          </button>
+          <button type="button" className="chip" onClick={filters.showAll}>
+            Show all {filters.visible.length}
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function DropsPanel({
   filters,
   totalCount,
   pendingCount,
   generatedAt,
+  xUnavailable,
   loading,
   failed,
   searchRef,
@@ -34,8 +98,9 @@ export function DropsPanel({
         <div>
           <h2 className="section">Live Drops Feed</h2>
           <p className="note">
-            Real-time deduplicated signals from public Telegram channels, safety-screened and translated to English
+            Real-time deduplicated signals from public Telegram channels &amp; best-effort X, safety-screened in English
             {generatedAt ? ` · updated ${formatRelativeTime(generatedAt)}` : ''}.
+            {xUnavailable && <span className="x-unavail"> · X unavailable (Telegram unaffected)</span>}
           </p>
         </div>
         {pendingCount > 0 && (
@@ -60,43 +125,13 @@ export function DropsPanel({
         )}
       </div>
 
-      {loading && totalCount === 0 ? (
-        <div className="loading-shell" role="status" aria-live="polite">
-          <div className="loading-bar" />
-          <p className="note">Loading live drops…</p>
-        </div>
-      ) : failed && totalCount === 0 ? (
-        <p className="empty" role="alert">
-          Unable to load live drops feed. Please refresh to retry.
-        </p>
-      ) : filters.visible.length > 0 ? (
-        <>
-          <div className="grid">
-            {filters.rendered.map(item => (
-              <FeedCard key={item.id} item={item} onCopyBrief={onCopyBrief} />
-            ))}
-          </div>
-          {filters.remaining > 0 && (
-            <div className="loadmore-bar">
-              <button type="button" className="btn btn-subtle" onClick={filters.showMore}>
-                Show {Math.min(DROPS_PAGE_STEP, filters.remaining)} more ({filters.remaining} left)
-              </button>
-              <button type="button" className="chip" onClick={filters.showAll}>
-                Show all {filters.visible.length}
-              </button>
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="empty" role="status">
-          <p>No drops match your current filters.</p>
-          {filters.hasAnyFilter && (
-            <button type="button" className="btn" style={{ marginTop: 10 }} onClick={filters.resetFilters}>
-              Reset filters
-            </button>
-          )}
-        </div>
-      )}
+      <DropsBody
+        filters={filters}
+        totalCount={totalCount}
+        loading={loading}
+        failed={failed}
+        onCopyBrief={onCopyBrief}
+      />
     </section>
   );
 }

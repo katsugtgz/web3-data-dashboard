@@ -108,7 +108,7 @@ export function DropsFilterDock({ filters, searchRef }: Props) {
       </div>
 
       {filters.chainOptions.length > 0 && (
-        <div className="chipline" role="group" aria-label="Filter by chain">
+        <div className="chipline chain-strip" role="group" aria-label="Filter by chain">
           <button
             type="button"
             className="chip"

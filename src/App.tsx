@@ -188,6 +188,8 @@ export default function App() {
     refreshSources();
   }, [drops, airdrops, refreshMarkets, refreshSources]);
 
+  const xSources = sources.filter(s => s.platform === 'x');
+  const xUnavailable = xSources.length > 0 && xSources.every(s => s.status === 'down');
   const mountedMarkets = (markets?.sections ?? []).filter(s => visitedTabs.has(s.id));
   const totalCount = tab === 'drops' ? drops.items.length : cards.length;
   const headerFetchedAt =
@@ -231,6 +233,7 @@ export default function App() {
           totalCount: drops.items.length,
           pendingCount: drops.pendingCount,
           generatedAt: drops.generatedAt,
+          xUnavailable,
           loading: drops.loading,
           failed: drops.failed,
           searchRef: dropsSearchRef,

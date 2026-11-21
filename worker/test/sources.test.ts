@@ -5,12 +5,14 @@ import { validateSources } from '../src/sources/registry';
 describe('worker/sources.json registry', () => {
   test('contains valid deduplicated user channels with proper flags', () => {
     const validated = validateSources(sourcesJson);
-    expect(validated.length).toBeGreaterThanOrEqual(53);
+    expect(validated.length).toBeGreaterThanOrEqual(63);
 
-    const enabled = validated.filter(s => s.enabled);
-    const disabled = validated.filter(s => !s.enabled);
-    expect(enabled.length).toBeGreaterThanOrEqual(51);
-    expect(disabled.map(d => d.handle).sort()).toEqual(['cubiexesports', 'sarjanacryptoairdrop']);
+    const enabledTg = validated.filter(s => s.platform === 'telegram' && s.enabled);
+    const disabledTg = validated.filter(s => s.platform === 'telegram' && !s.enabled);
+    const enabledX = validated.filter(s => s.platform === 'x' && s.enabled);
+    expect(enabledTg.length).toBeGreaterThanOrEqual(51);
+    expect(disabledTg.map(d => d.handle).sort()).toEqual(['cubiexesports', 'sarjanacryptoairdrop']);
+    expect(enabledX.length).toBe(10);
   });
 
   test('rejects invalid handles, duplicate entries, and out-of-range trust', () => {

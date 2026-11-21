@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS sources (
   last_ok_at INTEGER,
   last_polled_at INTEGER,
   status TEXT NOT NULL DEFAULT 'ok',
-  fail_count INTEGER NOT NULL DEFAULT 0
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  next_poll_at INTEGER,
+  first_fail_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -59,4 +61,17 @@ CREATE TABLE IF NOT EXISTS known_domains (
   domain TEXT PRIMARY KEY,
   project TEXT NOT NULL,
   origin TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day TEXT PRIMARY KEY,
+  calls INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS source_candidates (
+  handle TEXT PRIMARY KEY,
+  mentions INTEGER NOT NULL DEFAULT 1,
+  first_seen INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  from_sources TEXT NOT NULL DEFAULT '[]'
 );

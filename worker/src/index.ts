@@ -15,9 +15,11 @@ import {
   toHealthMap,
   upsertSnapshot,
 } from './lib/db';
-import { queryFeed, querySourcesHealth } from './normalize/cluster';
+import { queryFeed, querySourcesHealth, type IngestPostResult } from './normalize/cluster';
 import { decayClusterScores } from './normalize/score';
+import { summarizeClusterWithAi, type AiBindingLike } from './normalize/summarize';
 import { loadKnownDomains, seedKnownDomains } from './safety';
+import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
 import {
   fetchCryptoSection,
   fetchGithubSection,
@@ -28,10 +30,14 @@ import {
 import { SEED_SOURCES, syncSources } from './sources/registry';
 import { fetchSurfAirdrops } from './sources/surf';
 import { pollTelegramBatch, pruneOldPosts } from './sources/telegram';
+import { pollXBatch } from './sources/x';
 
 export interface Env {
   DB: D1Database;
+  AI?: AiBindingLike;
   TG_BATCH_SIZE?: string;
+  X_BATCH_SIZE?: string;
+  AI_DAILY_MAX?: string;
   SURF_AIRDROPS_URL?: string;
   POLYMARKET_URL?: string;
   COINGECKO_MARKETS_URL?: string;
@@ -49,6 +55,10 @@ const CORS_HEADERS: Record<string, string> = {
 const THIRTY_MIN_MS = 30 * 60_000;
 const FIVE_MIN_STALE_MS = 15 * 60_000;
 const THIRTY_MIN_STALE_MS = 90 * 60_000;
+
+const REGISTERED_TG_HANDLES = new Set(
+  SEED_SOURCES.filter(s => s.platform === 'telegram').map(s => s.handle.toLowerCase()),
+);
 
 interface CryptoSnapshotBody {
   section: MarketSection;
@@ -118,11 +128,48 @@ async function loadCachedSurfAndDefi(db: D1Database): Promise<{
   return { surf, defi };
 }
 
+async function postProcessIngest(env: Env, ingested: IngestPostResult[], nowMs: number): Promise<void> {
+  if (ingested.length === 0) return;
+
+  // 1. Source auto-discovery from forwards + t.me/<handle> links
+  const candidateJobs: Promise<void>[] = [];
+  for (const res of ingested) {
+    const selfHandle = res.sourceId.split(':')[1] ?? '';
+    const handles = extractCandidateHandles(res.forwardedFrom, res.parsed.urls, selfHandle, REGISTERED_TG_HANDLES);
+    if (handles.length > 0) {
+      candidateJobs.push(recordCandidates(env.DB, handles, res.sourceId, nowMs));
+    }
+  }
+  await Promise.all(candidateJobs);
+
+  // 2. Workers AI summaries for eligible new / non-English non-RISK clusters (bounded per tick)
+  const dailyMax = Math.max(0, Number.parseInt(env.AI_DAILY_MAX ?? '300', 10) || 300);
+  const eligible = ingested
+    .filter(r => r.riskLevel !== 'risk' && (r.isNewCluster || r.isNonLatinSource))
+    .slice(0, 6);
+
+  await Promise.all(
+    eligible.map(r =>
+      summarizeClusterWithAi(env.AI, env.DB, {
+        clusterId: r.clusterId,
+        project: r.parsed.project,
+        rawTexts: [r.rawText],
+        isNewCluster: r.isNewCluster,
+        isNonLatinSource: r.isNonLatinSource,
+        riskLevel: r.riskLevel,
+        dailyMax,
+        nowMs,
+      }),
+    ),
+  );
+}
+
 async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
   await syncSources(env.DB, SEED_SOURCES);
   const { surf } = await loadCachedSurfAndDefi(env.DB);
   const batchSize = Math.max(1, Number.parseInt(env.TG_BATCH_SIZE ?? '4', 10) || 4);
-  await pollTelegramBatch(env.DB, batchSize, nowMs, surf);
+  const summary = await pollTelegramBatch(env.DB, batchSize, nowMs, surf);
+  await postProcessIngest(env, summary.ingestedResults, nowMs);
 }
 
 async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
@@ -148,6 +195,12 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
 
   const { surf, defi } = await loadCachedSurfAndDefi(env.DB);
   await seedKnownDomains(env.DB, surf, defi);
+
+  // Best-effort X polling (never throws unhandled errors)
+  const xBatch = Math.max(1, Number.parseInt(env.X_BATCH_SIZE ?? '3', 10) || 3);
+  const xSummary = await pollXBatch(env.DB, xBatch, nowMs, surf);
+  await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+
   await pruneOldPosts(env.DB, nowMs);
   await decayClusterScores(env.DB, nowMs);
 }
@@ -304,6 +357,17 @@ export default {
         await handleCachedJson(request, ctx, cacheControl, async () => {
           await syncSources(env.DB, SEED_SOURCES);
           const list = await querySourcesHealth(env.DB);
+          const body = JSON.stringify(list);
+          const etag = `"${await sha1Hex(body)}"`;
+          return { body, etag };
+        }),
+      );
+    }
+
+    if (url.pathname === '/sources/candidates.json') {
+      return stripBodyIfHead(
+        await handleCachedJson(request, ctx, cacheControl, async () => {
+          const list = await getTopCandidates(env.DB, 50);
           const body = JSON.stringify(list);
           const etag = `"${await sha1Hex(body)}"`;
           return { body, etag };

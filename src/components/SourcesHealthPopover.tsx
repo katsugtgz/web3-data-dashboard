@@ -13,6 +13,8 @@ export function SourcesHealthPopover({ sources, loading }: Props) {
   const okCount = sources.filter(s => s.status === 'ok').length;
   const degradedCount = sources.filter(s => s.status === 'degraded').length;
   const downCount = sources.filter(s => s.status === 'down').length;
+  const tgCount = sources.filter(s => s.platform === 'telegram').length;
+  const xCount = sources.filter(s => s.platform === 'x').length;
 
   return (
     <div className="sources-health">
@@ -29,7 +31,7 @@ export function SourcesHealthPopover({ sources, loading }: Props) {
         <div className="sources-popover" role="region" aria-label="Configured feed sources health">
           <div className="sources-popover-head">
             <strong>
-              {okCount} ok · {degradedCount} degraded · {downCount} down
+              TG {tgCount} · X {xCount} — {okCount} ok · {degradedCount} degraded · {downCount} down
             </strong>
             <button type="button" className="link-btn" onClick={() => setOpen(false)}>
               Close

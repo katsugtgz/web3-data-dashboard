@@ -7,6 +7,7 @@ export type JsonFetchResult<T> =
 declare global {
   interface Window {
     __RADAR_PREFETCH__?: Record<string, Promise<unknown> | undefined>;
+    __RADAR_PREFETCH_RESOLVED__?: Record<string, unknown>;
   }
 }
 

@@ -58,6 +58,7 @@ interface MainContentProps {
     totalCount: number;
     pendingCount: number;
     generatedAt: number | null;
+    xUnavailable: boolean;
     loading: boolean;
     failed: boolean;
     searchRef: RefObject<HTMLInputElement | null>;

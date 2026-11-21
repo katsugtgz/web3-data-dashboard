@@ -79,6 +79,9 @@ export interface IngestPostInput {
 
 export interface IngestPostResult {
   clusterId: string;
+  sourceId: string;
+  rawText: string;
+  forwardedFrom: string | null;
   isNewCluster: boolean;
   isNonLatinSource: boolean;
   riskLevel: RiskLevel;
@@ -292,6 +295,9 @@ export async function ingestPostIntoCluster(
 
   return {
     clusterId,
+    sourceId: input.sourceId,
+    rawText: input.text,
+    forwardedFrom: input.forwardedFrom ?? null,
     isNewCluster: !existing && (insertPost.meta?.changes ?? 1) > 0,
     isNonLatinSource: parsed.isNonLatinSource,
     riskLevel: mergedRisk,

@@ -2234,6 +2234,20 @@ footer {
   }
 }
 
+.ai-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.x-unavail {
+  font-style: italic;
+}
+
 footer a {
   text-decoration: underline;
   text-underline-offset: 2px;

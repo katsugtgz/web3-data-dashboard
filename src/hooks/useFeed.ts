@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedResponse } from '../../shared/types';
-import { getJson } from '../lib/api';
+import { API_BASE, getJson } from '../lib/api';
 
 const FEED_POLL_MS = 30_000;
 
@@ -14,18 +14,29 @@ export interface FeedState {
   refresh: () => void;
 }
 
+function getInitialFeed(): FeedResponse | null {
+  if (API_BASE || typeof window === 'undefined') return null;
+  const cached = window.__RADAR_PREFETCH_RESOLVED__?.feed as FeedResponse | undefined;
+  return cached ?? null;
+}
+
 export function useFeed(): FeedState {
-  const [items, setItems] = useState<FeedItem[]>([]);
+  const [initial] = useState<FeedResponse | null>(() => getInitialFeed());
+  const [items, setItems] = useState<FeedItem[]>(() => initial?.items ?? []);
   const [pendingItems, setPendingItems] = useState<FeedItem[]>([]);
-  const [generatedAt, setGeneratedAt] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [generatedAt, setGeneratedAt] = useState<number | null>(() => initial?.generatedAt ?? null);
+  const [loading, setLoading] = useState(!initial);
   const [failed, setFailed] = useState(false);
 
   const ctrlRef = useRef<AbortController | null>(null);
   const etagRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
   const lastFetchedRef = useRef(0);
-  const knownIdsRef = useRef<Set<string>>(new Set());
+  const knownIdsRef = useRef<Set<string> | null>(null);
+  if (knownIdsRef.current === null) {
+    knownIdsRef.current = new Set(initial?.items.map(it => it.id) ?? []);
+  }
+  const hasInitialRef = useRef(Boolean(initial));
 
   const load = useCallback((mode: 'initial' | 'manual' | 'background' = 'manual') => {
     if (mode === 'background' && inFlightRef.current) return;
@@ -43,12 +54,12 @@ export function useFeed(): FeedState {
         if (res.status === 200) {
           etagRef.current = res.etag;
           setGeneratedAt(res.body.generatedAt);
-          if (mode !== 'background' || knownIdsRef.current.size === 0) {
+          if (mode !== 'background' || (knownIdsRef.current?.size ?? 0) === 0) {
             knownIdsRef.current = new Set(res.body.items.map(it => it.id));
             setItems(res.body.items);
             setPendingItems([]);
           } else {
-            const incomingNew = res.body.items.filter(it => !knownIdsRef.current.has(it.id));
+            const incomingNew = res.body.items.filter(it => !knownIdsRef.current?.has(it.id));
             if (incomingNew.length > 0) {
               setPendingItems(res.body.items);
             }
@@ -66,7 +77,8 @@ export function useFeed(): FeedState {
   }, []);
 
   useEffect(() => {
-    load('initial');
+    if (!hasInitialRef.current) load('initial');
+    else lastFetchedRef.current = Date.now();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') load('background');
     }, FEED_POLL_MS);
@@ -93,7 +105,7 @@ export function useFeed(): FeedState {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [pendingItems]);
 
-  const newCount = pendingItems.reduce((acc, it) => (knownIdsRef.current.has(it.id) ? acc : acc + 1), 0);
+  const newCount = pendingItems.reduce((acc, it) => (knownIdsRef.current?.has(it.id) ? acc : acc + 1), 0);
   const refresh = useCallback(() => load('manual'), [load]);
 
   return {

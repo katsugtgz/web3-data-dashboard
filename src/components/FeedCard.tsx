@@ -34,6 +34,12 @@ export function FeedCard({ item, onCopyBrief }: Props) {
                 <span className="mono">{item.domain}</span>
               </>
             )}
+            {item.summarySource === 'ai' && (
+              <>
+                {' · '}
+                <span className="ai-tag">AI summary</span>
+              </>
+            )}
           </p>
         </div>
         <div className="card-actions">

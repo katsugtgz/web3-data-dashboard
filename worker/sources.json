@@ -51,5 +51,15 @@
   { "platform": "telegram", "handle": "alphahunterTanaka", "lang": "en", "trust": 0.65, "tags": ["intel", "airdrop"], "enabled": true },
   { "platform": "telegram", "handle": "alphageeks", "lang": "en", "trust": 0.6, "tags": ["intel", "alpha"], "enabled": true },
   { "platform": "telegram", "handle": "ayyyeandy", "lang": "en", "trust": 0.65, "tags": ["intel", "research"], "enabled": true },
-  { "platform": "telegram", "handle": "CoinMarketCapAnnouncements", "lang": "en", "trust": 0.8, "tags": ["intel", "news"], "enabled": true }
+  { "platform": "telegram", "handle": "CoinMarketCapAnnouncements", "lang": "en", "trust": 0.8, "tags": ["intel", "news"], "enabled": true },
+  { "platform": "x", "handle": "OlimpioCrypto", "lang": "en", "trust": 0.85, "tags": ["airdrop", "research"], "enabled": true },
+  { "platform": "x", "handle": "DefiIgnas", "lang": "en", "trust": 0.85, "tags": ["airdrop", "research", "defi"], "enabled": true },
+  { "platform": "x", "handle": "CryptoRank_io", "lang": "en", "trust": 0.85, "tags": ["airdrop", "data"], "enabled": true },
+  { "platform": "x", "handle": "DropsTab_com", "lang": "en", "trust": 0.8, "tags": ["airdrop", "data"], "enabled": true },
+  { "platform": "x", "handle": "airdrops_io", "lang": "en", "trust": 0.8, "tags": ["airdrop"], "enabled": true },
+  { "platform": "x", "handle": "cc2ventures", "lang": "en", "trust": 0.8, "tags": ["airdrop", "research"], "enabled": true },
+  { "platform": "x", "handle": "DeFi_Dad", "lang": "en", "trust": 0.8, "tags": ["airdrop", "defi"], "enabled": true },
+  { "platform": "x", "handle": "atoms_res", "lang": "en", "trust": 0.75, "tags": ["airdrop", "research"], "enabled": true },
+  { "platform": "x", "handle": "MingoAirdrop", "lang": "en", "trust": 0.75, "tags": ["airdrop"], "enabled": true },
+  { "platform": "x", "handle": "layerggofficial", "lang": "en", "trust": 0.75, "tags": ["airdrop", "intel"], "enabled": true }
 ]

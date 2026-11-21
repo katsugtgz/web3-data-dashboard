@@ -4,6 +4,11 @@ compatibility_date = "2026-11-21"
 
 [vars]
 TG_BATCH_SIZE = "4"
+X_BATCH_SIZE = "3"
+AI_DAILY_MAX = "300"
+
+[ai]
+binding = "AI"
 
 [triggers]
 crons = ["* * * * *", "*/5 * * * *"]
