@@ -114,3 +114,59 @@ export interface HealthResponse {
   ok: boolean;
   snapshots: Record<string, HealthSnapshotStatus>;
 }
+
+export type TaskType =
+  | 'testnet'
+  | 'faucet'
+  | 'quest'
+  | 'waitlist'
+  | 'bridge'
+  | 'stake'
+  | 'mint'
+  | 'points'
+  | 'trade'
+  | 'social'
+  | 'node'
+  | 'other';
+
+export type RiskLevel = 'ok' | 'warn' | 'risk';
+
+export interface FeedSourceRef {
+  platform: 'telegram' | 'x' | 'surf';
+  handle: string;
+  postUrl: string;
+  postedAt: number;
+}
+
+export interface FeedItem {
+  id: string;
+  project: string;
+  ticker?: string;
+  domain?: string;
+  chains: string[];
+  taskTypes: TaskType[];
+  summary: string;
+  summarySource?: 'rule' | 'ai';
+  links: { url: string; known: boolean }[];
+  sources: FeedSourceRef[];
+  sourceCount: number;
+  score: number;
+  risk: { level: RiskLevel; reasons: string[] };
+  surf?: { tier?: Grade; cardRank?: number };
+  firstSeen: number;
+  lastSeen: number;
+}
+
+export interface SourceHealth {
+  id: string;
+  platform: string;
+  handle: string;
+  status: 'ok' | 'degraded' | 'down';
+  lastOkAt: number | null;
+}
+
+export interface FeedResponse {
+  generatedAt: number;
+  items: FeedItem[];
+  cursor?: string;
+}

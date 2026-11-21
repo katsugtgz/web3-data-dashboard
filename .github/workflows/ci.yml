@@ -45,6 +45,8 @@ jobs:
         run: |
           jq -e 'type == "object" and (.cards | type == "array" and length > 0)' dist/data/airdrops.json > /dev/null
           jq -e 'type == "object" and (.sections | type == "array" and length >= 6)' dist/data/markets.json > /dev/null
+          jq -e 'type == "object" and (.items | type == "array" and length > 0)' dist/data/feed.json > /dev/null
+          jq -e 'type == "array" and length > 0' dist/data/sources.json > /dev/null
       - name: Check zero CJK in dist
         run: |
           if rg --pcre2 '\p{Script=Han}' dist/; then

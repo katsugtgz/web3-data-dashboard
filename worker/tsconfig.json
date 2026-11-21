@@ -10,7 +10,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["@cloudflare/workers-types"]
+    "types": ["bun", "@cloudflare/workers-types"]
   },
-  "include": ["src", "../shared"]
+  "include": ["src", "../shared", "../scripts"]
 }

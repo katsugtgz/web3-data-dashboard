@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
+import { collectKnownDomainEntries } from '../worker/src/safety';
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
 
 const dryRun = process.argv.includes('--dry-run');
@@ -46,6 +47,11 @@ async function main() {
     const etag = `"${await sha1Hex(body)}"`;
     statements.push(
       `INSERT OR REPLACE INTO snapshots (key, body, etag, fetched_at, ok, error) VALUES (${sqlQuote(key)}, ${sqlQuote(body)}, ${sqlQuote(etag)}, ${nowMs}, 1, NULL);`,
+    );
+  }
+  for (const entry of collectKnownDomainEntries(null, defi)) {
+    statements.push(
+      `INSERT INTO known_domains (domain, project, origin) VALUES (${sqlQuote(entry.domain)}, ${sqlQuote(entry.project)}, ${sqlQuote(entry.origin)}) ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin;`,
     );
   }
 

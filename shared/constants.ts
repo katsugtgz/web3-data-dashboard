@@ -56,6 +56,7 @@ export const TYPE_MAP: Record<string, string[]> = {
 };
 
 export const TABS: Tab[] = [
+  { id: 'drops', label: 'Drops' },
   { id: 'airdrops', label: 'Airdrops' },
   { id: 'crypto', label: 'Crypto' },
   { id: 'defi', label: 'DeFi' },

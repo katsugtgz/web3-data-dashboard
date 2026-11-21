@@ -1,5 +1,12 @@
 import { MARKET_SECTIONS_ORDER } from '../../shared/constants';
-import type { HealthResponse, MarketSection, MarketSectionId, MarketSector, MarketsResponse } from '../../shared/types';
+import type {
+  AirdropFeed,
+  HealthResponse,
+  MarketSection,
+  MarketSectionId,
+  MarketSector,
+  MarketsResponse,
+} from '../../shared/types';
 import {
   listSnapshots,
   markSnapshotError,
@@ -8,6 +15,9 @@ import {
   toHealthMap,
   upsertSnapshot,
 } from './lib/db';
+import { queryFeed, querySourcesHealth } from './normalize/cluster';
+import { decayClusterScores } from './normalize/score';
+import { loadKnownDomains, seedKnownDomains } from './safety';
 import {
   fetchCryptoSection,
   fetchGithubSection,
@@ -15,10 +25,13 @@ import {
   fetchTrendingSection,
   type MarketUrls,
 } from './sources/markets';
+import { SEED_SOURCES, syncSources } from './sources/registry';
 import { fetchSurfAirdrops } from './sources/surf';
+import { pollTelegramBatch, pruneOldPosts } from './sources/telegram';
 
 export interface Env {
   DB: D1Database;
+  TG_BATCH_SIZE?: string;
   SURF_AIRDROPS_URL?: string;
   POLYMARKET_URL?: string;
   COINGECKO_MARKETS_URL?: string;
@@ -64,6 +77,13 @@ function notModified(etag: string, cacheControl: string): Response {
   });
 }
 
+function etagMatches(ifNoneMatch: string | null, etag: string): boolean {
+  if (!ifNoneMatch) return false;
+  const norm = (v: string) => v.trim().replace(/^W\//i, '');
+  const target = norm(etag);
+  return ifNoneMatch.split(',').some(part => norm(part) === target || part.trim() === '*');
+}
+
 async function runIsolated(db: D1Database, key: string, nowMs: number, fn: () => Promise<unknown>): Promise<void> {
   try {
     const data = await fn();
@@ -74,7 +94,39 @@ async function runIsolated(db: D1Database, key: string, nowMs: number, fn: () =>
   }
 }
 
+async function loadCachedSurfAndDefi(db: D1Database): Promise<{
+  surf: AirdropFeed | null;
+  defi: MarketSection | null;
+}> {
+  const [surfRow, defiRow] = await Promise.all([readSnapshot(db, 'airdrops'), readSnapshot(db, 'markets:defi')]);
+  let surf: AirdropFeed | null = null;
+  let defi: MarketSection | null = null;
+  if (surfRow?.body && surfRow.body !== '{}') {
+    try {
+      surf = JSON.parse(surfRow.body) as AirdropFeed;
+    } catch {
+      surf = null;
+    }
+  }
+  if (defiRow?.body && defiRow.body !== '{}') {
+    try {
+      defi = JSON.parse(defiRow.body) as MarketSection;
+    } catch {
+      defi = null;
+    }
+  }
+  return { surf, defi };
+}
+
+async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
+  await syncSources(env.DB, SEED_SOURCES);
+  const { surf } = await loadCachedSurfAndDefi(env.DB);
+  const batchSize = Math.max(1, Number.parseInt(env.TG_BATCH_SIZE ?? '4', 10) || 4);
+  await pollTelegramBatch(env.DB, batchSize, nowMs, surf);
+}
+
 async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
+  await syncSources(env.DB, SEED_SOURCES);
   const urls: MarketUrls = {
     coingeckoMarkets: env.COINGECKO_MARKETS_URL,
     polymarket: env.POLYMARKET_URL,
@@ -93,19 +145,17 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
       await runIsolated(env.DB, 'markets:github', nowMs, () => fetchGithubSection(nowMs, urls));
     })(),
   ]);
+
+  const { surf, defi } = await loadCachedSurfAndDefi(env.DB);
+  await seedKnownDomains(env.DB, surf, defi);
+  await pruneOldPosts(env.DB, nowMs);
+  await decayClusterScores(env.DB, nowMs);
 }
 
 function isSectionStale(id: MarketSectionId, ok: number, fetchedAt: number, nowMs: number): boolean {
   if (ok !== 1) return true;
   const maxAge = id === 'defi' || id === 'yields' || id === 'github' ? THIRTY_MIN_STALE_MS : FIVE_MIN_STALE_MS;
   return nowMs - fetchedAt > maxAge;
-}
-
-function etagMatches(ifNoneMatch: string | null, etag: string): boolean {
-  if (!ifNoneMatch) return false;
-  const norm = (v: string) => v.trim().replace(/^W\//i, '');
-  const target = norm(etag);
-  return ifNoneMatch.split(',').some(part => norm(part) === target || part.trim() === '*');
 }
 
 async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag: string } | null> {
@@ -183,7 +233,7 @@ export default {
   async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     const nowMs = controller.scheduledTime || Date.now();
     if (controller.cron === '* * * * *') {
-      // 1-min Telegram batch handler is wired in Phase 2 (#5).
+      await runOneMinCron(env, nowMs);
       return;
     }
     await runFiveMinCron(env, nowMs);
@@ -225,6 +275,39 @@ export default {
     if (url.pathname === '/markets.json') {
       return stripBodyIfHead(
         await handleCachedJson(request, ctx, cacheControl, () => buildMarketsPayload(env.DB, Date.now())),
+      );
+    }
+
+    if (url.pathname === '/feed.json') {
+      return stripBodyIfHead(
+        await handleCachedJson(request, ctx, 'public, max-age=15, s-maxage=15', async () => {
+          const sinceParam = url.searchParams.get('since');
+          const limitParam = url.searchParams.get('limit');
+          const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
+          const sortParam = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
+          const { allKnownDomains } = await loadKnownDomains(env.DB);
+          const feed = await queryFeed(env.DB, allKnownDomains, {
+            since: sinceParam ? Number(sinceParam) : 0,
+            limit: limitParam ? Number(limitParam) : 100,
+            risk: riskParam,
+            sort: sortParam,
+          });
+          const body = JSON.stringify(feed);
+          const etag = `"${await sha1Hex(body)}"`;
+          return { body, etag };
+        }),
+      );
+    }
+
+    if (url.pathname === '/sources.json') {
+      return stripBodyIfHead(
+        await handleCachedJson(request, ctx, cacheControl, async () => {
+          await syncSources(env.DB, SEED_SOURCES);
+          const list = await querySourcesHealth(env.DB);
+          const body = JSON.stringify(list);
+          const etag = `"${await sha1Hex(body)}"`;
+          return { body, etag };
+        }),
       );
     }
 
