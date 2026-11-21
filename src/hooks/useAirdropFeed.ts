@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AirdropFeed } from '../../shared/types';
-import { API_BASE, getJson } from '../lib/api';
+import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
 export const POLL_MS = 60_000;
@@ -18,6 +18,7 @@ export function useAirdropFeed(): AirdropFeedState {
   const [feed, setFeed] = useState<AirdropFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [isLiveApi, setIsLiveApi] = useState(false);
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
@@ -34,6 +35,7 @@ export function useAirdropFeed(): AirdropFeedState {
         if (res.status === 200) {
           etagRef.current = res.etag;
           setFeed(res.body);
+          setIsLiveApi(res.source === 'api');
         }
         setFailed(false);
         if (mode !== 'background') setLoading(false);
@@ -55,5 +57,5 @@ export function useAirdropFeed(): AirdropFeedState {
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
 
-  return { feed, loading, failed, isLiveApi: Boolean(API_BASE) && !failed, refresh };
+  return { feed, loading, failed, isLiveApi, refresh };
 }

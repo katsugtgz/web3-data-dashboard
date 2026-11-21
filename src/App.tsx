@@ -25,7 +25,7 @@ const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({
 export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed();
-  const { markets, loading: marketsLoading, refresh: refreshMarkets } = useMarkets();
+  const { markets, loading: marketsLoading, failed: marketsFailed, refresh: refreshMarkets } = useMarkets();
   const { sources, loading: sourcesLoading, refresh: refreshSources } = useSourcesHealth();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
@@ -75,6 +75,7 @@ export default function App() {
     airdropsFetchedAt: airdrops.feed?.fetchedAt ?? null,
     cardsCount: cards.length,
   });
+  const headerFeed = tab === 'drops' ? drops : airdrops;
 
   return (
     <>
@@ -86,8 +87,8 @@ export default function App() {
         cardCount={totalCount}
         fetchedAt={headerFetchedAt}
         loading={drops.loading || airdrops.loading || marketsLoading}
-        failed={drops.failed && airdrops.failed}
-        isLiveApi={airdrops.isLiveApi}
+        failed={headerFeed.failed}
+        isLiveApi={headerFeed.isLiveApi}
         resolvedTheme={theme.resolved}
         onRefresh={handleRefresh}
         onOpenProfile={copyFlow.openProfile}
@@ -122,6 +123,9 @@ export default function App() {
           filters: airdropFilters,
           cardCount: cards.length,
           tgeItems,
+          hasFeed: airdrops.feed !== null,
+          loading: airdrops.loading,
+          failed: airdrops.failed,
           isLive: airdrops.isLiveApi,
           saved,
           doneTasks,
@@ -131,6 +135,8 @@ export default function App() {
           onCopyBrief: (card: Card) => handleCopyBrief(card, 'page'),
         }}
         mountedMarkets={mountedMarkets}
+        marketsLoading={marketsLoading}
+        marketsFailed={marketsFailed}
         sectors={markets?.sectors}
       />
 

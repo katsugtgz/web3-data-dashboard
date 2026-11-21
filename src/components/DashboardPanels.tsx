@@ -75,6 +75,9 @@ interface MainContentProps {
     filters: AirdropFiltersState;
     cardCount: number;
     tgeItems: Tge[];
+    hasFeed: boolean;
+    loading: boolean;
+    failed: boolean;
     isLive: boolean;
     saved: Set<string>;
     doneTasks: Set<string>;
@@ -84,6 +87,8 @@ interface MainContentProps {
     onCopyBrief: (card: Card) => void;
   };
   mountedMarkets: MarketSection[];
+  marketsLoading: boolean;
+  marketsFailed: boolean;
   sectors?: MarketSector[];
 }
 
@@ -94,9 +99,11 @@ export function MainPanels({
   dropsProps,
   airdropsProps,
   mountedMarkets,
+  marketsLoading,
+  marketsFailed,
   sectors,
 }: MainContentProps) {
-  const showMarketLoading =
+  const missingMarketSection =
     tab !== 'drops' && tab !== 'airdrops' && !mountedMarkets.some(s => s.id === tab);
 
   return (
@@ -107,11 +114,21 @@ export function MainPanels({
 
       {visitedTabs.has('airdrops') && (
         <div hidden={tab !== 'airdrops'}>
-          <ChunkErrorBoundary label="Airdrops">
-            <Suspense fallback={<p className="note" role="status">Loading Airdrops…</p>}>
-              <LazyAirdropPanel {...airdropsProps} />
-            </Suspense>
-          </ChunkErrorBoundary>
+          {airdropsProps.hasFeed ? (
+            <ChunkErrorBoundary label="Airdrops">
+              <Suspense fallback={<p className="note" role="status">Loading Airdrops…</p>}>
+                <LazyAirdropPanel {...airdropsProps} />
+              </Suspense>
+            </ChunkErrorBoundary>
+          ) : (
+            <section role="tabpanel" id="panel-airdrops" aria-labelledby="tab-airdrops">
+              {airdropsProps.loading ? (
+                <p className="note" role="status">Loading airdrop data…</p>
+              ) : (
+                <p className="empty" role="alert">{airdropsProps.failed ? 'Unable to load airdrop data. Please refresh to retry.' : 'No airdrop data available.'}</p>
+              )}
+            </section>
+          )}
         </div>
       )}
 
@@ -128,11 +145,19 @@ export function MainPanels({
         </div>
       ))}
 
-      {showMarketLoading && (
-        <div className="loading-shell" role="status" aria-live="polite">
-          <div className="loading-bar" />
-          <p className="note">Loading market data…</p>
-        </div>
+      {missingMarketSection && (
+        <section role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+          {marketsLoading ? (
+            <div className="loading-shell" role="status">
+              <div className="loading-bar" />
+              <p className="note">Loading market data…</p>
+            </div>
+          ) : marketsFailed ? (
+            <p className="empty" role="alert">Unable to load market data. Please refresh to retry.</p>
+          ) : (
+            <p className="empty" role="status">No market data available for this section.</p>
+          )}
+        </section>
       )}
     </main>
   );

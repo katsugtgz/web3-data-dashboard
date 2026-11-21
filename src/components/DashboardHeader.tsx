@@ -26,17 +26,13 @@ function FeedStatusText({
   if (fetchedAt !== null) {
     return (
       <span>
-        {isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span> synced{' '}
+        {failed ? 'Refresh failed · showing last data' : isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span>{' '}
         <span className="mono">{formatClock(fetchedAt)}</span>
       </span>
     );
   }
   if (failed) {
-    return (
-      <span>
-        Snapshot fallback · <span className="mono">{cardCount}</span>
-      </span>
-    );
+    return <span>Unable to load radar data</span>;
   }
   return <span>Syncing radar…</span>;
 }
@@ -52,7 +48,7 @@ export function DashboardHeader({
   onOpenProfile,
   onToggleTheme,
 }: Props) {
-  const isLive = fetchedAt !== null && isLiveApi;
+  const isLive = fetchedAt !== null && isLiveApi && !failed;
   const themeAction = resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
   return (

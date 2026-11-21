@@ -49,7 +49,7 @@ function DropsBody({
   if (filters.visible.length === 0) {
     return (
       <div className="empty" role="status">
-        <p>No drops match your current filters.</p>
+        <p>{totalCount === 0 ? 'No drops yet. Check back soon.' : 'No drops match your current filters.'}</p>
         {filters.hasAnyFilter && (
           <button type="button" className="btn" style={{ marginTop: 10 }} onClick={filters.resetFilters}>
             Reset filters
@@ -99,7 +99,7 @@ export function DropsPanel({
           <h2 className="section">Live Drops Feed</h2>
           <p className="note">
             Real-time deduplicated signals from public Telegram channels &amp; best-effort X, safety-screened in English
-            {generatedAt ? ` · updated ${formatRelativeTime(generatedAt)}` : ''}.
+            {generatedAt ? ` · latest activity ${formatRelativeTime(generatedAt)}` : ''}.
             {xUnavailable && <span className="x-unavail"> · X unavailable (Telegram unaffected)</span>}
           </p>
         </div>

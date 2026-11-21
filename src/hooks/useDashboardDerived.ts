@@ -25,10 +25,10 @@ export function useDashboardDerived(input: Input): {
 } {
   const { sources, marketSections, visitedTabs, tab, dropsCount, dropsGeneratedAt, airdropsFetchedAt, cardsCount } = input;
 
-  const xUnavailable = useMemo(
-    () => sources.length > 0 && sources.every(s => s.status === 'down'),
-    [sources],
-  );
+  const xUnavailable = useMemo(() => {
+    const xSources = sources.filter(s => s.platform === 'x');
+    return xSources.length > 0 && xSources.every(s => s.status === 'down');
+  }, [sources]);
   const mountedMarkets = useMemo(
     () => (marketSections ?? []).filter(s => visitedTabs.has(s.id)),
     [marketSections, visitedTabs],
@@ -39,6 +39,6 @@ export function useDashboardDerived(input: Input): {
     xUnavailable,
     mountedMarkets,
     totalCount: onDrops ? dropsCount : cardsCount,
-    headerFetchedAt: onDrops ? (dropsGeneratedAt ?? airdropsFetchedAt ?? null) : (airdropsFetchedAt ?? null),
+    headerFetchedAt: onDrops ? dropsGeneratedAt : (airdropsFetchedAt ?? null),
   };
 }

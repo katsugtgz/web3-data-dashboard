@@ -10,6 +10,7 @@ export interface FeedState {
   items: FeedItem[];
   pendingCount: number;
   generatedAt: number | null;
+  isLiveApi: boolean;
   loading: boolean;
   failed: boolean;
   applyPending: () => void;
@@ -29,6 +30,7 @@ export function useFeed(): FeedState {
   const [items, setItems] = useState<FeedItem[]>(() => initial?.items ?? []);
   const [pendingItems, setPendingItems] = useState<FeedItem[]>([]);
   const [generatedAt, setGeneratedAt] = useState<number | null>(() => initial?.generatedAt ?? null);
+  const [isLiveApi, setIsLiveApi] = useState(false);
   const [loading, setLoading] = useState(!initial);
   const [failed, setFailed] = useState(false);
 
@@ -38,7 +40,7 @@ export function useFeed(): FeedState {
   if (knownIdsRef.current === null) {
     knownIdsRef.current = new Set(initial?.items.map(it => it.id) ?? []);
   }
-  const hasInitialRef = useRef(Boolean(initial));
+  const hasLiveRef = useRef(false);
 
   // Mirrors of state for stable callbacks (no re-creation per render).
   const pendingItemsRef = useRef<FeedItem[]>([]);
@@ -49,7 +51,7 @@ export function useFeed(): FeedState {
   }, [pendingItems, items]);
 
   const fetchNow = useCallback((mode: PollMode) => {
-    if (mode !== 'background' || !hasInitialRef.current) setLoading(mode !== 'background');
+    if (mode !== 'background') setLoading(true);
     const { signal, skipped } = poll.beginRequest(mode);
     if (skipped) return;
 
@@ -58,6 +60,13 @@ export function useFeed(): FeedState {
         if (signal.aborted) return;
         poll.settle();
         if (res.status === 200) {
+          if (res.source === 'snapshot' && hasLiveRef.current) {
+            setFailed(true);
+            setLoading(false);
+            return;
+          }
+          hasLiveRef.current = res.source === 'api';
+          setIsLiveApi(hasLiveRef.current);
           etagRef.current = res.etag;
           setGeneratedAt(res.body.generatedAt);
           if (mode !== 'background') {
@@ -93,12 +102,6 @@ export function useFeed(): FeedState {
 
   poll.useInterval(fetchNowRef, FEED_POLL_MS);
 
-  // Initial-load semantics: with an SSR/prefetched snapshot the first fetch
-  // would flip `loading` unnecessarily; skip it and start the clock.
-  useEffect(() => {
-    if (hasInitialRef.current) poll.settle();
-  }, [poll]);
-
   const applyPending = useCallback(() => {
     const pending = pendingItemsRef.current;
     if (pending.length === 0) return;
@@ -119,6 +122,7 @@ export function useFeed(): FeedState {
     items,
     pendingCount: newCount,
     generatedAt,
+    isLiveApi,
     loading,
     failed,
     applyPending,
