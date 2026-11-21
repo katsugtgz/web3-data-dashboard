@@ -1,0 +1,14 @@
+.github/workflows/ci.yml
+  h_cc1f32aec57e6b 25-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c85696efe056170775e3a29bc8dcc3cd98087d75",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
