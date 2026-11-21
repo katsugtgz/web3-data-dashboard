@@ -13,7 +13,6 @@ import type {
   TaskType,
 } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
-import { sha1Hex } from '../worker/src/lib/hash';
 import { buildSurfIndex, computeClusterId } from '../worker/src/normalize/cluster';
 import { getRegistrableDomain, parseDropPost } from '../worker/src/normalize/parse';
 import { computeScore } from '../worker/src/normalize/score';
@@ -186,7 +185,7 @@ async function buildDropsAndSources(
   const clusters = new Map<string, AccCluster>();
   const cutoff = nowMs - 14 * 86_400_000;
 
-  const processPosts = async (src: (typeof sampleBatch)[number], html: string) => {
+  const processPosts = async (src: (typeof tgEnabled)[number], html: string) => {
     const posts = await parseTelegramHtml(html, src.handle);
     // t.me/s pages are oldest-first: keep the NEWEST posts per channel, then
     // apply the 14-day cutoff. (The first-six slice silently dropped the

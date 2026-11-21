@@ -1,5 +1,6 @@
 import type { TaskType } from '../../../shared/types';
 import { HAN_RE } from './i18n';
+import { URL_SHORTENERS } from '../safety/shorteners';
 
 export const PLATFORM_DOMAINS = new Set<string>([
   't.me',
@@ -16,6 +17,7 @@ export const PLATFORM_DOMAINS = new Set<string>([
   'layer3.xyz',
   'app.galxe.com',
   'docs.google.com',
+  'google.com',
   'forms.gle',
   'github.com',
   'notion.site',
@@ -57,8 +59,8 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Linea', /\blinea\b/i],
   ['Scroll', /\bscroll\b/i],
   ['Polygon', /\bpolygon\b|\bmatic\b/i],
-  ['TON', /\bton\b|\btoncoin\b|\btelegram open network\b/i],
-  ['Sei', /\bsei\b(?:\s+(?:network|chain))?/i],
+  ['TON', /\btoncoin\b|\bton ?(?:blockchain|network)\b|\btelegram open network\b|\bTON\b/],
+  ['Sei', /\bsei\b(?:\s+(?:network|chain))?/],
   ['Injective', /\binjective\b/i],
   ['Celestia', /\bcelestia\b|\btia\b/i],
   ['Avalanche', /\bavalanche\b|\bavax\b/i],
@@ -248,7 +250,9 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
   let projectDomain: string | undefined;
   for (const u of urls) {
     const dom = getRegistrableDomain(u);
-    if (!dom || isPlatformDomain(dom)) continue;
+    // Shorteners point anywhere: they must never become the cluster identity,
+    // or every post sharing one shortener collapses into a single cluster.
+    if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
     projectDomain = dom;
     break;
   }

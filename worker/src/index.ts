@@ -8,6 +8,7 @@ import type {
   MarketsResponse,
 } from '../../shared/types';
 import {
+  listSnapshotMeta,
   listSnapshots,
   markSnapshotError,
   readSnapshot,
@@ -350,7 +351,8 @@ export default {
     const cacheControl = 'public, max-age=15, s-maxage=30';
 
     if (url.pathname === '/health') {
-      const rows = await listSnapshots(env.DB);
+      // Metadata-only: /health is no-store and must not read full snapshot bodies.
+      const rows = await listSnapshotMeta(env.DB);
       const body: HealthResponse = {
         ok: true,
         snapshots: toHealthMap(rows),

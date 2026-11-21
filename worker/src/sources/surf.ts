@@ -177,7 +177,7 @@ function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
   const fitList = [...fitSet];
 
   const bestTitle = stripOrTranslateCjk(bt.title ?? '') || '—';
-  const name = stripOrTranslateCjk(p.project_name) || p.project_name;
+  const name = stripOrTranslateCjk(p.project_name) || 'Unknown project';
   const symbol = p.coin_symbol ? stripOrTranslateCjk(p.coin_symbol) || null : null;
 
   return {
@@ -218,7 +218,7 @@ function mapTge(p: UpstreamProject): Tge {
   const dateTs = safeNum(p.reward_date, 0);
   const raise = safeNum(p.total_raise, 0);
   return {
-    n: stripOrTranslateCjk(p.project_name) || p.project_name,
+    n: stripOrTranslateCjk(p.project_name) || 'Unknown project',
     t: p.coin_symbol ? stripOrTranslateCjk(p.coin_symbol) : '',
     s: translateTgeStatus(p.status),
     d: formatIsoDate(dateTs),

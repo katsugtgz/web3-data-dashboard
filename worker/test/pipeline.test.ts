@@ -12,8 +12,10 @@ function createSqliteD1(): D1Database {
   const sqlite = new Database(':memory:');
   const m1 = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
   const m2 = readFileSync(new URL('../migrations/0002_feed.sql', import.meta.url), 'utf8');
+  const m4 = readFileSync(new URL('../migrations/0004_tags.sql', import.meta.url), 'utf8');
   sqlite.exec(m1);
   sqlite.exec(m2);
+  sqlite.exec(m4);
 
   const makeStmt = (sql: string, params: unknown[] = []) => ({
     bind(...args: unknown[]) {
@@ -130,6 +132,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       { knownDomains: known },
       surfIndex,
       known,
+      new Set<string>(),
       now,
     );
 
@@ -147,6 +150,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       { knownDomains: known },
       surfIndex,
       known,
+      new Set<string>(),
       now,
     );
 
@@ -164,6 +168,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       { knownDomains: known },
       surfIndex,
       known,
+      new Set<string>(),
       now,
     );
 

@@ -1,17 +1,8 @@
 import type { AirdropFeed, MarketSection, RiskLevel } from '../../../shared/types';
 import { getRegistrableDomain, isPlatformDomain } from '../normalize/parse';
+import { URL_SHORTENERS } from './shorteners';
 
-export const URL_SHORTENERS = new Set([
-  'bit.ly',
-  't.co',
-  'tinyurl.com',
-  'cutt.ly',
-  'rb.gy',
-  'is.gd',
-  'ow.ly',
-  'goo.gl',
-  'shorturl.at',
-]);
+export { URL_SHORTENERS };
 
 // Wallet-drain phrasing: require the scam-specific shape (a claim promise
 // gated behind connecting a wallet, or an eligibility check that asks for
@@ -127,7 +118,7 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
         bump('warn', `URL shortener used: ${reg}`);
       }
       if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) {
-        const similar = findLookalikeDomain(reg, input.knownProjectDomains);
+        const similar = findLookalikeDomain(reg, lookalikeBaseline);
         if (similar) {
           bump('risk', `Possible lookalike domain (${reg} vs ${similar})`);
         }
@@ -145,7 +136,7 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
     if (isPunycodeOrMixedScript(input.domain)) {
       bump('risk', `Punycode or mixed-script project domain: ${input.domain}`);
     } else {
-      const similar = findLookalikeDomain(input.domain, input.knownProjectDomains);
+      const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
       if (similar) {
         bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
       } else if (!input.knownProjectDomains.has(input.domain.toLowerCase())) {
@@ -183,7 +174,7 @@ export function collectKnownDomainEntries(
       for (const raw of candidates) {
         if (!raw) continue;
         const dom = getRegistrableDomain(raw);
-        if (!dom || isPlatformDomain(dom) || URL_SHORTENERS.has(dom)) continue;
+        if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
         if (!map.has(dom)) map.set(dom, { domain: dom, project: card.n, origin: 'surf' });
       }
     }
@@ -193,7 +184,7 @@ export function collectKnownDomainEntries(
     for (const row of defiSection.rows) {
       if (!row.href) continue;
       const dom = getRegistrableDomain(row.href);
-      if (!dom || isPlatformDomain(dom) || URL_SHORTENERS.has(dom)) continue;
+      if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
       if (!map.has(dom)) map.set(dom, { domain: dom, project: row.cells[0] ?? dom, origin: 'defi' });
     }
   }

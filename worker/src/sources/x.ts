@@ -191,6 +191,7 @@ async function pollSingleXSource(
   parseCtx: ParseContext,
   surfIndex: SurfIndex,
   projectDomains: Map<string, string>,
+  platformDomains: Set<string> | undefined,
   nowMs: number,
   fetcher: (handle: string) => Promise<ParsedXPost[]>,
 ): Promise<{ insertedPosts: number; degraded: boolean; ingestedResults: IngestPostResult[] }> {
@@ -222,6 +223,7 @@ async function pollSingleXSource(
           parseCtx,
           surfIndex,
           projectDomains,
+          platformDomains,
           nowMs,
         ),
       ),
@@ -278,7 +280,7 @@ export async function pollXBatch(
     return { polled: 0, insertedPosts: 0, degraded: 0, ingestedResults: [] };
   }
 
-  const { projectDomains } = await loadKnownDomains(db);
+  const { projectDomains, platformDomains } = await loadKnownDomains(db);
   const surfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 

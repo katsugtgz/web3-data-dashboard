@@ -165,6 +165,8 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
 interface PolyMarket {
   question?: string;
   slug?: string;
+  conditionId?: string;
+  id?: number | string;
   outcomePrices?: string;
   volume24hr?: number | string;
   liquidity?: number | string;
@@ -207,12 +209,11 @@ function parseYesProb(outcomePrices?: string): string {
   return '—';
 }
 
-export async function fetchPredictionsSection(nowMs = Date.now(), urls: MarketUrls = {}): Promise<MarketSection> {
-  const url = urls.polymarket ?? DEFAULT_URLS.polymarket;
-  const markets = await fetchJson<PolyMarket[]>(url);
-  if (!Array.isArray(markets) || markets.length === 0) throw new Error('Empty Polymarket feed');
-  const rows: MarketRow[] = markets.slice(0, 30).map(m => ({
-    id: m.slug ?? undefined,
+/** Pure row mapping for the Polymarket payload: the sort contract's seam. */
+export function normalizePredictionRows(markets: PolyMarket[]): MarketRow[] {
+  return markets.slice(0, 30).map(m => ({
+    // slug (unique, feeds href) > conditionId (contract key) > numeric id.
+    id: m.slug ?? m.conditionId ?? (m.id != null ? String(m.id) : undefined),
     cells: [
       stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
       parseYesProb(m.outcomePrices),
@@ -229,13 +230,18 @@ export async function fetchPredictionsSection(nowMs = Date.now(), urls: MarketUr
     ],
     href: m.slug ? `https://polymarket.com/event/${encodeURIComponent(m.slug)}` : undefined,
   }));
+}
 
+export async function fetchPredictionsSection(nowMs = Date.now(), urls: MarketUrls = {}): Promise<MarketSection> {
+  const url = urls.polymarket ?? DEFAULT_URLS.polymarket;
+  const markets = await fetchJson<PolyMarket[]>(url);
+  if (!Array.isArray(markets) || markets.length === 0) throw new Error('Empty Polymarket feed');
   return {
     id: 'predictions',
     title: 'Prediction Markets',
     blurb: 'Active Polymarket event contracts ranked by 24h trading volume.',
     cols: ['Market', 'Yes %', '24h volume', 'Liquidity', 'Ends'],
-    rows,
+    rows: normalizePredictionRows(markets),
     source: 'Polymarket',
     sourceUrl: 'https://polymarket.com',
     fetchedAt: nowMs,
@@ -272,24 +278,9 @@ function normalizeChainLabel(chainId?: string): string {
   return map[chainId.toLowerCase()] ?? chainId.charAt(0).toUpperCase() + chainId.slice(1);
 }
 
-export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls = {}): Promise<MarketSection> {
-  const [boosts, profiles] = await Promise.all([
-    fetchJson<DexTokenEntry[]>(urls.dexBoosts ?? DEFAULT_URLS.dexBoosts),
-    fetchJson<DexTokenEntry[]>(urls.dexProfiles ?? DEFAULT_URLS.dexProfiles).catch(() => [] as DexTokenEntry[]),
-  ]);
-  const merged = new Map<string, DexTokenEntry>();
-  for (const entry of [...(Array.isArray(boosts) ? boosts : []), ...(Array.isArray(profiles) ? profiles : [])]) {
-    if (!entry.chainId || !entry.tokenAddress) continue;
-    const key = `${entry.chainId}:${entry.tokenAddress.toLowerCase()}`;
-    const prev = merged.get(key);
-    if (!prev || (entry.totalAmount ?? 0) > (prev.totalAmount ?? 0)) {
-      merged.set(key, entry);
-    }
-  }
-  const items = [...merged.values()].slice(0, 30);
-  if (items.length === 0) throw new Error('Empty DexScreener feed');
-
-  const rows: MarketRow[] = items.map(it => {
+/** Pure row mapping for the DexScreener payload: the sort contract's seam. */
+export function normalizeTrendingRows(items: DexTokenEntry[]): MarketRow[] {
+  return items.map(it => {
     const chain = normalizeChainLabel(it.chainId);
     const addr = it.tokenAddress ?? '';
     const shortAddr = addr.length > 10 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
@@ -311,6 +302,24 @@ export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls 
       href: it.url,
     };
   });
+}
+
+export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls = {}): Promise<MarketSection> {
+  const [boosts, profiles] = await Promise.all([
+    fetchJson<DexTokenEntry[]>(urls.dexBoosts ?? DEFAULT_URLS.dexBoosts),
+    fetchJson<DexTokenEntry[]>(urls.dexProfiles ?? DEFAULT_URLS.dexProfiles).catch(() => [] as DexTokenEntry[]),
+  ]);
+  const merged = new Map<string, DexTokenEntry>();
+  for (const entry of [...(Array.isArray(boosts) ? boosts : []), ...(Array.isArray(profiles) ? profiles : [])]) {
+    if (!entry.chainId || !entry.tokenAddress) continue;
+    const key = `${entry.chainId}:${entry.tokenAddress.toLowerCase()}`;
+    const prev = merged.get(key);
+    if (!prev || (entry.totalAmount ?? 0) > (prev.totalAmount ?? 0)) {
+      merged.set(key, entry);
+    }
+  }
+  const items = [...merged.values()].slice(0, 30);
+  if (items.length === 0) throw new Error('Empty DexScreener feed');
 
   return {
     id: 'trending',
@@ -401,7 +410,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
         // (slug/id absent on some payloads) and then leaks into snapshots.
         id: p.slug ?? (p.id != null ? String(p.id) : stripOrTranslateCjk(p.name ?? '') || 'protocol'),
         cells: [
-          stripOrTranslateCjk(p.name ?? '') || p.name || 'Protocol',
+          stripOrTranslateCjk(p.name ?? '') || 'Protocol',
           stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',
           chainLabel,
           fmtUsd(p.tvl ?? 0),
@@ -409,7 +418,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
           fmtPct(p.change_7d),
         ],
         sortValues: [
-          stripOrTranslateCjk(p.name ?? '') || p.name || 'Protocol',
+          stripOrTranslateCjk(p.name ?? '') || 'Protocol',
           stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',
           chainLabel,
           p.tvl ?? null,
@@ -463,16 +472,16 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
       // `pool` (should not happen on current API).
       id: p.pool ?? `${(p.project ?? 'multi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${p.symbol ?? ''}`,
       cells: [
-        stripOrTranslateCjk(p.symbol ?? '') || p.symbol || 'Pool',
-        stripOrTranslateCjk(p.project ?? '') || p.project || 'Protocol',
+        stripOrTranslateCjk(p.symbol ?? '') || 'Pool',
+        stripOrTranslateCjk(p.project ?? '') || 'Protocol',
         p.chain || 'Multi-Chain',
         fmtUsd(p.tvlUsd ?? 0),
         fmtPct(p.apy).replace(/^\+/, ''),
         p.ilRisk === 'yes' ? 'Yes' : p.ilRisk === 'no' ? 'No' : '—',
       ],
       sortValues: [
-        stripOrTranslateCjk(p.symbol ?? '') || p.symbol || 'Pool',
-        stripOrTranslateCjk(p.project ?? '') || p.project || 'Protocol',
+        stripOrTranslateCjk(p.symbol ?? '') || 'Pool',
+        stripOrTranslateCjk(p.project ?? '') || 'Protocol',
         p.chain || 'Multi-Chain',
         p.tvlUsd ?? null,
         p.apy ?? null,

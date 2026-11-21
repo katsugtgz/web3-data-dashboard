@@ -204,6 +204,7 @@ async function pollSingleTelegramSource(
   parseCtx: ParseContext,
   surfIndex: SurfIndex,
   projectDomains: Map<string, string>,
+  platformDomains: Set<string> | undefined,
   nowMs: number,
   fetcher: (handle: string) => Promise<string>,
 ): Promise<{ insertedPosts: number; error: boolean; ingestedResults: IngestPostResult[] }> {
@@ -240,6 +241,7 @@ async function pollSingleTelegramSource(
           parseCtx,
           surfIndex,
           projectDomains,
+          platformDomains,
           nowMs,
         ),
       ),
@@ -294,12 +296,12 @@ export async function pollTelegramBatch(
     return { polled: 0, insertedPosts: 0, errors: 0, ingestedResults: [] };
   }
 
-  const { projectDomains } = await loadKnownDomains(db);
+  const { projectDomains, platformDomains } = await loadKnownDomains(db);
   const surfIndex: SurfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 
   const results = await Promise.all(
-    sources.map(src => pollSingleTelegramSource(db, src, parseCtx, surfIndex, projectDomains, nowMs, fetcher)),
+    sources.map(src => pollSingleTelegramSource(db, src, parseCtx, surfIndex, projectDomains, platformDomains, nowMs, fetcher)),
   );
 
   let insertedPosts = 0;
