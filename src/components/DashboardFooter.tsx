@@ -35,7 +35,11 @@ export function DashboardFooter({ preCount, dropsCount, sources, sourcesLoading 
             Polymarket
             <span className="sr"> (opens in a new tab)</span>
           </a>
-          , and public Telegram channels. Not financial advice.
+          , and public Telegram channels. Original dashboard by{' '}
+          <a href="https://x.com/ASSO7878/" target="_blank" rel="noopener noreferrer">
+            @ASSO7878<span className="sr"> (opens in a new tab)</span>
+          </a>
+          . Snapshot sections are static reference data. Not financial advice.
         </p>
         <SourcesHealthPopover sources={sources} loading={sourcesLoading} />
       </div>
