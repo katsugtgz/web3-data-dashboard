@@ -6,6 +6,34 @@ import { normalizeSurf } from '../src/sources/surf';
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/surf-airdrops.json', import.meta.url), 'utf8'));
 
 describe('surf normalizer + i18n', () => {
+  test('treats fullwidth digits as content: normalized after Han strip', () => {
+    // U+FF10–FF19 → ASCII runs after Han stripping, so the digits survive.
+    expect(stripOrTranslateCjk('２０２５年')).toBe('2025');
+    expect(stripOrTranslateCjk('铭文１２３')).toBe('123');
+  });
+
+  test('strips forbidden CJK punctuation globally, not only at edges', () => {
+    // Cubic PRRT_kwDOV0YtbM66Wygn: mixed labels must not leak 。 mid-string.
+    expect(stripOrTranslateCjk('中foo。bar文')).toBe('foo bar');
+    // Fullwidth letter/punctuation range U+FF21–U+FF60 is decoration in this
+    // vocabulary (CI forbids FF01–FF9F in output); only digits fold to ASCII.
+    expect(stripOrTranslateCjk('铭文ＡＢＣ')).toBe('');
+  });
+
+  test('CJK-only task types fall back to other, not empty', () => {
+    // Cubic PRRT_kwDOV0YtbM66Wygz: normalizeTaskType must keep filter entries
+    // non-empty when stripOrTranslateCjk yields '' for unmapped CJK.
+    const feed = normalizeSurf(
+      {
+        active: [{ project_name: 'Proj', tasks: [{ title: 'T', type: '类型', status: 'OPEN' }], task_summary: { types: ['类型'] } }],
+        tge: [],
+      },
+      1_700_000_000_000,
+    );
+    expect(feed.cards[0].tasks?.[0].type).toBe('other');
+    expect(feed.cards[0].taskTypes).toContain('other');
+  });
+
   test('normalizes full surf fixture with zero CJK output', () => {
     const feed = normalizeSurf(fixture, 1_700_000_000_000);
     expect(feed.cards.length).toBe(fixture.active.length);

@@ -2,6 +2,12 @@ import type { FitKey } from '../../../shared/types';
 
 export const HAN_RE = /\p{Script=Han}/u;
 
+// Exact CI gate (scripts/check-no-cjk.sh): every script and range that is
+// forbidden in output. Scoped to stripOrTranslateCjk; HAN_RE stays the
+// Han-only predicate other modules import.
+const FORBIDDEN_CJK_RE =
+  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\uFF01-\uFF9F]/u;
+
 export const FIT_MAP: Record<string, FitKey> = {
   冲榜党: 'climber',
   多号党: 'multi',
@@ -95,27 +101,30 @@ export function stripOrTranslateCjk(raw: string): string {
   if (Object.hasOwn(TGE_STATUS_MAP, trimmed)) return TGE_STATUS_MAP[trimmed];
   if (Object.hasOwn(TAG_LABEL_MAP, trimmed)) return TAG_LABEL_MAP[trimmed];
   if (Object.hasOwn(RISK_ITEM_MAP, trimmed)) return RISK_ITEM_MAP[trimmed];
-  if (hasCjk(trimmed)) {
+  if (FORBIDDEN_CJK_RE.test(trimmed)) {
     console.warn('i18n-miss', trimmed);
-    // Keep the Latin remainder of mixed-script names instead of dropping the
-    // whole value: callers fall back to the raw CJK string when this returns
-    // '', which defeats the zero-CJK contract.
-    // Strip Han first (negation/timing chars make Latin-remainder unsafe to
-    // trust alone), then any remaining CJK scripts (Kana, Hangul). If nothing
-    // ASCII-safe remains, return '' so CALLERS apply their own fallbacks
+    // Keep the Latin remainder of mixed labels instead of dropping the whole
+    // value: callers fall back to the raw CJK string when this returns '',
+    // which defeats the zero-CJK contract. The gate mirrors check-no-cjk.sh
+    // exactly (Han/Kana/Hangul/Bopomofo + U+3000–303F + U+FF01–FF9F), so
+    // anything CI would reject enters this strip; if nothing ASCII-safe
+    // remains, return '' so CALLERS apply their own fallbacks
     // ('Unknown project', '—') instead of a hardcoded global placeholder.
     const stripped = trimmed
+      // Fullwidth digits are content, not decoration: fold to ASCII first —
+      // U+FF10–FF19 sit inside the U+FF01–FF9F range below — so edge digits
+      // survive. Fullwidth Latin (ＡＢＣ) is decoration and collapses away.
+      .replace(/[\uFF10-\uFF19]/gu, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
       .replace(/\p{Script=Han}+/gu, '')
       .replace(/\p{Script=Hiragana}+/gu, '')
       .replace(/\p{Script=Katakana}+/gu, '')
       .replace(/\p{Script=Hangul}+/gu, '')
-      // Leftover CJK punctuation/whitespace-only remains (已结束。 → '。')
-      // are not a usable label.
-      // Fullwidth digits (U+FF10–FF19) are content, not decoration —
-      // normalize them to ASCII before trimming so edge digits survive.
-      .replace(/[\uFF10-\uFF19]/gu, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
-      .replace(/^[\s\u3000-\u303F\uFF01-\uFF20]+/u, '')
-      .replace(/[\s\u3000-\u303F\uFF01-\uFF20]+$/u, '')
+      .replace(/\p{Script=Bopomofo}+/gu, '')
+      // Forbidden punctuation/fullwidth forms swap to spaces globally —
+      // single pass, no edge-only regexes — so mixed labels like
+      // 中foo。bar文 keep token boundaries (→ 'foo bar'); trailing trim
+      // cleans the edges. FF61–FF9F halfwidth forms are not output-safe.
+      .replace(/[\u3000-\u303F\uFF01-\uFF9F]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (stripped) return stripped;

@@ -81,7 +81,9 @@ function normalizeGrade(tier?: string): Grade {
 function normalizeTaskType(raw?: string): string {
   if (!raw) return '';
   const cleaned = stripOrTranslateCjk(raw);
-  return TASK_TYPE[cleaned] ?? cleaned;
+  // Unmapped CJK-only types strip to ''; TASK_TYPES needs a non-empty entry
+  // so type labels and filter chips stay populated.
+  return TASK_TYPE[cleaned] ?? (cleaned || 'other');
 }
 
 function safeNum(v: unknown, fallback = 0): number {
