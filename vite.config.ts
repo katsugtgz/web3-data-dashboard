@@ -2,7 +2,6 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const BASE = process.env.VITE_BASE || (process.env.GITHUB_ACTIONS ? '/web3-data-dashboard/' : '/');
-const API_BASE = (process.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
 
 function prefetchStaticSnapshots(): Plugin {
   let isStatic = false;
@@ -11,7 +10,7 @@ function prefetchStaticSnapshots(): Plugin {
   return {
     name: 'prefetch-static-snapshots',
     configResolved(config) {
-      isStatic = Boolean(config.env.VITE_STATIC) && !API_BASE;
+      isStatic = Boolean(config.env.VITE_STATIC) && !(config.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
       resolvedBase = config.base;
     },
     transformIndexHtml() {
