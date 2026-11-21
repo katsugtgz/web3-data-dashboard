@@ -50,8 +50,10 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
       <Avatar key={icon} name={c.n} src={icon} />
       <div className="cardtitle-wrap">
         <div className="cardname-line">
-          <span className="ranknum" aria-label={`Rank ${c.r}`}>
-            #{c.r}
+          <span className="ranknum">
+            <span className="sr">Rank </span>
+            <span aria-hidden="true">#</span>
+            {c.r}
           </span>
           <button type="button" className="cardname-btn" onClick={() => onDetails(c)}>
             {c.n}

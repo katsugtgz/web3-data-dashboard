@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Card, Dashboard } from '../shared/types';
 import { AirdropPanel } from './components/AirdropPanel';
+import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
 import { DashboardHeader } from './components/DashboardHeader';
 import { useAirdropFeed } from './hooks/useAirdropFeed';
 import { useAirdropFilters } from './hooks/useAirdropFilters';
@@ -51,6 +52,9 @@ function DashboardView({ data }: { data: Dashboard }) {
   const filters = useAirdropFilters(cards, saved, data.TYPE_MAP);
 
   const [tab, setTab] = useState<string>(() => findHashTab(data.TABS) ?? data.TABS[0].id);
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(
+    () => new Set([findHashTab(data.TABS) ?? data.TABS[0].id]),
+  );
   const [detail, setDetail] = useState<Card | null>(null);
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -58,29 +62,40 @@ function DashboardView({ data }: { data: Dashboard }) {
   const tabbarRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
 
-  const selectTab = useCallback((nextId: string, scrollPanel = true) => {
-    setTab(nextId);
-    if (window.location.hash !== `#${nextId}`) {
-      window.history.replaceState(null, '', `#${nextId}`);
-    }
-    tabRefs.current[nextId]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (scrollPanel && mainRef.current && tabbarRef.current) {
-      const mainTop = mainRef.current.getBoundingClientRect().top + window.scrollY;
-      const barHeight = tabbarRef.current.offsetHeight;
-      if (window.scrollY > mainTop - barHeight) {
-        window.scrollTo({ top: Math.max(0, mainTop - barHeight - 8), behavior: 'smooth' });
-      }
-    }
+  const markVisited = useCallback((nextId: string) => {
+    setVisitedTabs(prev => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
   }, []);
+
+  const selectTab = useCallback(
+    (nextId: string, scrollPanel = true) => {
+      setTab(nextId);
+      markVisited(nextId);
+      if (window.location.hash !== `#${nextId}`) {
+        window.history.replaceState(null, '', `#${nextId}`);
+      }
+      tabRefs.current[nextId]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (scrollPanel && mainRef.current && tabbarRef.current) {
+        const mainTop = mainRef.current.getBoundingClientRect().top + window.scrollY;
+        const barHeight = tabbarRef.current.offsetHeight;
+        if (window.scrollY > mainTop - barHeight) {
+          window.scrollTo({ top: Math.max(0, mainTop - barHeight - 8), behavior: 'smooth' });
+        }
+      }
+    },
+    [markVisited],
+  );
 
   useEffect(() => {
     const onHash = () => {
       const next = findHashTab(data.TABS);
-      if (next) setTab(next);
+      if (next) {
+        setTab(next);
+        markVisited(next);
+      }
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, [data.TABS]);
+  }, [data.TABS, markVisited]);
 
   // Global `/` shortcut to jump to search on the Airdrops tab
   useEffect(() => {
@@ -110,8 +125,7 @@ function DashboardView({ data }: { data: Dashboard }) {
     tabRefs.current[ids[i]]?.focus();
   };
 
-  const activeDemo = tab === 'airdrops' ? null : data.DEMO.find(d => d.id === tab) ?? null;
-  const activeDemoLabel = activeDemo ? data.TABS.find(t => t.id === activeDemo.id)?.label ?? activeDemo.id : '';
+  const mountedDemos = data.DEMO.filter(d => visitedTabs.has(d.id));
 
   return (
     <>
@@ -154,7 +168,7 @@ function DashboardView({ data }: { data: Dashboard }) {
       </div>
 
       <main id="main" ref={mainRef} className="container" tabIndex={-1}>
-        {tab === 'airdrops' ? (
+        <div hidden={tab !== 'airdrops'}>
           <AirdropPanel
             data={data}
             filters={filters}
@@ -167,11 +181,20 @@ function DashboardView({ data }: { data: Dashboard }) {
             onToggleSaved={toggleSaved}
             onSelectDetail={setDetail}
           />
-        ) : activeDemo ? (
-          <Suspense fallback={<p className="note" role="status">Loading {activeDemoLabel}…</p>}>
-            <DemoPanel key={activeDemo.id} section={activeDemo} label={activeDemoLabel} />
-          </Suspense>
-        ) : null}
+        </div>
+
+        {mountedDemos.map(d => {
+          const label = data.TABS.find(t => t.id === d.id)?.label ?? d.id;
+          return (
+            <div key={d.id} hidden={tab !== d.id}>
+              <ChunkErrorBoundary label={label}>
+                <Suspense fallback={<p className="note" role="status">Loading {label}…</p>}>
+                  <DemoPanel section={d} label={label} />
+                </Suspense>
+              </ChunkErrorBoundary>
+            </div>
+          );
+        })}
       </main>
 
       <footer>
@@ -189,18 +212,20 @@ function DashboardView({ data }: { data: Dashboard }) {
       </footer>
 
       {detail && (
-        <Suspense fallback={null}>
-          <DetailDialog
-            card={detail}
-            fit={data.FIT}
-            icons={data.IMGS}
-            saved={saved.has(detail.n)}
-            doneTasks={doneTasks}
-            onToggleSaved={toggleSaved}
-            onToggleTask={toggleTaskDone}
-            onClose={() => setDetail(null)}
-          />
-        </Suspense>
+        <ChunkErrorBoundary label="project details">
+          <Suspense fallback={null}>
+            <DetailDialog
+              card={detail}
+              fit={data.FIT}
+              icons={data.IMGS}
+              saved={saved.has(detail.n)}
+              doneTasks={doneTasks}
+              onToggleSaved={toggleSaved}
+              onToggleTask={toggleTaskDone}
+              onClose={() => setDetail(null)}
+            />
+          </Suspense>
+        </ChunkErrorBoundary>
       )}
     </>
   );

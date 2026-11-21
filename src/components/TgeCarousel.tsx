@@ -31,13 +31,14 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
   const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
   const otherCount = normalized.length - claimableCount - verifyCount;
+  const activeFilter: TgeFilter = filter === 'other' && otherCount === 0 ? 'all' : filter;
 
   const visible = useMemo(() => {
-    if (filter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
-    if (filter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
-    if (filter === 'other') return normalized.filter(i => i.statusKind === 'other');
+    if (activeFilter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
+    if (activeFilter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
+    if (activeFilter === 'other') return normalized.filter(i => i.statusKind === 'other');
     return normalized;
-  }, [normalized, filter]);
+  }, [normalized, activeFilter]);
 
   if (items.length === 0) return null;
 
@@ -48,20 +49,16 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   };
 
   return (
-    <div
-      className="tge-section"
-      role="region"
-      aria-label="Upcoming TGE and claimable airdrops"
-    >
+    <div className="tge-section">
       <div className="tge-toolbar">
         <div className="chipline" role="group" aria-label="Filter TGE status">
-          <button type="button" className="chip" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>
+          <button type="button" className="chip" aria-pressed={activeFilter === 'all'} onClick={() => setFilter('all')}>
             All <span className="chip-count mono">{normalized.length}</span>
           </button>
           <button
             type="button"
             className="chip"
-            aria-pressed={filter === 'claimable'}
+            aria-pressed={activeFilter === 'claimable'}
             onClick={() => setFilter('claimable')}
           >
             Claimable <span className="chip-count mono">{claimableCount}</span>
@@ -69,16 +66,16 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           <button
             type="button"
             className="chip"
-            aria-pressed={filter === 'verify'}
+            aria-pressed={activeFilter === 'verify'}
             onClick={() => setFilter('verify')}
           >
             Eligibility check <span className="chip-count mono">{verifyCount}</span>
           </button>
-          {(otherCount > 0 || filter === 'other') && (
+          {otherCount > 0 && (
             <button
               type="button"
               className="chip"
-              aria-pressed={filter === 'other'}
+              aria-pressed={activeFilter === 'other'}
               onClick={() => setFilter('other')}
             >
               Other <span className="chip-count mono">{otherCount}</span>
@@ -96,7 +93,13 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
       </div>
 
       {visible.length > 0 ? (
-        <div className="tge-rail" ref={railRef}>
+        <div
+          className="tge-rail"
+          ref={railRef}
+          role="region"
+          aria-label="Upcoming TGE and claimable airdrops"
+          tabIndex={0}
+        >
           {visible.map(it => (
             <article key={`${it.name}-${it.d}`} className="tge-card">
               <div className="tge-card-top">

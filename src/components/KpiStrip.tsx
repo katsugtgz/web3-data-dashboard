@@ -27,7 +27,7 @@ export function KpiStrip({
   onToggleSaved,
 }: Props) {
   return (
-    <div className="kpi-strip" aria-label="Dashboard metrics overview">
+    <div className="kpi-strip" role="group" aria-label="Dashboard metrics overview">
       <button
         type="button"
         className={`kpi-card${status === 'all' && grade === 'All' ? ' is-active' : ''}`}

@@ -28,7 +28,7 @@ jobs:
       - name: Build local bundle
         run: bun run build
         env:
-          GITHUB_ACTIONS: ''
+          VITE_BASE: '/'
       - name: Build GitHub Pages bundle
         run: bun run build:pages
         env:

@@ -1,6 +1,7 @@
 import type { RefObject } from 'react';
 import type { Card, Dashboard, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
+import { formatTgeStatus } from '../lib/labels';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';
@@ -31,6 +32,7 @@ export function AirdropPanel({
   onToggleSaved,
   onSelectDetail,
 }: Props) {
+  const hasOtherTge = tgeItems.some(it => formatTgeStatus(it.s).kind === 'other');
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
       ? 'No saved projects yet. Click the ★ icon on any project card to build your watchlist.'
@@ -127,10 +129,10 @@ export function AirdropPanel({
             </p>
           </div>
         </div>
-        <TgeCarousel items={tgeItems} />
+        <TgeCarousel key={hasOtherTge ? 'with-other' : 'no-other'} items={tgeItems} />
       </div>
 
-      <div className="categories-bar" aria-label="Airdrop categories">
+      <div className="categories-bar" role="group" aria-label="Airdrop categories">
         <span className="note">Ecosystem programs:</span>
         <div className="chipline">
           {data.CATEGORIES.map(c => (

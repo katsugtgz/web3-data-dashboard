@@ -351,6 +351,10 @@ h1.pagetitle {
   color: var(--muted);
   white-space: nowrap;
   max-width: 100%;
+}
+
+.feed-pill > span:not(.status-dot) {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -971,9 +975,12 @@ h2.section {
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-sm);
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.grid > .cardx:nth-child(n + 7) {
   content-visibility: auto;
   contain-intrinsic-size: auto 240px;
-  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .cardx:hover {

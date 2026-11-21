@@ -17,6 +17,7 @@ jobs:
   lighthouse:
     name: Lighthouse Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -29,7 +30,7 @@ jobs:
       - name: Build static bundle for Lighthouse
         run: bun run build:pages
         env:
-          GITHUB_ACTIONS: ''
+          VITE_BASE: '/'
           VITE_STATIC: '1'
       - name: Run Lighthouse CI
         run: npx --yes @lhci/cli@0.16.1 autorun
