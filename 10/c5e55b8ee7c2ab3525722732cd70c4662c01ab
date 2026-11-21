@@ -1,0 +1,44 @@
+shared/types.ts
+  h_cc1f32aec57e6b 173-187
+src/App.tsx
+  h_cc1f32aec57e6b 3-4,9-10,19-20,35,41-42,44-45,57-119,153,164,210-213,238,250,286-295,302,307,313-314
+src/components/AgentProfileDialog.tsx
+  h_cc1f32aec57e6b 1-247
+src/components/AirdropPanel.tsx
+  h_cc1f32aec57e6b 20,33,94
+src/components/DashboardHeader.tsx
+  h_cc1f32aec57e6b 11,52,114-123
+src/components/DashboardPanels.tsx
+  h_cc1f32aec57e6b 3,65,77
+src/components/DetailDialog.tsx
+  h_cc1f32aec57e6b 1-4,154,159,166,171,174,180-181,218-245,281,286,293,298,322,325,330
+src/components/DropsPanel.tsx
+  h_cc1f32aec57e6b 2,17,29,76
+src/components/FeedCard.tsx
+  h_cc1f32aec57e6b 7,20,22,94-113
+src/components/ProjectCard.tsx
+  h_cc1f32aec57e6b 167,170,237-242
+src/components/Toast.tsx
+  h_cc1f32aec57e6b 1-16
+src/hooks/useAgentProfile.ts
+  h_cc1f32aec57e6b 1-101
+src/lib/agentBrief.test.ts
+  h_cc1f32aec57e6b 1-111
+src/lib/agentBrief.ts
+  h_cc1f32aec57e6b 1-215
+src/lib/clipboard.ts
+  h_cc1f32aec57e6b 1-37
+src/styles.css
+  h_cc1f32aec57e6b 2093-2236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10c5e55b8ee7c2ab3525722732cd70c4662c01ab",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
