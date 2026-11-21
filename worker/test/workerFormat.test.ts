@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fmtUsd } from '../../worker/src/lib/format';
+import { fmtUsd } from '../src/lib/format';
 
 describe('worker fmtUsd bound behavior', () => {
   test('tiny amounts: fixed decimals, then em-dash floor (no false zero)', () => {
