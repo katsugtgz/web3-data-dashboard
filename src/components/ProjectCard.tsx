@@ -236,10 +236,14 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
         <CardBestTask card={c} onDetails={onDetails} />
         <div className="card-bottom-row">
           <CardScore card={c} />
-          <button type="button" className="chip" onClick={() => onCopyBrief(c)}>
-            Copy agent brief
-            <span className="sr"> for {c.n}</span>
-          </button>
+          {c.b.includes('risk') ? (
+            <span className="note risk-blocked">Not available for RISK items</span>
+          ) : (
+            <button type="button" className="chip" onClick={() => onCopyBrief(c)}>
+              Copy agent brief
+              <span className="sr"> for {c.n}</span>
+            </button>
+          )}
         </div>
       </div>
     </article>

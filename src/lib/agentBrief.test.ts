@@ -38,7 +38,7 @@ describe('agentBrief generator', () => {
     expect(buildBrief(riskItem, profile)).toBeNull();
   });
 
-  test('marks Turnstile and Sign message as HUMAN-REQUIRED and isolates unknown links', () => {
+  test('keeps curated tasks human-only, isolates their URLs, and reports cost accurately', () => {
     const card: Card = {
       r: 1,
       n: 'MegaTestnet',
@@ -55,6 +55,7 @@ describe('agentBrief generator', () => {
       tasks: [
         { title: 'Pass Cloudflare Turnstile faucet check', type: 'faucet', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://faucet.megatestnet.xyz' },
         { title: 'Sign message to register eligibility', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: 2, url: 'https://app.megatestnet.xyz' },
+        { title: 'Review campaign', type: 'other', status: 'OPEN', cost: -1, timeMinutes: null, url: null },
       ],
       sc: 92,
       sub: [9, 9, null],
@@ -65,10 +66,16 @@ describe('agentBrief generator', () => {
     expect(md).not.toBeNull();
     expect(md!).toContain('# Task: MegaTestnet');
     expect(md!).toContain('## Goal');
-    expect(md!).toContain('## Official links (verified)');
+    expect(md!).toContain('### Unverified, do NOT open');
     expect(md!).toContain('## Steps');
     expect(md!).toContain('1. ⛔ HUMAN-REQUIRED: Pass Cloudflare Turnstile faucet check');
     expect(md!).toContain('2. ⛔ HUMAN-REQUIRED: Sign message to register eligibility');
+    expect(md!).toContain('3. ⛔ HUMAN-REQUIRED: Review campaign (other · cost unknown)');
+    const steps = md!.split('## Steps')[1].split('## Constraints')[0];
+    expect(steps).not.toContain('https://');
+    expect(buildBrief({ ...card, b: ['risk'] }, profile)).toBeNull();
+    expect(buildBrief({ ...card, tasks: undefined, best: { ...card.best, c: '$2.50' } }, profile)).toContain('~$2.5');
+    expect(buildBrief({ ...card, tasks: undefined, best: { ...card.best, c: '—' } }, profile)).toContain('cost unknown');
     expect(md!).toContain('## Constraints');
     expect(md!).toContain('Budget cap: $15; time cap: 25 min');
     expect(md!).toContain('## Environment');
@@ -88,6 +95,7 @@ describe('agentBrief generator', () => {
       summary: 'Run testnet interactions and follow social',
       links: [
         { url: 'https://galxe.com/newchain', known: true },
+        { url: 'http://example.com/task', known: true },
         { url: 'https://sketchy-unverified.xyz/app', known: false },
       ],
       sources: [{ platform: 'telegram', handle: 'alpha_ch', postUrl: 'https://t.me/alpha_ch/9', postedAt: Date.now() }],
@@ -99,12 +107,15 @@ describe('agentBrief generator', () => {
     };
 
     const md = buildBrief(warnItem, profile)!;
+    expect(md.split('## Goal')[1].split('## Official links')[0]).not.toContain(warnItem.summary);
     expect(md).toContain('CAUTION: Marked WARN');
     expect(md).toContain('### Unverified, do NOT open');
     const [verifiedSection, unverifiedSection] = md.split('### Unverified, do NOT open');
     expect(verifiedSection).toContain('https://galxe.com/newchain');
+    expect(verifiedSection).not.toContain('http://example.com/task');
     expect(verifiedSection).not.toContain('https://sketchy-unverified.xyz/app');
     expect(unverifiedSection).toContain('https://sketchy-unverified.xyz/app');
+    expect(unverifiedSection).toContain('http://example.com/task');
     expect(md).toContain('⛔ HUMAN-REQUIRED:');
     expect(HAN_RE.test(md)).toBe(false);
   });

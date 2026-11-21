@@ -189,29 +189,33 @@ function DetailDialogBody({
 
       {copyStatus && <CopyStatusBanner status={copyStatus} />}
 
-      <div className="dlg-brief-bar">
-        <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
-          Copy agent brief
-        </button>
-        <button
-          type="button"
-          className="chip"
-          aria-expanded={showBrief}
-          onClick={() => setShowBrief(v => !v)}
-        >
-          {showBrief ? 'Hide preview' : 'Preview brief'}
-        </button>
-        <button
-          type="button"
-          className="chip"
-          onClick={() => {
-            const md = buildBrief(card, profile);
-            if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
-          }}
-        >
-          Download .md
-        </button>
-      </div>
+      {card.b.includes('risk') ? (
+        <p className="note risk-blocked">Brief unavailable for RISK items.</p>
+      ) : (
+        <div className="dlg-brief-bar">
+          <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
+            Copy agent brief
+          </button>
+          <button
+            type="button"
+            className="chip"
+            aria-expanded={showBrief}
+            onClick={() => setShowBrief(v => !v)}
+          >
+            {showBrief ? 'Hide preview' : 'Preview brief'}
+          </button>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              const md = buildBrief(card, profile);
+              if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
+            }}
+          >
+            Download .md
+          </button>
+        </div>
+      )}
 
       {showBrief && renderedBrief && (
         <pre className="brief-preview mono">{renderedBrief}</pre>
