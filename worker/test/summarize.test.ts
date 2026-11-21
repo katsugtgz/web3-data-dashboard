@@ -142,4 +142,68 @@ describe('Workers AI summary normalization & budget guard', () => {
     expect(res).toBeNull();
     expect(called).toBe(false);
   });
+
+  test('dailyMax 0 reserves nothing and never calls AI, even on a fresh counter', async () => {
+    const db = createSqliteD1();
+    let called = false;
+    const ai: AiBindingLike = {
+      async run() {
+        called = true;
+        return { response: JSON.stringify({ summary: 'ok', taskTypes: [], chains: [] }) };
+      },
+    };
+
+    const res = await summarizeClusterWithAi(ai, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      dailyMax: 0,
+    });
+    expect(res).toBeNull();
+    expect(called).toBe(false);
+
+    const usage = await db.prepare(`SELECT calls FROM ai_usage`).all<{ calls: number }>();
+    expect(usage.results?.length ?? 0).toBe(0);
+  });
+
+  test('concurrent summaries cannot exceed the daily cap and exact parse-zero of seeded rows is honored', async () => {
+    const db = createSqliteD1();
+    const cap = 3;
+    let calls = 0;
+    const ai: AiBindingLike = {
+      async run() {
+        calls++;
+        return { response: JSON.stringify({ summary: 'Concurrent reservation probe.', taskTypes: [], chains: [] }) };
+      },
+    };
+
+    // Seed the counter with a stringified number to prove `calls` parses as a
+    // number (D1 may hand back text), then fire 8 concurrent callers at cap 3.
+    const day = new Date().toISOString().slice(0, 10);
+    await db.prepare(`INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)`).bind(day, '0').run();
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        summarizeClusterWithAi(ai, db, {
+          clusterId: 'c1',
+          project: 'KiteAI',
+          rawTexts: ['post'],
+          isNewCluster: true,
+          isNonLatinSource: false,
+          riskLevel: 'ok',
+          dailyMax: cap,
+        }),
+      ),
+    );
+
+    const succeeded = results.filter(r => r !== null).length;
+    expect(succeeded).toBe(cap);
+    expect(calls).toBe(cap);
+
+    const row = await db.prepare(`SELECT calls FROM ai_usage WHERE day = ?1`).bind(day).first<{ calls: number }>();
+    expect(Number(row?.calls)).toBe(cap);
+  });
 });

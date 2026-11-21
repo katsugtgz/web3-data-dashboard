@@ -93,22 +93,27 @@ export async function summarizeClusterWithAi(
   const day = new Date(nowMs).toISOString().slice(0, 10);
   const dailyMax = opts.dailyMax ?? 300;
 
-  const usageRow = await db
-    .prepare('SELECT calls FROM ai_usage WHERE day = ?1')
-    .bind(day)
-    .first<{ calls: number }>();
+  if (dailyMax <= 0) return null;
 
-  if ((usageRow?.calls ?? 0) >= dailyMax) {
-    return null;
-  }
-
-  await db
+  // Atomically reserve one call. The conditional upsert commits the increment
+  // only while the counter is strictly under the cap, so parallel callers
+  // (6 concurrent summaries per cron tick) cannot exceed AI_DAILY_MAX. The
+  // losing caller's guarded upsert matches zero rows and RETURNING yields
+  // nothing → no AI call. The `dailyMax <= 0` check above closes the
+  // first-insert-of-the-day path (the upsert's WHERE only guards conflicts).
+  const reserved = await db
     .prepare(
       `INSERT INTO ai_usage (day, calls) VALUES (?1, 1)
-       ON CONFLICT(day) DO UPDATE SET calls = calls + 1`,
+       ON CONFLICT(day) DO UPDATE SET calls = ai_usage.calls + 1
+       WHERE ai_usage.calls < ?2
+       RETURNING calls`,
     )
-    .bind(day)
-    .run();
+    .bind(day, dailyMax)
+    .first<{ calls: number }>();
+
+  if (!reserved || typeof reserved.calls !== 'number' || !Number.isFinite(reserved.calls)) {
+    return null;
+  }
 
   const excerpt = opts.rawTexts.join('\n---\n').slice(0, 1400);
   let rawOut: unknown;
