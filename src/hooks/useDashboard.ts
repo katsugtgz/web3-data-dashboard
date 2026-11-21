@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { Dashboard } from '../../shared/types';
 
+type PrefetchResult = { data: Dashboard; error?: undefined } | { data?: undefined; error: string };
+
+declare global {
+  interface Window {
+    __ICQ_DASHBOARD__?: Promise<PrefetchResult>;
+  }
+}
+
 /**
  * Dashboard data source:
  * - dev / `bun start`: `/api/dashboard` from the Bun server.
@@ -16,17 +24,29 @@ export function useDashboard(): { data: Dashboard | null; error: string | null }
 
     const loadJson = (res: Response): Promise<void> => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return (res.json() as Promise<Dashboard>).then(setData);
+      return (res.json() as Promise<Dashboard>).then(next => {
+        if (!ctrl.signal.aborted) setData(next);
+      });
     };
     const fail = (e: unknown): void => {
       if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
     };
 
     if (import.meta.env.VITE_STATIC) {
-      // Static Pages build: fetch the bundled snapshot only.
-      fetch(`${import.meta.env.BASE_URL}data/dashboard.json`, { signal: ctrl.signal })
-        .then(loadJson)
-        .catch(fail);
+      const prefetched = window.__ICQ_DASHBOARD__;
+      if (prefetched) {
+        prefetched.then(res => {
+          if (ctrl.signal.aborted) return;
+          delete window.__ICQ_DASHBOARD__;
+          if (res.data) setData(res.data);
+          else setError(res.error ?? 'Failed to load dashboard');
+        });
+      } else {
+        // Static Pages build: fetch the bundled snapshot only.
+        fetch(`${import.meta.env.BASE_URL}data/dashboard.json`, { signal: ctrl.signal })
+          .then(loadJson)
+          .catch(fail);
+      }
     } else {
       // Dev / `bun start`: API first, fall back to the bundled snapshot if the API is unreachable.
       fetch('/api/dashboard', { signal: ctrl.signal })
