@@ -14,7 +14,7 @@ import type {
 } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
-import { buildSurfIndex } from '../worker/src/normalize/cluster';
+import { buildSurfIndex, computeClusterId } from '../worker/src/normalize/cluster';
 import { getRegistrableDomain, parseDropPost } from '../worker/src/normalize/parse';
 import { computeScore } from '../worker/src/normalize/score';
 import { collectKnownDomainEntries, evaluateSafety } from '../worker/src/safety';
@@ -44,8 +44,12 @@ async function fetchJson(url: string): Promise<unknown> {
 
 async function buildAirdrops(): Promise<AirdropFeed> {
   if (workerBase) {
-    const res = await fetch(`${workerBase}/airdrops.json`);
-    if (res.ok) return (await res.json()) as AirdropFeed;
+    try {
+      const res = await fetch(`${workerBase}/airdrops.json`);
+      if (res.ok) return (await res.json()) as AirdropFeed;
+    } catch (err) {
+      console.warn('Worker airdrops read failed, using local fallback:', err);
+    }
   }
   try {
     return await fetchSurfAirdrops(undefined, nowMs);
@@ -58,8 +62,12 @@ async function buildAirdrops(): Promise<AirdropFeed> {
 
 async function buildMarkets(): Promise<MarketsResponse> {
   if (workerBase) {
-    const res = await fetch(`${workerBase}/markets.json`);
-    if (res.ok) return (await res.json()) as MarketsResponse;
+    try {
+      const res = await fetch(`${workerBase}/markets.json`);
+      if (res.ok) return (await res.json()) as MarketsResponse;
+    } catch (err) {
+      console.warn('Worker markets read failed, using local fallback:', err);
+    }
   }
 
   const sections: MarketSection[] = [];
@@ -78,8 +86,15 @@ async function buildMarkets(): Promise<MarketsResponse> {
     sections.push(cryptoRes.value.section);
     sectors = cryptoRes.value.sectors;
   }
-  for (const r of [defiRes, yieldsRes, polyRes, dexRes, ghRes]) {
+  for (const [name, r] of [
+    ['defi', defiRes],
+    ['yields', yieldsRes],
+    ['predictions', polyRes],
+    ['trending', dexRes],
+    ['github', ghRes],
+  ] as const) {
     if (r.status === 'fulfilled') sections.push(r.value);
+    else console.warn(`markets section "${name}" rejected:`, r.reason);
   }
 
   return { generatedAt: nowMs, sections, sectors };
@@ -90,12 +105,25 @@ async function buildDropsAndSources(
   markets: MarketsResponse,
 ): Promise<{ feed: FeedResponse; sources: SourceHealth[] }> {
   if (workerBase) {
-    const [fRes, sRes] = await Promise.all([fetch(`${workerBase}/feed.json`), fetch(`${workerBase}/sources.json`)]);
-    if (fRes.ok && sRes.ok) {
-      return {
-        feed: (await fRes.json()) as FeedResponse,
-        sources: (await sRes.json()) as SourceHealth[],
-      };
+    const [fRes, sRes] = await Promise.allSettled([
+      fetch(`${workerBase}/feed.json`),
+      fetch(`${workerBase}/sources.json`),
+    ]);
+    if (fRes.status === 'fulfilled' && sRes.status === 'fulfilled' && fRes.value.ok && sRes.value.ok) {
+      try {
+        return {
+          feed: (await fRes.value.json()) as FeedResponse,
+          sources: (await sRes.value.json()) as SourceHealth[],
+        };
+      } catch (err) {
+        console.warn('Worker feed/sources JSON parse failed, using local fallback:', err);
+      }
+    } else {
+      console.warn(
+        'Worker feed/sources read failed; using local fallback:',
+        fRes.status === 'rejected' ? fRes.reason : `feed HTTP ${fRes.value.status}`,
+        sRes.status === 'rejected' ? sRes.reason : `sources HTTP ${sRes.value.status}`,
+      );
     }
   }
 
@@ -106,18 +134,36 @@ async function buildDropsAndSources(
   const surfIndex = buildSurfIndex(airdrops);
 
   const tgEnabled = SEED_SOURCES.filter(s => s.platform === 'telegram' && s.enabled);
-  const sampleBatch = tgEnabled.slice(0, 12);
+  // Rotate through the registry: without a usable WORKER_URL only 12 channels
+  // can be polled per run, so successive runs cover the rest instead of
+  // always omitting the same tail.
+  const runSlot = Math.floor(nowMs / (6 * 3_600_000)) % Math.max(1, Math.ceil(tgEnabled.length / 12));
+  const sampleBatch = tgEnabled.slice(runSlot * 12, runSlot * 12 + 12);
+  // Health reflects actual probe outcomes: only channels attempted this run
+  // are reported (ok after a successful fetch+parse). Marking the whole
+  // registry healthy — including unpolled X sources and failed fetches —
+  // made the popover lie. X sources are unprobed here and simply omitted;
+  // the Worker's /sources.json stays the source of truth for live health.
   const healthMap = new Map<string, SourceHealth>();
-
-  for (const s of SEED_SOURCES.filter(x => x.enabled)) {
-    healthMap.set(`${s.platform}:${s.handle}`, {
-      id: `${s.platform}:${s.handle}`,
-      platform: s.platform,
-      handle: s.handle,
+  for (const src of sampleBatch) {
+    healthMap.set(`telegram:${src.handle}`, {
+      id: `telegram:${src.handle}`,
+      platform: 'telegram',
+      handle: src.handle,
       status: 'ok',
       lastOkAt: nowMs,
     });
   }
+  const markChannelFailure = (handle: string) => {
+    const id = `telegram:${handle}`;
+    healthMap.set(id, {
+      id,
+      platform: 'telegram',
+      handle,
+      status: 'down',
+      lastOkAt: null,
+    });
+  };
 
   interface AccCluster {
     id: string;
@@ -142,20 +188,19 @@ async function buildDropsAndSources(
 
   const processPosts = async (src: (typeof sampleBatch)[number], html: string) => {
     const posts = await parseTelegramHtml(html, src.handle);
-    for (const post of posts.slice(0, 6)) {
+    // t.me/s pages are oldest-first: keep the NEWEST posts per channel, then
+    // apply the 14-day cutoff. (The first-six slice silently dropped the
+    // freshest posts on pages with more than six messages.)
+    for (const post of [...posts].sort((a, b) => b.postedAt - a.postedAt).slice(0, 6)) {
       if (post.postedAt < cutoff) continue;
       const parsed = parseDropPost(post.text, post.urls, {
         knownDomains: projectDomains,
         surfByDomain: surfIndex.byDomain,
         surfByTicker: surfIndex.byTicker,
       });
-      const cid = parsed.projectDomain
-        ? await sha1Hex(`dom:${parsed.projectDomain.toLowerCase()}`)
-        : parsed.ticker
-          ? await sha1Hex(`tick:$${parsed.ticker.toUpperCase()}`)
-          : parsed.project === 'Web3 Project'
-            ? await sha1Hex(`post:${src.handle}:${post.msgId}`)
-            : await sha1Hex(`proj:${parsed.project.toLowerCase().replace(/[^a-z0-9]+/g, '')}`);
+      // Same identity rule as the Worker: drift here silently split or
+      // merged clusters between the committed snapshot and the live feed.
+      const cid = await computeClusterId(parsed.projectDomain, parsed.ticker, parsed.project, `${src.handle}:${post.msgId}`);
 
       const srcId = `telegram:${src.handle}`;
       const surfMatch =
@@ -210,6 +255,7 @@ async function buildDropsAndSources(
         const html = await fetchTelegramChannelHtml(src.handle);
         await processPosts(src, html);
       } catch {
+        markChannelFailure(src.handle);
         const fixturePath = join('worker/test/fixtures/telegram', `${src.handle}.html`);
         try {
           const html = await readFile(fixturePath, 'utf8');
@@ -283,7 +329,10 @@ async function buildDropsAndSources(
     });
   }
 
-  items.sort((a, b) => b.score - a.score || b.lastSeen - a.lastSeen);
+  // Deterministic order: id tiebreak matches the Worker's queryFeed, so two
+  // runs over identical data produce byte-identical feeds regardless of
+  // network completion order.
+  items.sort((a, b) => b.score - a.score || b.lastSeen - a.lastSeen || a.id.localeCompare(b.id));
   return {
     feed: { generatedAt: nowMs, items: items.slice(0, 100) },
     sources: [...healthMap.values()],
@@ -293,6 +342,14 @@ async function buildDropsAndSources(
 await mkdir('data/snapshot', { recursive: true });
 const [airdrops, markets] = await Promise.all([buildAirdrops(), buildMarkets()]);
 const { feed, sources } = await buildDropsAndSources(airdrops, markets);
+// Never publish empty payloads: a total fetch failure must keep the last
+// committed snapshot instead of wiping markets (or the feed) to `[]`.
+if (markets.sections.length === 0) {
+  throw new Error('All market fetches failed — refusing to overwrite data/snapshot/markets.json with zero sections');
+}
+if (feed.items.length === 0) {
+  throw new Error('Feed had zero items — refusing to overwrite data/snapshot/feed.json');
+}
 await writeFile('data/snapshot/airdrops.json', JSON.stringify(airdrops));
 await writeFile('data/snapshot/markets.json', JSON.stringify(markets));
 await writeFile('data/snapshot/feed.json', JSON.stringify(feed));

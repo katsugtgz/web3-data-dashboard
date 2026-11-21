@@ -15,8 +15,9 @@ async function loadCandidates(): Promise<CandidateSource[]> {
     return JSON.parse(await readFile(inputPath, 'utf8')) as CandidateSource[];
   }
   if (!apiBase) {
-    console.log('No VITE_API_BASE / WORKER_URL set; returning empty candidates list.');
-    return [];
+    // An empty candidate list published to the issue reads as "nothing
+    // qualified"; a missing config must fail the run instead of wiping it.
+    throw new Error('VITE_API_BASE / WORKER_URL is not set — refusing to publish an empty candidates issue');
   }
   const res = await fetch(`${apiBase}/sources/candidates.json`, {
     headers: { 'User-Agent': 'web3-radar-discovery/1.0' },

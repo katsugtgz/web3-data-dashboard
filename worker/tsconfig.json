@@ -3,6 +3,7 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "lib": ["ESNext"],
     "strict": true,
     "noUnusedLocals": true,
@@ -12,5 +13,5 @@
     "resolveJsonModule": true,
     "types": ["bun", "@cloudflare/workers-types"]
   },
-  "include": ["src", "../shared", "../scripts"]
+  "include": ["src", "test", "../shared", "../scripts"]
 }

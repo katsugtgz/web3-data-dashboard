@@ -27,6 +27,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            # A scheduled run writing nothing while reporting green hides the
+            # misconfiguration; only manual/dispatch runs may dry-run.
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "::error::Scheduled ingest cannot run: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not configured."
+              exit 1
+            fi
             echo "::notice::Cloudflare secrets not configured; running --dry-run."
             bun run ingest:heavy -- --dry-run
             exit 0

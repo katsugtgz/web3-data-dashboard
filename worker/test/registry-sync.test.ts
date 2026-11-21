@@ -9,7 +9,7 @@ import { SEED_SOURCES, syncSources, validateSources } from '../src/sources/regis
  */
 function createCountingD1(): { db: D1Database; sourceWriteCount(): number } {
   const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql']) {
+  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
     sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
   }
   let writes = 0;
@@ -211,5 +211,61 @@ describe('syncSources conditional registry sync', () => {
     const baseline = sourceWriteCount();
     await syncSources(db, SEED_SOURCES);
     expect(sourceWriteCount()).toBe(baseline);
+  });
+
+  test('a case-only handle edit updates the existing row instead of inserting a parallel source', async () => {
+    const { db } = createCountingD1();
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'Alpha_Feed', lang: 'en', trust: 0.8, tags: [], enabled: true },
+    ]));
+    await db
+      .prepare("UPDATE sources SET status = 'down', fail_count = 3, next_poll_at = 777 WHERE id = 'telegram:Alpha_Feed'")
+      .run();
+
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'alpha_feed', lang: 'en', trust: 0.8, tags: [], enabled: true },
+    ]));
+
+    const rows = await db.prepare('SELECT id, status, fail_count, enabled FROM sources').all<{ id: string; status: string; fail_count: number; enabled: number }>();
+    expect(rows.results?.length).toBe(1);
+    expect(rows.results?.[0]).toMatchObject({ id: 'telegram:Alpha_Feed', status: 'down', fail_count: 3, enabled: 1 });
+  });
+
+  test('a source removed from the config is disabled and stops polling, history intact', async () => {
+    const { db, sourceWriteCount } = createCountingD1();
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'keep_me', lang: 'en', trust: 0.8, tags: [], enabled: true },
+      { platform: 'telegram', handle: 'drop_me', lang: 'en', trust: 0.7, tags: [], enabled: true },
+    ]));
+    await db
+      .prepare("UPDATE sources SET status = 'ok', fail_count = 0, next_poll_at = 999 WHERE id = 'telegram:drop_me'")
+      .run();
+    const baseline = sourceWriteCount();
+
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'keep_me', lang: 'en', trust: 0.8, tags: [], enabled: true },
+    ]));
+
+    expect(sourceWriteCount() - baseline).toBe(1); // exactly the disable write
+    const dropped = await getSource(db, 'telegram:drop_me');
+    expect(dropped).toMatchObject({ enabled: 0, next_poll_at: 999 }); // history preserved
+    const kept = await getSource(db, 'telegram:keep_me');
+    expect(kept).toMatchObject({ enabled: 1 });
+  });
+
+  test('a tags-only edit is persisted as a config change', async () => {
+    const { db, sourceWriteCount } = createCountingD1();
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'alpha_feed', lang: 'en', trust: 0.8, tags: [], enabled: true },
+    ]));
+    const baseline = sourceWriteCount();
+    await syncSources(db, validateSources([
+      { platform: 'telegram', handle: 'alpha_feed', lang: 'en', trust: 0.8, tags: ['alpha'], enabled: true },
+    ]));
+    expect(sourceWriteCount() - baseline).toBe(1);
+    const row = await getSource(db, 'telegram:alpha_feed');
+    expect(row).not.toBeNull();
+    expect(JSON.parse((row?.tags as string) ?? 'null')).toEqual(['alpha']);
+    expect(row).toMatchObject({ status: 'ok' });
   });
 });
