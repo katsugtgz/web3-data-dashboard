@@ -9,4 +9,13 @@ export const URL_SHORTENERS: Record<string, true> = {
   'ow.ly': true,
   'goo.gl': true,
   'shorturl.at': true,
+  'buff.ly': true,
+  'tiny.cc': true,
+  'rebrand.ly': true,
+  'lnkd.in': true,
+  'dub.sh': true,
+  'v.gd': true,
+  'bl.ink': true,
+  'short.io': true,
+  'adf.ly': true,
 };

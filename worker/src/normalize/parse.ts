@@ -59,8 +59,14 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Linea', /\blinea\b/i],
   ['Scroll', /\bscroll\b/i],
   ['Polygon', /\bpolygon\b|\bmatic\b/i],
-  ['TON', /\btoncoin\b|\bton ?(?:blockchain|network)\b|\btelegram open network\b|\bTON\b/],
+  // The coin/network phrases need case-insensitivity ('Toncoin', 'Telegram
+  // Open Network'); the bare ticker stays uppercase-only so 'a ton of
+  // rewards' never tags TON. The first row carries /i for phrases; extract
+  // dedupes chain names, so the second row never doubles the entry.
+  ['TON', /\btoncoin\b|\bton ?(?:blockchain|network)\b|\btelegram open network\b/i],
+  ['TON', /\bTON\b/],
   ['Sei', /\bsei\b(?:\s+(?:network|chain))?/],
+  ['Sei', /\bsei\b(?:\s+(?:network|chain))?/i],
   ['Injective', /\binjective\b/i],
   ['Celestia', /\bcelestia\b|\btia\b/i],
   ['Avalanche', /\bavalanche\b|\bavax\b/i],

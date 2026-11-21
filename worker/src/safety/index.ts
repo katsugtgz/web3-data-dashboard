@@ -5,11 +5,12 @@ import { URL_SHORTENERS } from './shorteners';
 export { URL_SHORTENERS };
 
 // Wallet-drain phrasing: require the scam-specific shape (a claim promise
-// gated behind connecting a wallet, or an eligibility check that asks for
-// wallet validation). Plain 'claim now' / 'seed phrase' in security warnings
-// and ordinary airdrop announcements must NOT match, or legit posts get hidden.
+// gated behind connecting a wallet in the SAME clause, or an eligibility
+// check that asks for wallet validation). The window between 'claim' and the
+// wallet word is capped so 'Claim your rewards to your wallet' style ordinary
+// announcements with later 'wallet' mentions don't trip it.
 export const DRAINER_RE =
-  /claim (?:now|your)[^.!?]*\b(?:connect|wallet)\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ .*(?:verify|validate) wallet|airdrop is live[^.!?]*claim/i;
+  /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}claim/i;
 
 export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['galxe.com', 'Galxe'],
