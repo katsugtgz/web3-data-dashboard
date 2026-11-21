@@ -41,3 +41,36 @@ describe('market formatters and normalizers', () => {
     expect(sec.rows[0].cells).toEqual(['USDC', 'aave-v3', 'Arbitrum', '$120.00M', '6.50%', 'No']);
   });
 });
+
+describe('market row sort contract', () => {
+  test('yields rows carry raw anchors and stable ids including IL-risk transition', () => {
+    const sec = normalizeDefiYields(
+      {
+        data: [
+          { pool: 'uuid-c', symbol: 'USDC', project: 'aave-v3', chain: 'Arbitrum', tvlUsd: 120_000_000, apy: 6.5, ilRisk: 'no' },
+          { pool: 'uuid-s', symbol: 'STETH', project: 'lido', chain: 'Ethereum', tvlUsd: 15_240_000_000, apy: null, ilRisk: 'yes' },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    const steth = sec.rows[0];
+    expect(steth.id).toBe('uuid-s');
+    expect(steth.cells[4]).toBe('—');
+    expect(steth.cells[5]).toBe('Yes');
+    expect(steth.sortValues).toEqual(['STETH', 'lido', 'Ethereum', 15_240_000_000, null, 1]);
+    const usdc = sec.rows[1];
+    expect(usdc.id).toBe('uuid-c');
+    expect(usdc.sortValues).toEqual(['USDC', 'aave-v3', 'Arbitrum', 120_000_000, 6.5, 0]);
+  });
+
+  test('DeFi rows carry exact signed 1d/7d percentages and raw TVL', () => {
+    const sec = normalizeDefiProtocols(
+      [{ id: 42, slug: 'lido', name: 'Lido', category: 'Liquid Staking', tvl: 15_260_000_000, chains: ['Ethereum'], change_1d: -9.03125, change_7d: -17.75, url: 'https://lido.fi/' }],
+      1_700_000_000_000,
+    );
+    expect(sec.rows[0].id).toBe('lido');
+    expect(sec.rows[0].cells[4]).toBe('-9.03%');
+    expect(sec.rows[0].sortValues).toEqual(['Lido', 'Liquid Staking', 'Ethereum', 15_260_000_000, -9.03125, -17.75]);
+  });
+});
+

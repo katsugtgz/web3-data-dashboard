@@ -76,6 +76,15 @@ export type MarketSectionId = 'crypto' | 'defi' | 'yields' | 'predictions' | 'tr
 
 export interface MarketRow {
   cells: string[];
+  /** Stable row identity (source-native id, e.g. coin id, pool id, repo full name). */
+  id?: string;
+  /**
+   * Sort anchors per column, aligned with `cells` by index. Raw numeric values
+   * (exact signed percentages, USD amounts, counts, Unix-ms timestamps) let the
+   * frontend sort without guessing from display strings. `null` marks an
+   * unsortable/absent value ("—").
+   */
+  sortValues?: (string | number | null)[];
   chain?: string;
   href?: string;
 }

@@ -76,12 +76,20 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
     const coins = await fetchJson<CgCoin[]>(cgUrl);
     if (!Array.isArray(coins) || coins.length === 0) throw new Error('Empty CoinGecko markets');
     const rows: MarketRow[] = coins.slice(0, 50).map(c => ({
+      id: c.id,
       cells: [
         `${stripOrTranslateCjk(c.name) || c.symbol.toUpperCase()} (${c.symbol.toUpperCase()})`,
         fmtPrice(c.current_price),
         fmtPct(c.price_change_percentage_24h),
         fmtUsd(c.total_volume),
         fmtUsd(c.market_cap),
+      ],
+      sortValues: [
+        `${stripOrTranslateCjk(c.name) || c.symbol.toUpperCase()} (${c.symbol.toUpperCase()})`,
+        c.current_price,
+        c.price_change_percentage_24h,
+        c.total_volume,
+        c.market_cap,
       ],
       href: `https://www.coingecko.com/en/coins/${encodeURIComponent(c.id)}`,
     }));
@@ -139,7 +147,9 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
         blurb: 'Top 50 USDT spot pairs by 24h quote volume (Binance public fallback).',
         cols: ['Coin', 'Price', '24h', '24h volume', 'Pair'],
         rows: usdt.map(t => ({
+          id: `${t.base}USDT`,
           cells: [t.base, fmtPrice(t.price), fmtPct(t.change), fmtUsd(t.vol), `${t.base}/USDT`],
+          sortValues: [t.base, t.price, t.change, t.vol, `${t.base}/USDT`],
           href: `https://www.binance.com/en/trade/${encodeURIComponent(t.base)}_USDT`,
         })),
         source: 'Binance Vision',
@@ -161,6 +171,30 @@ interface PolyMarket {
   endDate?: string;
 }
 
+/** Numeric sort anchor for USD-formatted cells; null mirrors fmtUsd's absent value. */
+function usdSort(amount: number | string | null | undefined): number | null {
+  const n = Number(amount ?? NaN);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Numeric anchor for a 0..1 probability; null mirrors parseYesProb's "—". */
+function yesProbSort(outcomePrices?: string): number | null {
+  if (!outcomePrices) return null;
+  try {
+    const p = Number(JSON.parse(outcomePrices)[0]);
+    return Number.isFinite(p) && p >= 0 && p <= 1 ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Unix-ms anchor for an ISO date cell; null mirrors fmtIsoDate's "TBA". */
+function isoDateSort(input?: string | null): number | null {
+  if (!input) return null;
+  const t = Date.parse(input);
+  return Number.isNaN(t) ? null : t;
+}
+
 function parseYesProb(outcomePrices?: string): string {
   if (!outcomePrices) return '—';
   try {
@@ -178,12 +212,20 @@ export async function fetchPredictionsSection(nowMs = Date.now(), urls: MarketUr
   const markets = await fetchJson<PolyMarket[]>(url);
   if (!Array.isArray(markets) || markets.length === 0) throw new Error('Empty Polymarket feed');
   const rows: MarketRow[] = markets.slice(0, 30).map(m => ({
+    id: m.slug ?? undefined,
     cells: [
       stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
       parseYesProb(m.outcomePrices),
       fmtUsd(Number(m.volume24hr ?? 0)),
       fmtUsd(Number(m.liquidity ?? 0)),
       fmtIsoDate(m.endDate),
+    ],
+    sortValues: [
+      stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
+      yesProbSort(m.outcomePrices),
+      usdSort(m.volume24hr),
+      usdSort(m.liquidity),
+      isoDateSort(m.endDate),
     ],
     href: m.slug ? `https://polymarket.com/event/${encodeURIComponent(m.slug)}` : undefined,
   }));
@@ -255,8 +297,16 @@ export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls 
     const extLink = it.links?.find(l => l.url && /^https?:\/\//i.test(l.url))?.url;
     const desc = it.description ? stripOrTranslateCjk(it.description).slice(0, 42) : '';
     const tokenLabel = desc ? `${shortAddr} · ${desc}` : shortAddr;
+    const links = extLink ?? it.url ?? '—';
     return {
-      cells: [tokenLabel, chain, boostCount > 0 ? fmtInt(boostCount) : 'Profile', extLink ?? it.url ?? '—'],
+      id: `${it.chainId}:${(it.tokenAddress ?? '').toLowerCase()}`,
+      cells: [tokenLabel, chain, boostCount > 0 ? fmtInt(boostCount) : 'Profile', links],
+      sortValues: [
+        tokenLabel,
+        chain,
+        boostCount > 0 ? boostCount : null,
+        links === '—' ? null : links,
+      ],
       chain,
       href: it.url,
     };
@@ -295,11 +345,18 @@ export async function fetchGithubSection(nowMs = Date.now(), urls: MarketUrls = 
   if (items.length === 0) throw new Error('Empty GitHub search feed');
 
   const rows: MarketRow[] = items.slice(0, 30).map(repo => ({
+    id: repo.full_name,
     cells: [
       stripOrTranslateCjk(repo.full_name) || repo.full_name,
       repo.language || 'Unknown',
       fmtInt(repo.stargazers_count),
       fmtIsoDate(repo.pushed_at),
+    ],
+    sortValues: [
+      stripOrTranslateCjk(repo.full_name) || repo.full_name,
+      repo.language || 'Unknown',
+      repo.stargazers_count,
+      isoDateSort(repo.pushed_at),
     ],
     href: repo.html_url,
   }));
@@ -318,6 +375,8 @@ export async function fetchGithubSection(nowMs = Date.now(), urls: MarketUrls = 
 }
 
 interface LlamaProtocol {
+  id?: number | string;
+  slug?: string;
   name?: string;
   category?: string;
   chain?: string;
@@ -338,6 +397,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
       const chains = Array.isArray(p.chains) && p.chains.length > 0 ? p.chains : p.chain ? [p.chain] : ['Multi-Chain'];
       const chainLabel = chains.length > 2 ? `${chains[0]}, ${chains[1]} +${chains.length - 2}` : chains.join(', ');
       return {
+        id: p.slug ?? (p.id != null ? String(p.id) : p.name),
         cells: [
           stripOrTranslateCjk(p.name ?? '') || p.name || 'Protocol',
           stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',
@@ -345,6 +405,14 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
           fmtUsd(p.tvl ?? 0),
           fmtPct(p.change_1d),
           fmtPct(p.change_7d),
+        ],
+        sortValues: [
+          stripOrTranslateCjk(p.name ?? '') || p.name || 'Protocol',
+          stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',
+          chainLabel,
+          p.tvl ?? null,
+          p.change_1d ?? null,
+          p.change_7d ?? null,
         ],
         chain: chains[0],
         href: p.url,
@@ -365,6 +433,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
 }
 
 interface LlamaPool {
+  pool?: string;
   symbol?: string;
   project?: string;
   chain?: string;
@@ -387,6 +456,10 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
     .sort((a, b) => (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0))
     .slice(0, 50)
     .map(p => ({
+      // DefiLlama's stable pool UUID; distinct pools of one protocol get
+      // distinct ids. Fallback is a lossy slug only when the upstream omits
+      // `pool` (should not happen on current API).
+      id: p.pool ?? `${(p.project ?? 'multi').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${p.symbol ?? ''}`,
       cells: [
         stripOrTranslateCjk(p.symbol ?? '') || p.symbol || 'Pool',
         stripOrTranslateCjk(p.project ?? '') || p.project || 'Protocol',
@@ -394,6 +467,14 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
         fmtUsd(p.tvlUsd ?? 0),
         fmtPct(p.apy).replace(/^\+/, ''),
         p.ilRisk === 'yes' ? 'Yes' : p.ilRisk === 'no' ? 'No' : '—',
+      ],
+      sortValues: [
+        stripOrTranslateCjk(p.symbol ?? '') || p.symbol || 'Pool',
+        stripOrTranslateCjk(p.project ?? '') || p.project || 'Protocol',
+        p.chain || 'Multi-Chain',
+        p.tvlUsd ?? null,
+        p.apy ?? null,
+        p.ilRisk === 'yes' ? 1 : p.ilRisk === 'no' ? 0 : null,
       ],
       chain: p.chain || 'Multi-Chain',
     }));
