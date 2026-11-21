@@ -1,7 +1,7 @@
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
 
 export type JsonFetchResult<T> =
-  | { status: 200; body: T; etag: string | null }
+  | { status: 200; body: T; etag: string | null; source: 'api' | 'snapshot' }
   | { status: 304 };
 
 declare global {
@@ -13,28 +13,37 @@ declare global {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-function readPrefetched<T>(key: string): Promise<T | null> | null {
+export async function takePrefetched<T>(key: string, signal?: AbortSignal): Promise<T | null> {
+  signal?.throwIfAborted();
   const map = typeof window !== 'undefined' ? window.__RADAR_PREFETCH__ : undefined;
   const pending = map?.[key];
   if (!pending) return null;
   delete map[key];
-  return pending as Promise<T | null>;
+  const deadline = AbortSignal.timeout(2_500);
+  const stop = signal ? AbortSignal.any([deadline, signal]) : deadline;
+  const { promise, resolve } = Promise.withResolvers<null>();
+  const release = () => resolve(null);
+  stop.addEventListener('abort', release, { once: true });
+  try {
+    const body = await Promise.race([pending.catch(() => null), promise]);
+    signal?.throwIfAborted();
+    return body as T | null;
+  } finally {
+    stop.removeEventListener('abort', release);
+  }
 }
 
-async function fetchWithTimeout(url: string, headers: HeadersInit, signal?: AbortSignal): Promise<Response> {
-  const ctrl = new AbortController();
-  const onAbort = () => ctrl.abort(signal?.reason);
-  if (signal) {
-    if (signal.aborted) ctrl.abort(signal.reason);
-    else signal.addEventListener('abort', onAbort, { once: true });
-  }
-  const timer = setTimeout(() => ctrl.abort(new Error('Request timed out')), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { headers, signal: ctrl.signal });
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
-  }
+async function fetchJson<T>(
+  url: string,
+  source: 'api' | 'snapshot',
+  headers: HeadersInit,
+  signal?: AbortSignal,
+): Promise<JsonFetchResult<T>> {
+  const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const res = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
+  if (source === 'api' && res.status === 304) return { status: 304 };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return { status: 200, body: (await res.json()) as T, etag: source === 'api' ? res.headers.get('ETag') : null, source };
 }
 
 export async function getJson<T>(
@@ -47,29 +56,20 @@ export async function getJson<T>(
   const snapshotUrl = `${import.meta.env.BASE_URL}data${cleanPath.split('?')[0]}`;
 
   if (!API_BASE) {
-    const pre = readPrefetched<T>(prefetchKey);
-    if (pre) {
-      const preBody = await pre;
-      if (preBody !== null) return { status: 200, body: preBody, etag: null };
-    }
-    const res = await fetchWithTimeout(snapshotUrl, {}, signal);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { status: 200, body: (await res.json()) as T, etag: res.headers.get('ETag') };
+    const body = await takePrefetched<T>(prefetchKey, signal);
+    if (body !== null) return { status: 200, body, etag: null, source: 'snapshot' };
+    return fetchJson(snapshotUrl, 'snapshot', {}, signal);
   }
 
   const headers: Record<string, string> = {};
   if (etag) headers['If-None-Match'] = etag;
 
   try {
-    const res = await fetchWithTimeout(`${API_BASE}${cleanPath}`, headers, signal);
-    if (res.status === 304) return { status: 304 };
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { status: 200, body: (await res.json()) as T, etag: res.headers.get('ETag') };
+    return await fetchJson(`${API_BASE}${cleanPath}`, 'api', headers, signal);
   } catch (err) {
-    if (signal?.aborted) throw err;
-    // Fallback to committed offline snapshot when worker is unreachable
-    const fallback = await fetchWithTimeout(snapshotUrl, {}, signal);
-    if (!fallback.ok) throw err;
-    return { status: 200, body: (await fallback.json()) as T, etag: null };
+    // Only transport failures and deadlines qualify for offline fallback.
+    if (signal?.aborted || !(err instanceof TypeError || (err instanceof DOMException &&
+      (err.name === 'TimeoutError' || err.name === 'AbortError')))) throw err;
+    return fetchJson(snapshotUrl, 'snapshot', {}, signal);
   }
 }
