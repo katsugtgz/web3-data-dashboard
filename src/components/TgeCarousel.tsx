@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
 import { formatTgeStatus } from '../lib/labels';
 import { Avatar } from './ProjectCard';
@@ -31,6 +31,13 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
   const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
   const otherCount = normalized.length - claimableCount - verifyCount;
+
+  useEffect(() => {
+    if (filter === 'other' && otherCount === 0) {
+      setFilter('all');
+    }
+  }, [filter, otherCount]);
+
   const activeFilter: TgeFilter = filter === 'other' && otherCount === 0 ? 'all' : filter;
 
   const visible = useMemo(() => {
