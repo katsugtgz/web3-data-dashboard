@@ -111,6 +111,9 @@ export function stripOrTranslateCjk(raw: string): string {
       .replace(/\p{Script=Hangul}+/gu, '')
       // Leftover CJK punctuation/whitespace-only remains (已结束。 → '。')
       // are not a usable label.
+      // Fullwidth digits (U+FF10–FF19) are content, not decoration —
+      // normalize them to ASCII before trimming so edge digits survive.
+      .replace(/[\uFF10-\uFF19]/gu, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
       .replace(/^[\s\u3000-\u303F\uFF01-\uFF20]+/u, '')
       .replace(/[\s\u3000-\u303F\uFF01-\uFF20]+$/u, '')
       .replace(/\s+/g, ' ')

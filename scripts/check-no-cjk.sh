@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Full CJK coverage: Han + Hiragana + Katakana + Hangul. Han-only matching let
 # Japanese/Korean text through a gate that claims to reject CJK.
-CJK_RE='\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{FF01}-\x{FF60}]'
+CJK_RE='\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{FF01}-\x{FF9F}]'
 
 set +e
 MATCHES=$(rg -n --pcre2 "$CJK_RE" src shared worker/src index.html --glob '!worker/src/normalize/i18n.ts')
