@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FeedItem, TaskType } from '../../shared/types';
 import { TASK_TYPES } from '../../shared/constants';
+import { isDropsQueryHash } from './useDashboardTabs';
 
 export type DropsSort = 'score' | 'new';
 export const DROPS_PAGE_STEP = 24;
@@ -19,13 +20,6 @@ const DEFAULT_FILTERS: ParsedHashParams = {
 };
 
 const VALID_TASK_TYPES = new Set<string>(TASK_TYPES);
-
-/** True when this hash targets the Drops tab: `#drops`, `#drops?…`, or an empty segment with query (`#?type=…`). */
-export function isDropsQueryHash(hash: string): boolean {
-  const segment = hash.replace(/^#/, '').split('?')[0];
-  if (segment === 'drops') return true;
-  return segment === '' && hash.includes('?');
-}
 
 function readDropsHashParams(): ParsedHashParams {
   const hash = window.location.hash.replace(/^#/, '');
