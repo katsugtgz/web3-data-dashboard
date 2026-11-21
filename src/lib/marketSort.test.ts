@@ -52,7 +52,7 @@ describe('marketSort cmpRows', () => {
   });
 
   test('missing column cell sorts as null anchor', () => {
-    const short = row(['A']);
+    const short = row(['A'], ['A']);
     const full = row(['B', '1'], ['B', 1]);
     expect(cmpRows(short, full, 1, 1)).toBeGreaterThan(0);
     expect(cmpRows(short, full, 1, -1)).toBeGreaterThan(0);
