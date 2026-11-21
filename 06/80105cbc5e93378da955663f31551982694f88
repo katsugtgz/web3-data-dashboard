@@ -1,0 +1,20 @@
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+shared/types.ts
+  h_cc1f32aec57e6b 79-87
+worker/src/sources/markets.ts
+  h_cc1f32aec57e6b 79,87-93,150,152,174-197,215,223-229,300,302-309,348,355-360,378-379,400,409-416,436,459-462,471-478
+worker/test/markets.test.ts
+  h_cc1f32aec57e6b 44-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0680105cbc5e93378da955663f31551982694f88",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
