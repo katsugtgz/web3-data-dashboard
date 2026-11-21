@@ -1,12 +1,11 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import type { Card, CardTask, Dashboard } from '../../shared/types';
+import type { Card, CardTask, FitKey } from '../../shared/types';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
 import { Avatar, BadgeChip } from './ProjectCard';
 
 function useBackdropDismiss(ref: RefObject<HTMLDialogElement | null>) {
-  // Mandatory fallback for browsers without native <dialog closedby="any"> support (e.g. Safari)
   useEffect(() => {
     const dlg = ref.current;
     if (!dlg || 'closedBy' in HTMLDialogElement.prototype) return;
@@ -38,17 +37,12 @@ function useBackdropDismiss(ref: RefObject<HTMLDialogElement | null>) {
   }, [ref]);
 }
 
-function resolveCardIcon(card: Card, icons: Dashboard['IMGS']): string {
-  if (card.img !== undefined) return card.img ?? '';
-  return icons[String(card.r)] ?? '';
-}
-
 function resolveCardChains(card: Card): string[] {
   if (card.chains?.length) return card.chains;
   return card.chain ? [card.chain] : [];
 }
 
-function buildDetailRows(card: Card, chains: string[], fit: Dashboard['FIT']): [string, string | number][] {
+function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, string>): [string, string | number][] {
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
@@ -154,8 +148,7 @@ function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
 
 interface BodyProps {
   card: Card;
-  fit: Dashboard['FIT'];
-  icons: Dashboard['IMGS'];
+  fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
@@ -166,14 +159,13 @@ interface BodyProps {
 function DetailDialogBody({
   card,
   fit,
-  icons,
   saved,
   doneTasks,
   onToggleSaved,
   onToggleTask,
   onDismiss,
 }: BodyProps) {
-  const icon = resolveCardIcon(card, icons);
+  const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
   const taskKeys = getTaskStorageKeys(card.n, taskList);
@@ -248,8 +240,7 @@ function DetailDialogBody({
 
 interface Props {
   card: Card | null;
-  fit: Dashboard['FIT'];
-  icons: Dashboard['IMGS'];
+  fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
@@ -260,7 +251,6 @@ interface Props {
 export function DetailDialog({
   card,
   fit,
-  icons,
   saved,
   doneTasks,
   onToggleSaved,
@@ -290,7 +280,6 @@ export function DetailDialog({
         <DetailDialogBody
           card={card}
           fit={fit}
-          icons={icons}
           saved={saved}
           doneTasks={doneTasks}
           onToggleSaved={onToggleSaved}

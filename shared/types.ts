@@ -59,18 +59,6 @@ export interface Tab {
   label: string;
 }
 
-export interface DemoRow {
-  cells: string[];
-  chain: string;
-}
-
-export interface DemoSection {
-  id: string;
-  blurb: string;
-  cols: string[];
-  rows: DemoRow[];
-}
-
 export interface Counts {
   active: number;
   preToken: number;
@@ -84,21 +72,45 @@ export interface AirdropFeed {
   fetchedAt: number;
 }
 
-export interface Dashboard {
-  FIT: Record<FitKey, string>;
-  CARDS: Card[];
-  BADGES: Record<Badge, string>;
-  TGE: Tge[];
-  TABS: Tab[];
-  TYPES: string[];
-  COUNTS: Counts;
-  CATEGORIES: string[];
-  TYPE_MAP: Record<string, string[]>;
-  DEMO: DemoSection[];
-  IMGS: Record<string, string>;
+export type MarketSectionId = 'crypto' | 'defi' | 'yields' | 'predictions' | 'trending' | 'github';
+
+export interface MarketRow {
+  cells: string[];
+  chain?: string;
+  href?: string;
 }
 
-export interface SectionSummary {
-  source: 'harvest' | 'harvest-net';
+export interface MarketSection {
+  id: MarketSectionId;
+  title: string;
+  blurb: string;
+  cols: string[];
+  rows: MarketRow[];
+  source: string;
+  sourceUrl: string;
+  fetchedAt: number;
+  stale: boolean;
+}
+
+export interface MarketSector {
   name: string;
+  change24h: string;
+  marketCap: string;
+}
+
+export interface MarketsResponse {
+  generatedAt: number;
+  sections: MarketSection[];
+  sectors?: MarketSector[];
+}
+
+export interface HealthSnapshotStatus {
+  fetchedAt: number;
+  ok: boolean;
+  error?: string | null;
+}
+
+export interface HealthResponse {
+  ok: boolean;
+  snapshots: Record<string, HealthSnapshotStatus>;
 }

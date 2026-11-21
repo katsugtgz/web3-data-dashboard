@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Badge, Card, Dashboard } from '../../shared/types';
+import type { Badge, Card, FitKey } from '../../shared/types';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
 
@@ -159,17 +159,16 @@ function CardScore({ card: c }: { card: Card }) {
 
 interface Props {
   card: Card;
-  fit: Dashboard['FIT'];
-  icons: Dashboard['IMGS'];
+  fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onDetails: (card: Card) => void;
 }
 
-export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSaved, onDetails }: Props) {
+export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onDetails }: Props) {
   const fitLabels = c.fit.map(f => fit[f]).filter(Boolean);
-  const icon = c.img !== undefined ? (c.img ?? '') : (icons[String(c.r)] ?? '');
+  const icon = c.img ?? '';
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);

@@ -1,5 +1,6 @@
 import type { RefObject } from 'react';
-import type { Card, Dashboard, Tge } from '../../shared/types';
+import { CATEGORIES, FIT, TYPES } from '../../shared/constants';
+import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
@@ -7,7 +8,6 @@ import { ProjectCard } from './ProjectCard';
 import { TgeCarousel } from './TgeCarousel';
 
 interface Props {
-  data: Dashboard;
   filters: AirdropFiltersState;
   cardCount: number;
   tgeItems: Tge[];
@@ -20,7 +20,6 @@ interface Props {
 }
 
 export function AirdropPanel({
-  data,
   filters,
   cardCount,
   tgeItems,
@@ -63,7 +62,7 @@ export function AirdropPanel({
         </div>
       </div>
 
-      <FilterDock filters={filters} types={data.TYPES} fit={data.FIT} searchRef={searchRef} />
+      <FilterDock filters={filters} types={TYPES} fit={FIT} searchRef={searchRef} />
 
       <div className="results-bar">
         <p className="note" role="status">
@@ -85,8 +84,7 @@ export function AirdropPanel({
               <ProjectCard
                 key={`${c.r}-${c.n}`}
                 card={c}
-                fit={data.FIT}
-                icons={data.IMGS}
+                fit={FIT}
                 saved={saved.has(c.n)}
                 doneTasks={doneTasks}
                 onToggleSaved={onToggleSaved}
@@ -133,7 +131,7 @@ export function AirdropPanel({
       <div className="categories-bar" role="group" aria-label="Airdrop categories">
         <span className="note">Ecosystem programs:</span>
         <div className="chipline">
-          {data.CATEGORIES.map(c => (
+          {CATEGORIES.map(c => (
             <span key={c} className="countchip">
               {c}
             </span>

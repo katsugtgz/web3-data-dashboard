@@ -1,60 +1,35 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { Card, Dashboard } from '../shared/types';
+import { FIT, TABS, TYPE_MAP } from '../shared/constants';
+import type { Card } from '../shared/types';
 import { AirdropPanel } from './components/AirdropPanel';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
 import { DashboardHeader } from './components/DashboardHeader';
 import { useAirdropFeed } from './hooks/useAirdropFeed';
 import { useAirdropFilters } from './hooks/useAirdropFilters';
-import { useDashboard } from './hooks/useDashboard';
+import { useMarkets } from './hooks/useMarkets';
 import { useTheme } from './hooks/useTheme';
 import { useWatchlist } from './hooks/useWatchlist';
 
-const DemoPanel = lazy(() => import('./components/DemoPanel').then(m => ({ default: m.DemoPanel })));
+const MarketPanel = lazy(() => import('./components/MarketPanel').then(m => ({ default: m.MarketPanel })));
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
 
-function findHashTab(tabs: Dashboard['TABS']): string | null {
-  const raw = window.location.hash.replace(/^#/, '');
-  return tabs.some(t => t.id === raw) ? raw : null;
+function findHashTab(): string {
+  const raw = window.location.hash.replace(/^#/, '').split('?')[0];
+  return TABS.some(t => t.id === raw) ? raw : TABS[0].id;
 }
 
 export default function App() {
-  const { data, error } = useDashboard();
-  if (error) {
-    return (
-      <div className="container" style={{ paddingTop: 48 }}>
-        <p className="empty" role="alert">
-          Failed to load dashboard: {error}
-        </p>
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="container" style={{ paddingTop: 48 }}>
-        <div className="loading-shell" role="status" aria-live="polite">
-          <div className="loading-bar" />
-          <p className="note">Loading Web3 Data Dashboard…</p>
-        </div>
-      </div>
-    );
-  }
-  return <DashboardView data={data} />;
-}
-
-function DashboardView({ data }: { data: Dashboard }) {
-  const { feed, loading, failed, refresh } = useAirdropFeed();
+  const { feed, loading: feedLoading, failed: feedFailed, isLiveApi, refresh: refreshFeed } = useAirdropFeed();
+  const { markets, loading: marketsLoading, refresh: refreshMarkets } = useMarkets();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
   const theme = useTheme();
 
-  const cards = feed?.cards ?? data.CARDS;
-  const tgeItems = feed ? feed.tge : data.TGE;
-  const isLive = feed !== null;
-  const filters = useAirdropFilters(cards, saved, data.TYPE_MAP);
+  const cards = feed?.cards ?? [];
+  const tgeItems = feed?.tge ?? [];
+  const filters = useAirdropFilters(cards, saved, TYPE_MAP);
 
-  const [tab, setTab] = useState<string>(() => findHashTab(data.TABS) ?? data.TABS[0].id);
-  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(
-    () => new Set([findHashTab(data.TABS) ?? data.TABS[0].id]),
-  );
+  const [tab, setTab] = useState<string>(() => findHashTab());
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set([findHashTab()]));
   const [detail, setDetail] = useState<Card | null>(null);
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -67,16 +42,14 @@ function DashboardView({ data }: { data: Dashboard }) {
   }, []);
 
   const selectTab = useCallback(
-    (nextId: string, scrollPanel = true) => {
+    (nextId: string) => {
+      if (!TABS.some(t => t.id === nextId)) return;
       setTab(nextId);
       markVisited(nextId);
-      if (window.location.hash !== `#${nextId}`) {
-        window.history.replaceState(null, '', `#${nextId}`);
-      }
-      tabRefs.current[nextId]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      if (scrollPanel && mainRef.current && tabbarRef.current) {
+      history.replaceState(null, '', `#${nextId}`);
+      if (mainRef.current) {
+        const barHeight = tabbarRef.current?.offsetHeight ?? 48;
         const mainTop = mainRef.current.getBoundingClientRect().top + window.scrollY;
-        const barHeight = tabbarRef.current.offsetHeight;
         if (window.scrollY > mainTop - barHeight) {
           window.scrollTo({ top: Math.max(0, mainTop - barHeight - 8), behavior: 'smooth' });
         }
@@ -87,17 +60,14 @@ function DashboardView({ data }: { data: Dashboard }) {
 
   useEffect(() => {
     const onHash = () => {
-      const next = findHashTab(data.TABS);
-      if (next) {
-        setTab(next);
-        markVisited(next);
-      }
+      const next = findHashTab();
+      setTab(next);
+      markVisited(next);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, [data.TABS, markVisited]);
+  }, [markVisited]);
 
-  // Global `/` shortcut to jump to search on the Airdrops tab
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || detail || tab !== 'airdrops') return;
@@ -113,7 +83,7 @@ function DashboardView({ data }: { data: Dashboard }) {
   }, [tab, detail]);
 
   const onTabKey = (e: KeyboardEvent) => {
-    const ids = data.TABS.map(t => t.id);
+    const ids = TABS.map(t => t.id);
     let i = ids.indexOf(tab);
     if (e.key === 'ArrowRight') i = (i + 1) % ids.length;
     else if (e.key === 'ArrowLeft') i = (i - 1 + ids.length) % ids.length;
@@ -125,7 +95,12 @@ function DashboardView({ data }: { data: Dashboard }) {
     tabRefs.current[ids[i]]?.focus();
   };
 
-  const mountedDemos = data.DEMO.filter(d => visitedTabs.has(d.id));
+  const handleRefresh = useCallback(() => {
+    refreshFeed();
+    refreshMarkets();
+  }, [refreshFeed, refreshMarkets]);
+
+  const mountedMarkets = (markets?.sections ?? []).filter(s => visitedTabs.has(s.id));
 
   return (
     <>
@@ -136,17 +111,18 @@ function DashboardView({ data }: { data: Dashboard }) {
       <DashboardHeader
         cardCount={cards.length}
         fetchedAt={feed?.fetchedAt ?? null}
-        loading={loading}
-        failed={failed}
+        loading={feedLoading || marketsLoading}
+        failed={feedFailed}
+        isLiveApi={isLiveApi}
         resolvedTheme={theme.resolved}
-        onRefresh={refresh}
+        onRefresh={handleRefresh}
         onToggleTheme={theme.toggle}
       />
 
       <div className="tabbar" ref={tabbarRef}>
         <nav className="container" aria-label="Dashboard sections">
           <div role="tablist" className="tabstrip" onKeyDown={onTabKey}>
-            {data.TABS.map(t => (
+            {TABS.map(t => (
               <button
                 key={t.id}
                 type="button"
@@ -169,44 +145,78 @@ function DashboardView({ data }: { data: Dashboard }) {
 
       <main id="main" ref={mainRef} className="container" tabIndex={-1}>
         <div hidden={tab !== 'airdrops'}>
-          <AirdropPanel
-            data={data}
-            filters={filters}
-            cardCount={cards.length}
-            tgeItems={tgeItems}
-            isLive={isLive}
-            saved={saved}
-            doneTasks={doneTasks}
-            searchRef={searchRef}
-            onToggleSaved={toggleSaved}
-            onSelectDetail={setDetail}
-          />
+          {!feed && feedLoading ? (
+            <div className="loading-shell" role="status" aria-live="polite">
+              <div className="loading-bar" />
+              <p className="note">Loading airdrop radar…</p>
+            </div>
+          ) : !feed && feedFailed ? (
+            <p className="empty" role="alert">
+              Unable to load airdrop feed. Please refresh to retry.
+            </p>
+          ) : (
+            <AirdropPanel
+              filters={filters}
+              cardCount={cards.length}
+              tgeItems={tgeItems}
+              isLive={isLiveApi}
+              saved={saved}
+              doneTasks={doneTasks}
+              searchRef={searchRef}
+              onToggleSaved={toggleSaved}
+              onSelectDetail={setDetail}
+            />
+          )}
         </div>
 
-        {mountedDemos.map(d => {
-          const label = data.TABS.find(t => t.id === d.id)?.label ?? d.id;
-          return (
-            <div key={d.id} hidden={tab !== d.id}>
-              <ChunkErrorBoundary label={label}>
-                <Suspense fallback={<p className="note" role="status">Loading {label}…</p>}>
-                  <DemoPanel section={d} label={label} />
-                </Suspense>
-              </ChunkErrorBoundary>
-            </div>
-          );
-        })}
+        {mountedMarkets.map(section => (
+          <div key={section.id} hidden={tab !== section.id}>
+            <ChunkErrorBoundary label={section.title}>
+              <Suspense fallback={<p className="note" role="status">Loading {section.title}…</p>}>
+                <MarketPanel section={section} sectors={section.id === 'crypto' ? markets?.sectors : undefined} />
+              </Suspense>
+            </ChunkErrorBoundary>
+          </div>
+        ))}
+
+        {tab !== 'airdrops' && !mountedMarkets.some(s => s.id === tab) && (
+          <div className="loading-shell" role="status" aria-live="polite">
+            <div className="loading-bar" />
+            <p className="note">Loading market data…</p>
+          </div>
+        )}
       </main>
 
       <footer>
         <div className="container footer-inner">
           <p>
-            Data from CryptoRank · <span className="mono">{filters.counts.pre}</span> pre-token projects tracked ·
-            Original dashboard by{' '}
-            <a href="https://x.com/ASSO7878/" target="_blank" rel="noopener noreferrer">
-              @ASSO7878
-              <span className="sr"> on X (opens in a new tab)</span>
+            Web3 Radar · <span className="mono">{filters.counts.pre}</span> pre-token projects tracked · Keyless data
+            from{' '}
+            <a href="https://cryptorank.io" target="_blank" rel="noopener noreferrer">
+              CryptoRank
+              <span className="sr"> (opens in a new tab)</span>
             </a>
-            . Snapshot sections are static reference data — not financial advice.
+            ,{' '}
+            <a href="https://www.coingecko.com" target="_blank" rel="noopener noreferrer">
+              CoinGecko
+              <span className="sr"> (opens in a new tab)</span>
+            </a>
+            ,{' '}
+            <a href="https://defillama.com" target="_blank" rel="noopener noreferrer">
+              DefiLlama
+              <span className="sr"> (opens in a new tab)</span>
+            </a>
+            ,{' '}
+            <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">
+              Polymarket
+              <span className="sr"> (opens in a new tab)</span>
+            </a>
+            , and{' '}
+            <a href="https://dexscreener.com" target="_blank" rel="noopener noreferrer">
+              DexScreener
+              <span className="sr"> (opens in a new tab)</span>
+            </a>
+            . Not financial advice.
           </p>
         </div>
       </footer>
@@ -216,8 +226,7 @@ function DashboardView({ data }: { data: Dashboard }) {
           <Suspense fallback={null}>
             <DetailDialog
               card={detail}
-              fit={data.FIT}
-              icons={data.IMGS}
+              fit={FIT}
               saved={saved.has(detail.n)}
               doneTasks={doneTasks}
               onToggleSaved={toggleSaved}

@@ -5,16 +5,27 @@ interface Props {
   fetchedAt: number | null;
   loading: boolean;
   failed: boolean;
+  isLiveApi: boolean;
   resolvedTheme: 'light' | 'dark';
   onRefresh: () => void;
   onToggleTheme: () => void;
 }
 
-function FeedStatusText({ cardCount, fetchedAt, failed }: { cardCount: number; fetchedAt: number | null; failed: boolean }) {
+function FeedStatusText({
+  cardCount,
+  fetchedAt,
+  failed,
+  isLiveApi,
+}: {
+  cardCount: number;
+  fetchedAt: number | null;
+  failed: boolean;
+  isLiveApi: boolean;
+}) {
   if (fetchedAt !== null) {
     return (
       <span>
-        Live · <span className="mono">{cardCount}</span> synced{' '}
+        {isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span> synced{' '}
         <span className="mono">{formatClock(fetchedAt)}</span>
       </span>
     );
@@ -26,7 +37,7 @@ function FeedStatusText({ cardCount, fetchedAt, failed }: { cardCount: number; f
       </span>
     );
   }
-  return <span>Syncing live feed…</span>;
+  return <span>Syncing radar…</span>;
 }
 
 export function DashboardHeader({
@@ -34,11 +45,12 @@ export function DashboardHeader({
   fetchedAt,
   loading,
   failed,
+  isLiveApi,
   resolvedTheme,
   onRefresh,
   onToggleTheme,
 }: Props) {
-  const isLive = fetchedAt !== null;
+  const isLive = fetchedAt !== null && isLiveApi;
   const themeAction = resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
   return (
@@ -48,23 +60,16 @@ export function DashboardHeader({
           <div className="titlerow">
             <img
               className="logo"
-              src="https://import-command-query-8ca052.surf.computer/avatar-renji.png"
+              src={`${import.meta.env.BASE_URL}icon.svg`}
               alt=""
               width={40}
               height={40}
               decoding="async"
-              onError={e => {
-                e.currentTarget.style.visibility = 'hidden';
-              }}
             />
             <div>
-              <h1 className="pagetitle">Import Command Query</h1>
+              <h1 className="pagetitle">Web3 Radar</h1>
               <p className="sub">
-                Web3 Data Dashboard · 18 sections ·{' '}
-                <a href="https://x.com/ASSO7878/" target="_blank" rel="noopener noreferrer">
-                  original by @ASSO7878
-                  <span className="sr"> on X (opens in a new tab)</span>
-                </a>
+                Keyless English airdrop aggregator &amp; live market tracker · $0 Cloudflare Workers + GitHub Pages
               </p>
             </div>
           </div>
@@ -73,7 +78,7 @@ export function DashboardHeader({
         <div className="top-controls">
           <div className={`feed-pill${isLive ? ' is-live' : ''}`} role="status" aria-live="polite">
             <span className="status-dot" aria-hidden="true" />
-            <FeedStatusText cardCount={cardCount} fetchedAt={fetchedAt} failed={failed} />
+            <FeedStatusText cardCount={cardCount} fetchedAt={fetchedAt} failed={failed} isLiveApi={isLiveApi} />
           </div>
 
           <button
@@ -81,8 +86,8 @@ export function DashboardHeader({
             className="ctrl-btn"
             onClick={onRefresh}
             disabled={loading}
-            aria-label="Refresh live airdrop feed"
-            title="Refresh live feed"
+            aria-label="Refresh feeds"
+            title="Refresh feeds"
           >
             <svg
               className={loading ? 'spin' : undefined}

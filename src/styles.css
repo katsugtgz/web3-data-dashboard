@@ -1389,6 +1389,22 @@ h2.section {
   font-size: 13.5px;
 }
 
+.sector-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.sector-strip .note {
+  margin: 0;
+  white-space: nowrap;
+}
+
 .demo-controls {
   display: flex;
   flex-wrap: wrap;

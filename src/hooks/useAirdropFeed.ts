@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AirdropFeed } from '../../shared/types';
-import { fetchAirdrops, POLL_MS } from '../lib/airdrops';
+import { API_BASE, getJson } from '../lib/api';
+
+export const POLL_MS = 60_000;
 
 export interface AirdropFeedState {
   feed: AirdropFeed | null;
   loading: boolean;
   failed: boolean;
+  isLiveApi: boolean;
   refresh: () => void;
 }
 
-/** Polls the live airdrop feed. Pauses in background tabs and keeps the last loaded list on error. */
+/** Polls /airdrops.json with ETag support. Pauses in background tabs and keeps the last loaded list on error. */
 export function useAirdropFeed(): AirdropFeedState {
   const [feed, setFeed] = useState<AirdropFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const ctrlRef = useRef<AbortController | null>(null);
+  const etagRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
   const lastFetchedRef = useRef<number>(0);
 
@@ -25,12 +29,15 @@ export function useAirdropFeed(): AirdropFeedState {
     ctrlRef.current = ctrl;
     inFlightRef.current = true;
     if (mode !== 'background') setLoading(true);
-    fetchAirdrops(ctrl.signal)
-      .then(next => {
+    getJson<AirdropFeed>('/airdrops.json', etagRef.current, ctrl.signal)
+      .then(res => {
         if (ctrl.signal.aborted) return;
         inFlightRef.current = false;
-        lastFetchedRef.current = next.fetchedAt;
-        setFeed(next);
+        lastFetchedRef.current = Date.now();
+        if (res.status === 200) {
+          etagRef.current = res.etag;
+          setFeed(res.body);
+        }
         setFailed(false);
         if (mode !== 'background') setLoading(false);
       })
@@ -64,5 +71,5 @@ export function useAirdropFeed(): AirdropFeedState {
 
   const refresh = useCallback(() => load('manual'), [load]);
 
-  return { feed, loading, failed, refresh };
+  return { feed, loading, failed, isLiveApi: Boolean(API_BASE) && !failed, refresh };
 }

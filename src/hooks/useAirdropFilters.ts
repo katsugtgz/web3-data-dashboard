@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { Card, Dashboard, FitKey, Grade } from '../../shared/types';
+import type { Card, FitKey, Grade } from '../../shared/types';
 import { parseCost, parseFunding, parseUpdatedDays } from '../lib/format';
 
 export type StatusFilter = 'all' | 'pre' | 'launched' | 'saved';
@@ -68,7 +68,7 @@ function compareCards(a: Card, b: Card, sortBy: SortKey): number {
   return a.r - b.r;
 }
 
-export function useAirdropFilters(cards: Card[], saved: Set<string>, typeMap: Dashboard['TYPE_MAP']) {
+export function useAirdropFilters(cards: Card[], saved: Set<string>, typeMap: Record<string, string[]>) {
   const [status, setStatusState] = useState<StatusFilter>('all');
   const [type, setTypeState] = useState('All');
   const [chain, setChainState] = useState('All');
