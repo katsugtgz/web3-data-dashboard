@@ -17,12 +17,16 @@ export interface CopyStatus {
  * identical messages (several screen readers skip same-text live updates).
  */
 export function CopyStatusBanner({ status }: { status: CopyStatus | null }) {
-  const firstRef = useRef<HTMLParagraphElement>(null);
-  const secondRef = useRef<HTMLParagraphElement>(null);
+  const firstRef = useRef<HTMLSpanElement>(null);
+  const secondRef = useRef<HTMLSpanElement>(null);
   const toggleRef = useRef(false);
 
   useEffect(() => {
-    if (!status) return;
+    if (!status) {
+      if (firstRef.current) firstRef.current.textContent = '';
+      if (secondRef.current) secondRef.current.textContent = '';
+      return;
+    }
     const next = toggleRef.current ? firstRef.current : secondRef.current;
     const prev = toggleRef.current ? secondRef.current : firstRef.current;
     toggleRef.current = !toggleRef.current;
@@ -30,15 +34,13 @@ export function CopyStatusBanner({ status }: { status: CopyStatus | null }) {
     if (next) next.textContent = status.message;
   }, [status]);
 
-  if (!status) return null;
   return (
-    <p className={`copy-status copy-status-${status.tone}`}>
-      <span>{status.message}</span>
-      {/* Swap pair drives polite re-announcement; visually the banner itself is the message. */}
-      <span className="sr-only-announcer" aria-hidden="true">
+    <>
+      <span className="sr-only-announcer" role="status" aria-atomic="true">
         <span ref={firstRef} />
         <span ref={secondRef} />
       </span>
-    </p>
+      {status && <p className={`copy-status copy-status-${status.tone}`} aria-hidden="true">{status.message}</p>}
+    </>
   );
 }

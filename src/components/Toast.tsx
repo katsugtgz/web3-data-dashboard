@@ -4,13 +4,17 @@ export interface ToastState {
 }
 
 export function Toast({ toast, onDismiss }: { toast: ToastState | null; onDismiss: () => void }) {
-  if (!toast) return null;
   return (
-    <div className={`toast-banner toast-${toast.tone}`} role="status" aria-live="polite">
-      <span>{toast.message}</span>
-      <button type="button" className="toast-x" onClick={onDismiss} aria-label="Dismiss notification">
-        ×
-      </button>
-    </div>
+    <>
+      <span className="sr" role="status" aria-atomic="true">{toast?.message ?? ''}</span>
+      {toast && (
+        <div className={`toast-banner toast-${toast.tone}`}>
+          <span aria-hidden="true">{toast.message}</span>
+          <button type="button" className="toast-x" onClick={onDismiss} aria-label="Dismiss notification">
+            ×
+          </button>
+        </div>
+      )}
+    </>
   );
 }

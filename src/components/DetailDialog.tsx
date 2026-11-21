@@ -187,7 +187,7 @@ function DetailDialogBody({
         </div>
       )}
 
-      {copyStatus && <CopyStatusBanner status={copyStatus} />}
+      <CopyStatusBanner status={copyStatus} />
 
       {card.b.includes('risk') ? (
         <p className="note risk-blocked">Brief unavailable for RISK items.</p>
