@@ -40,6 +40,21 @@ export const CATEGORIES: string[] = [
   'Token Presales',
 ];
 
+export const TASK_TYPES = [
+  'testnet',
+  'faucet',
+  'quest',
+  'waitlist',
+  'bridge',
+  'stake',
+  'mint',
+  'points',
+  'trade',
+  'social',
+  'node',
+  'other',
+] as const;
+
 export const TYPE_MAP: Record<string, string[]> = {
   Trading: ['trading', 'liquidity', 'check-wallet'],
   'Token airdrop': ['mint', 'ambassador', 'game', 'bounty', 'social', 'role'],

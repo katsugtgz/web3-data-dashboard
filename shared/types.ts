@@ -1,3 +1,5 @@
+import type { TASK_TYPES } from './constants';
+
 export type Grade = 'S' | 'A' | 'B' | 'C';
 
 export type Badge = 'live' | 'token' | 'early' | 'zero' | 'rerun' | 'risk';
@@ -124,19 +126,7 @@ export interface HealthResponse {
   snapshots: Record<string, HealthSnapshotStatus>;
 }
 
-export type TaskType =
-  | 'testnet'
-  | 'faucet'
-  | 'quest'
-  | 'waitlist'
-  | 'bridge'
-  | 'stake'
-  | 'mint'
-  | 'points'
-  | 'trade'
-  | 'social'
-  | 'node'
-  | 'other';
+export type TaskType = (typeof TASK_TYPES)[number];
 
 export type RiskLevel = 'ok' | 'warn' | 'risk';
 
