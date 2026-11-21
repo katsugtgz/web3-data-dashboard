@@ -1,32 +1,60 @@
-import { useEffect, useState } from 'react';
-import type { Card } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AirdropFeed } from '../../shared/types';
 import { fetchAirdrops, POLL_MS } from '../lib/airdrops';
 
-/** Polls the live airdrop list. Keeps the last successful list when a poll fails. */
-export function useAirdropFeed(): { cards: Card[] | null; failed: boolean } {
-  const [cards, setCards] = useState<Card[] | null>(null);
-  const [failed, setFailed] = useState(false);
+export interface AirdropFeedState {
+  feed: AirdropFeed | null;
+  loading: boolean;
+  failed: boolean;
+  refresh: () => void;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      fetchAirdrops()
-        .then(list => {
-          if (cancelled) return;
-          setCards(list);
-          setFailed(false);
-        })
-        .catch(() => {
-          if (!cancelled) setFailed(true);
-        });
-    };
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+/** Polls the live airdrop feed. Pauses in background tabs and keeps the last loaded list on error. */
+export function useAirdropFeed(): AirdropFeedState {
+  const [feed, setFeed] = useState<AirdropFeed | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const ctrlRef = useRef<AbortController | null>(null);
+  const lastFetchedRef = useRef<number>(0);
+
+  const load = useCallback(() => {
+    ctrlRef.current?.abort();
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    setLoading(true);
+    fetchAirdrops(ctrl.signal)
+      .then(next => {
+        if (ctrl.signal.aborted) return;
+        lastFetchedRef.current = next.fetchedAt;
+        setFeed(next);
+        setFailed(false);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (ctrl.signal.aborted) return;
+        setFailed(true);
+        setLoading(false);
+      });
   }, []);
 
-  return { cards, failed };
+  useEffect(() => {
+    load();
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, POLL_MS);
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastFetchedRef.current >= POLL_MS) {
+        load();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      ctrlRef.current?.abort();
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [load]);
+
+  return { feed, loading, failed, refresh: load };
 }

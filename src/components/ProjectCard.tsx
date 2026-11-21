@@ -2,26 +2,35 @@ import { useState } from 'react';
 import type { Badge, Card, Dashboard } from '../../shared/types';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
+import { taskStorageKey } from '../hooks/useWatchlist';
 
-const BADGE_CLASS: Partial<Record<Badge, string>> = { live: 'badge badge-live', risk: 'badge badge-risk' };
+const BADGE_CLASS: Partial<Record<Badge, string>> = {
+  live: 'badge badge-live',
+  token: 'badge badge-token',
+  early: 'badge badge-early',
+  zero: 'badge badge-zero',
+  risk: 'badge badge-risk',
+};
 
-export function BadgeChip({ k }: { k: Badge }) {
-  return <span className={BADGE_CLASS[k] ?? 'badge'}>{BADGE_LABEL[k]}</span>;
+export function BadgeChip({ k, riskLabel }: { k: Badge; riskLabel?: string }) {
+  const text = k === 'risk' && riskLabel ? riskLabel : BADGE_LABEL[k];
+  return <span className={BADGE_CLASS[k] ?? 'badge'}>{text}</span>;
 }
 
-function Avatar({ name, src }: { name: string; src: string }) {
+export function Avatar({ name, src, size = 38 }: { name: string; src: string; size?: number }) {
   const [broken, setBroken] = useState(false);
   const initials = name
-    .split(/\s+/)
+    .split(/[\s.-]+/)
+    .filter(Boolean)
     .map(w => w[0])
     .slice(0, 2)
     .join('')
     .toUpperCase();
   return (
-    <span className="avatar" aria-hidden="true">
-      <span>{initials}</span>
+    <span className="avatar" style={{ width: size, height: size }} aria-hidden="true">
+      <span>{initials || '?'}</span>
       {src && !broken && (
-        <img src={src} alt="" loading="lazy" width={36} height={36} onError={() => setBroken(true)} />
+        <img src={src} alt="" loading="lazy" width={size} height={size} onError={() => setBroken(true)} />
       )}
     </span>
   );
@@ -31,99 +40,170 @@ interface Props {
   card: Card;
   fit: Dashboard['FIT'];
   icons: Dashboard['IMGS'];
+  saved: boolean;
+  doneTasks: Set<string>;
+  onToggleSaved: (name: string) => void;
   onDetails: (card: Card) => void;
 }
 
-export function ProjectCard({ card: c, fit, icons, onDetails }: Props) {
+export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSaved, onDetails }: Props) {
   const fitLabels = c.fit.map(f => fit[f]).filter(Boolean);
   const icon = c.img !== undefined ? (c.img ?? '') : (icons[String(c.r)] ?? '');
   const mins = c.best.m && c.best.m !== '—' ? ` · ${c.best.m}` : '';
   const cost = c.best.c !== 'Free' ? `${c.best.c}${mins}` : `Free${mins}`;
+  const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
+
+  const totalTasks = c.tasks?.length ?? 1;
+  const doneCount = c.tasks
+    ? c.tasks.filter((t, i) => doneTasks.has(taskStorageKey(c.n, t.title, t.type, i))).length
+    : doneTasks.has(taskStorageKey(c.n, c.best.n, c.best.ty, 0))
+      ? 1
+      : 0;
 
   return (
-    <article className="cardx">
+    <article className={`cardx${saved ? ' is-saved' : ''}`}>
       <div className="cardrow">
         <Avatar key={icon} name={c.n} src={icon} />
-        <div>
-          <p className="cardname">
-            <span className="sr">Rank {c.r}. </span>
-            {c.n}
-          </p>
+        <div className="cardtitle-wrap">
+          <div className="cardname-line">
+            <span className="ranknum" aria-label={`Rank ${c.r}`}>
+              #{c.r}
+            </span>
+            <button type="button" className="cardname-btn" onClick={() => onDetails(c)}>
+              {c.n}
+            </button>
+          </div>
           <p className="ticker">
-            {c.t ? `$${c.t}` : 'No ticker yet'} · {c.f}
+            <span className="mono">{c.t ? `$${c.t}` : 'Pre-token'}</span>
+            {chains.length > 0 && (
+              <>
+                {' · '}
+                <span>
+                  {chains[0]}
+                  {chains.length > 1 ? ` +${chains.length - 1}` : ''}
+                </span>
+              </>
+            )}
           </p>
         </div>
-        <span className={`gradetip ${c.g}`} title={`Grade ${c.g}`}>
-          {c.g}
-        </span>
-        {c.x && <span className="codechip">{c.x}</span>}
-        <button type="button" className="more" onClick={() => onDetails(c)} aria-label={`Details for ${c.n}`}>
-          ›
-        </button>
+        <div className="card-actions">
+          <span className={`gradetip ${c.g}`} title={`Tier ${c.g}`}>
+            {c.g}
+          </span>
+          <button
+            type="button"
+            className="iconbtn starbtn"
+            aria-pressed={saved}
+            aria-label={saved ? `Remove ${c.n} from watchlist` : `Save ${c.n} to watchlist`}
+            title={saved ? 'Saved in watchlist' : 'Save to watchlist'}
+            onClick={() => onToggleSaved(c.n)}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="iconbtn"
+            onClick={() => onDetails(c)}
+            aria-label={`Details for ${c.n}`}
+            title="Inspect project & tasks"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        </div>
       </div>
-      <div className="badges">
-        {c.b.map(k => (
-          <BadgeChip key={k} k={k} />
-        ))}
-      </div>
+
+      {(c.b.length > 0 || c.x || doneCount > 0) && (
+        <div className="badges">
+          {c.b.map(k => (
+            <BadgeChip key={k} k={k} riskLabel={c.riskLabel} />
+          ))}
+          {c.x && <span className="codechip">{c.x}</span>}
+          {doneCount > 0 && (
+            <span className="badge badge-done" title="Completed tasks tracked locally">
+              ✓ {doneCount}/{totalTasks} done
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="meta">
         <div>
-          Funding<b>{c.f}</b>
+          Funding
+          <b className="mono">{c.f}</b>
         </div>
         <div>
-          Tasks<b>{c.tk}</b>
+          Tasks
+          <b className="mono">{c.tk}</b>
         </div>
         <div>
-          Heat<b>{c.h.toLocaleString('en-US')}</b>
+          Heat
+          <b className="mono">{c.h.toLocaleString('en-US')}</b>
         </div>
         <div>
-          Updated<b>{c.u === 'today' ? 'Today' : c.u}</b>
+          Updated
+          <b>{c.u === 'today' ? 'Today' : c.u}</b>
         </div>
       </div>
+
       {fitLabels.length > 0 && (
-        <p className="fit">
-          <span className="lbl">Best for: </span>
+        <div className="fit">
+          <span className="lbl">Best for</span>
           {fitLabels.map(f => (
             <span key={f} className="typetip">
               {f}
             </span>
           ))}
-        </p>
-      )}
-      <div className="best">
-        <span className="bl">Best task</span>
-        <span>{c.best.n}</span>
-        <span className="typetip">{c.best.ty}</span>
-        <span className="subs">{cost}</span>
-        {c.url ? (
-          <a
-            className="btn"
-            href={c.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Do task for ${c.n} (opens in a new tab)`}
-          >
-            Do it
-          </a>
-        ) : (
-          <span className="nolink" title="Outbound link not captured in this snapshot">
-            Link not in snapshot
-          </span>
-        )}
-      </div>
-      <div className="score">
-        <div className="scorebar" aria-hidden="true">
-          <span style={{ width: `${c.sc}%` }} />
         </div>
-        <b>
-          {c.sc}/100 · {c.g}
-        </b>
-        <span
-          className="subs"
-          aria-label={`Sub-scores: launch ${c.sub[0]} of 10, value ${c.sub[1]} of 10, heat ${orDash(c.sub[2])} of 10`}
-        >
-          Launch {c.sub[0]} · Value {c.sub[1]} · Heat {orDash(c.sub[2])}
-        </span>
+      )}
+
+      <div className="card-bottom">
+        <div className="best">
+          <div className="best-info">
+            <span className="bl">Best task</span>
+            <div className="best-title-row">
+              <span className="best-name">{c.best.n}</span>
+              {c.best.ty && <span className="typetip">{c.best.ty}</span>}
+            </div>
+            <span className="subs mono">{cost}</span>
+          </div>
+          {c.url ? (
+            <a
+              className="btn"
+              href={c.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Do task for ${c.n} (opens in a new tab)`}
+            >
+              Do it
+              <span aria-hidden="true">↗</span>
+            </a>
+          ) : (
+            <button type="button" className="btn btn-subtle" onClick={() => onDetails(c)}>
+              Details
+            </button>
+          )}
+        </div>
+
+        <div className="score">
+          <div className="scorebar" aria-hidden="true">
+            <span className={`fill-${c.g}`} style={{ width: `${Math.min(100, Math.max(0, c.sc))}%` }} />
+          </div>
+          <b className="mono">
+            {c.sc}
+            <span className="score-max">/100</span>
+          </b>
+          <span
+            className="subs"
+            aria-label={`Sub-scores: launch ${c.sub[0]} of 10, value ${c.sub[1]} of 10, heat ${orDash(c.sub[2])} of 10`}
+          >
+            L {c.sub[0]} · V {c.sub[1]}
+            {c.sub[2] != null ? ` · H ${c.sub[2]}` : ''}
+          </span>
+        </div>
       </div>
     </article>
   );

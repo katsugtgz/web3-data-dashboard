@@ -1,21 +1,25 @@
 # Web3 Data Dashboard
 
-An English, accessible clone of an 18-section Web3 data dashboard — project airdrops, crypto and stock markets, DeFi rankings, VC investors, X traffic, on-chain stocks, AI resources and more. Original by @ASSO7878.
+An English, accessible clone of an 18-section Web3 data dashboard — live airdrop radar, upcoming TGEs, crypto & stock markets, DeFi rankings, VC investors, X traffic, on-chain stocks, AI resources, and more. Original by [@ASSO7878](https://x.com/ASSO7878/).
 
 **Live demo:** https://katsugtgz.github.io/web3-data-dashboard/
 
 ## Features
 
-- 18 dashboard sections covering airdrops, markets (crypto/stocks), DeFi protocol rankings, VC investors, X traffic, on-chain stocks, AI resources and more
-- Two harvest sources with 21 + 34 scraped section snapshots in `data/harvest/` and `data/harvest-net/`
-- Live airdrop feed polled from `https://import-command-query-8ca052.surf.computer/api/airdrops` (`src/lib/airdrops.ts`)
-- Local API server serving the dashboard snapshot and per-section JSON
+- **Live Airdrop Radar** — polls `https://import-command-query-8ca052.surf.computer/api/airdrops` (`src/lib/airdrops.ts`) every 60s (pauses in background tabs), with manual refresh and graceful snapshot fallback
+- **Multi-facet filtering & sorting** — filter by token status (`All`, `Pre-token`, `Token live`, `Saved`), project type (including US stock tokens), tier (`S`/`A`/`B`/`C`), multi-chain, `$0 Free`, best-for profile, and instant search (`/` shortcut); sort by Rank/Score, Funding, Heat (X score), Recency, or Cost
+- **Local watchlist & task checklist** — bookmark projects (`★`) and check off individual tasks inside the project detail modal (`localStorage` persisted, synced across tabs)
+- **Upcoming TGE / Claimable rail** — filterable horizontal card rail with normalized English statuses (`Claimable` / `Eligibility check`)
+- **17 snapshot data sections** — searchable, sortable, sticky-header tables with English column labels, auto-linked URLs, and semantic gain/loss indicators
+- **Dual Light / Dark theme** — follows OS `prefers-color-scheme` by default with `<meta name="color-scheme">` FOUC prevention and header toggle
+- **URL hash navigation** — deep-link directly to any section (`#airdrops`, `#predictions`, `#defi`, etc.)
+- **Local Bun API server** — serves the dashboard snapshot, per-section JSON (with UTF-8 URI decoding), and `/api/health`
 
 ## Tech stack
 
 - [Bun](https://bun.sh) — package manager, runtime, `Bun.serve` API + static server
 - React 19 + TypeScript
-- Vite — frontend bundler
+- Vite 8 — frontend bundler
 
 ## Quick start
 
@@ -36,7 +40,7 @@ Requires [Bun](https://bun.sh) 1.4.0 or newer.
 ├── data/            # dashboard.json snapshot + harvest/ and harvest-net/ section scrapes
 ├── server/          # Bun.serve backend: API routes + static file serving from dist/
 ├── shared/          # shared TypeScript types
-├── src/             # React app (components, hooks, lib)
+├── src/             # React app (components, hooks, lib, styles)
 └── scripts/         # Pages build helper
 ```
 
@@ -44,6 +48,7 @@ Requires [Bun](https://bun.sh) 1.4.0 or newer.
 
 | Endpoint | Description |
 | --- | --- |
+| `GET /api/health` | Service health check with card & section counts |
 | `GET /api/dashboard` | Full dashboard snapshot (`data/dashboard.json`) |
 | `GET /api/cards` | Card list (`dashboard.CARDS`) |
 | `GET /api/sections` | Section summaries (source + name) |
@@ -55,4 +60,4 @@ The deployed site at the live demo URL is a **static build with no API server**.
 
 ## Data disclaimer
 
-All data is a snapshot scraped from a third-party dashboard, bundled at build time. It is not live, may be stale, and is **not financial advice**.
+All snapshot sections are scraped from a third-party dashboard and bundled at build time. They are not live, may be stale, and are **not financial advice**.
