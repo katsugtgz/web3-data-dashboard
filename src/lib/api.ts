@@ -13,12 +13,11 @@ declare global {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export async function takePrefetched<T>(key: string, signal?: AbortSignal): Promise<T | null> {
+export async function readPrefetched<T>(key: string, signal?: AbortSignal, consume = false): Promise<T | null> {
   signal?.throwIfAborted();
   const map = typeof window !== 'undefined' ? window.__RADAR_PREFETCH__ : undefined;
   const pending = map?.[key];
   if (!pending) return null;
-  delete map[key];
   const deadline = AbortSignal.timeout(2_500);
   const stop = signal ? AbortSignal.any([deadline, signal]) : deadline;
   const { promise, resolve } = Promise.withResolvers<null>();
@@ -27,6 +26,8 @@ export async function takePrefetched<T>(key: string, signal?: AbortSignal): Prom
   try {
     const body = await Promise.race([pending.catch(() => null), promise]);
     signal?.throwIfAborted();
+    // Boot only peeks; polling consumes the result or retires a stalled entry.
+    if (consume && map[key] === pending) delete map[key];
     return body as T | null;
   } finally {
     stop.removeEventListener('abort', release);
@@ -56,7 +57,7 @@ export async function getJson<T>(
   const snapshotUrl = `${import.meta.env.BASE_URL}data${cleanPath.split('?')[0]}`;
 
   if (!API_BASE) {
-    const body = await takePrefetched<T>(prefetchKey, signal);
+    const body = await readPrefetched<T>(prefetchKey, signal, true);
     if (body !== null) return { status: 200, body, etag: null, source: 'snapshot' };
     return fetchJson(snapshotUrl, 'snapshot', {}, signal);
   }
@@ -70,6 +71,11 @@ export async function getJson<T>(
     // Only transport failures and deadlines qualify for offline fallback.
     if (signal?.aborted || !(err instanceof TypeError || (err instanceof DOMException &&
       (err.name === 'TimeoutError' || err.name === 'AbortError')))) throw err;
-    return fetchJson(snapshotUrl, 'snapshot', {}, signal);
+    try {
+      return await fetchJson(snapshotUrl, 'snapshot', {}, signal);
+    } catch (snapshotError) {
+      if (signal?.aborted) throw snapshotError;
+      throw new AggregateError([err, snapshotError], 'Worker and snapshot requests both failed', { cause: err });
+    }
   }
 }
