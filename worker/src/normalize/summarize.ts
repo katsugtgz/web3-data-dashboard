@@ -45,7 +45,8 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     if (HAN_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
     // The model sees untrusted post text. A crafted post can steer the summary
     // into links, wallet addresses, or drain instructions — never store those.
-    if (/https?:\/\/|www\.|[\w.-]+\.(?:xyz|fun|top|icu)/i.test(summary)) return null;
+    // Any domain-like token (foo.tld, foo.bar.tld) — not just a fixed TLD list.
+    if (/https?:\/\/|www\.|\b[\w-]+(?:\.[\w-]+)+\.(?:[a-z]{2,24})\b/i.test(summary)) return null;
     if (/0x[a-fA-F0-9]{6,}/.test(summary)) return null;
     if (/\b(connect|visit|open)\b[^.]{0,40}\bwallet\b/i.test(summary) || /\bseed phrase\b|\bprivate key\b/i.test(summary)) {
       return null;
@@ -60,6 +61,9 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
           .filter((c): c is string => typeof c === 'string')
           .map(c => c.trim())
           .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !NON_LATIN_RE.test(c))
+          // Chains render into feed + agent briefs: same unsafe-content bar
+          // as the summary (no URLs, no addresses).
+          .filter(c => !/https?:\/\/|www\.|0x[a-fA-F0-9]{6,}/.test(c))
           .slice(0, 8)
       : [];
 

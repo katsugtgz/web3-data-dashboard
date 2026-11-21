@@ -262,6 +262,8 @@ export async function ingestPostIntoCluster(
              SELECT json_group_array(DISTINCT value)
              FROM (SELECT value FROM json_each(clusters.risk_reasons)
                    UNION SELECT value FROM json_each(?10))
+             WHERE value != 'Single low-trust source'
+                OR MAX(clusters.source_count, ?12) <= 1
            ),
            risk_level = CASE
              WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
@@ -318,8 +320,15 @@ export async function ingestPostIntoCluster(
            ),
            risk_reasons = (
              SELECT json_group_array(DISTINCT value)
-             FROM (SELECT value FROM json_each(clusters.risk_reasons)
-                   UNION SELECT value FROM json_each(excluded.risk_reasons))
+             FROM (
+               SELECT value FROM json_each(clusters.risk_reasons)
+               UNION
+               SELECT value FROM json_each(excluded.risk_reasons)
+             )
+             -- The single-low-trust warning is meaningless once the cluster
+             -- has 2+ distinct sources (post-merge count is knowable here).
+             WHERE value != 'Single low-trust source'
+                OR MAX(clusters.source_count, excluded.source_count) <= 1
            ),
            risk_level = CASE
              WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'

@@ -83,8 +83,6 @@ export const SEED_SOURCES: SourceConfig[] = validateSources(sourcesJson);
  * would hit D1's 100-variable limit as the registry grows).
  */
 export async function syncSources(db: D1Database, sources: SourceConfig[] = SEED_SOURCES): Promise<void> {
-  if (sources.length === 0) return;
-
   const existingRes = await db.prepare('SELECT id, lang, trust, enabled, tags FROM sources').all<{
     id: string;
     lang: string | null;

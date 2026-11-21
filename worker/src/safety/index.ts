@@ -98,7 +98,13 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
   let lookalikeBaseline = input.knownProjectDomains;
   if (input.platformDomains instanceof Set) {
     lookalikeBaseline = new Map<string, string>(input.knownProjectDomains);
-    for (const d of input.platformDomains) lookalikeBaseline.set(d, 'platform');
+    for (const d of input.platformDomains) {
+      // Shared-code hosts (github.com, github.io, gitlab.com) produce mass
+      // false lookalikes (gitlab.com vs github.com, *.github.io pages) —
+      // never useful comparison targets.
+      if (/^(github\.com|github\.io|gitlab\.com)$/.test(d)) continue;
+      lookalikeBaseline.set(d, 'platform');
+    }
   }
 
   const bump = (next: RiskLevel, reason: string) => {

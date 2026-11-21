@@ -213,6 +213,14 @@ describe('syncSources conditional registry sync', () => {
     expect(sourceWriteCount()).toBe(baseline);
   });
 
+  test('an empty config still disables previously enabled rows (no early return)', async () => {
+    const { db } = createCountingD1();
+    await syncSources(db, ONE);
+    await syncSources(db, []);
+    const row = await getSource(db, 'telegram:alpha_feed');
+    expect(row).toMatchObject({ enabled: 0, status: 'ok' }); // history kept
+  });
+
   test('a case-only handle edit updates the existing row instead of inserting a parallel source', async () => {
     const { db } = createCountingD1();
     await syncSources(db, validateSources([

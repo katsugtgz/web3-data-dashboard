@@ -49,9 +49,9 @@ export async function markSnapshotError(db: D1Database, key: string, error: unkn
        VALUES (?1, ?2, ?3, ?4, 0, ?5)
        ON CONFLICT(key) DO UPDATE SET
          ok = 0,
-         error = excluded.error,
-         fetched_at = excluded.fetched_at
-       WHERE excluded.fetched_at >= snapshots.fetched_at`,
+         error = excluded.error
+       WHERE snapshots.ok = 1
+          OR excluded.fetched_at >= snapshots.fetched_at`,
     )
     .bind(key, body, etag, nowMs, msg)
     .run();

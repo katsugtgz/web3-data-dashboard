@@ -65,7 +65,6 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   // dedupes chain names, so the second row never doubles the entry.
   ['TON', /\btoncoin\b|\bton ?(?:blockchain|network)\b|\btelegram open network\b/i],
   ['TON', /\bTON\b/],
-  ['Sei', /\bsei\b(?:\s+(?:network|chain))?/],
   ['Sei', /\bsei\b(?:\s+(?:network|chain))?/i],
   ['Injective', /\binjective\b/i],
   ['Celestia', /\bcelestia\b|\btia\b/i],
@@ -183,11 +182,13 @@ export function extractTicker(text: string): string | undefined {
 }
 
 export function extractChainsFromText(text: string): string[] {
-  const chains: string[] = [];
+  // A chain can be matched by several rows (TON phrases + bare ticker); keep
+  // one entry per chain name, in CHAIN_PATTERNS order.
+  const chains = new Set<string>();
   for (const [name, re] of CHAIN_PATTERNS) {
-    if (re.test(text)) chains.push(name);
+    if (re.test(text)) chains.add(name);
   }
-  return chains;
+  return [...chains];
 }
 
 export function extractTaskTypes(text: string, urls: string[]): TaskType[] {
