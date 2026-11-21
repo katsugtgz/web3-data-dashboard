@@ -54,7 +54,7 @@ export default function App() {
   const cards = airdrops.feed?.cards ?? [];
   const tgeItems = airdrops.feed?.tge ?? [];
   const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
-  const dropsFilters = useDropsFilters(drops.items, tab === 'drops');
+  const dropsFilters = useDropsFilters(drops.items);
 
   const mainRef = useRef<HTMLElement>(null);
 

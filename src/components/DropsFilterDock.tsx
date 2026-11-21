@@ -1,21 +1,6 @@
 import type { RefObject } from 'react';
-import type { TaskType } from '../../shared/types';
+import { TASK_TYPES } from '../../shared/constants';
 import type { DropsFiltersState, DropsSort } from '../hooks/useDropsFilters';
-
-const TASK_TYPES: TaskType[] = [
-  'testnet',
-  'faucet',
-  'quest',
-  'waitlist',
-  'bridge',
-  'stake',
-  'mint',
-  'points',
-  'trade',
-  'social',
-  'node',
-  'other',
-];
 
 interface Props {
   filters: DropsFiltersState;

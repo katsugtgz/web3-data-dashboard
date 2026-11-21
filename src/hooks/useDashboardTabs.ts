@@ -28,8 +28,9 @@ export interface DashboardTabs {
  * correctly from there.
  */
 export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput): DashboardTabs {
-  const [tab, setTab] = useState<string>(() => findHashTab());
-  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set([findHashTab()]));
+  const [tab, setTab] = useState(() => findHashTab() ?? TABS[0].id);
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([tab]));
+  const dropsHash = useRef('#drops');
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const tabbarRef = useRef<HTMLDivElement | null>(null);
@@ -43,15 +44,22 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
       if (!TABS.some(t => t.id === nextId)) return;
       setTab(nextId);
       markVisited(nextId);
-      history.replaceState(null, '', `#${nextId}`);
+      const nextHash = nextId === 'drops' ? dropsHash.current : `#${nextId}`;
+      if (findHashTab() !== nextId) {
+        if (findHashTab() === 'drops') dropsHash.current = window.location.hash;
+        history.replaceState(history.state, '', nextHash);
+      }
       scrollToMainTop();
     },
     [markVisited],
   );
 
   useEffect(() => {
-    const onHash = () => {
+    const onHash = (event: HashChangeEvent) => {
+      const oldHash = new URL(event.oldURL).hash;
+      if (findHashTab(oldHash) === 'drops') dropsHash.current = oldHash;
       const next = findHashTab();
+      if (!next) return;
       setTab(next);
       markVisited(next);
     };
@@ -101,9 +109,9 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   return { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey };
 }
 
-function findHashTab(): string {
-  const raw = window.location.hash.replace(/^#/, '').split('?')[0];
-  return TABS.some(t => t.id === raw) ? raw : TABS[0].id;
+function findHashTab(hash = window.location.hash): string | undefined {
+  const raw = hash.slice(1).split('?')[0];
+  return TABS.some(t => t.id === raw) ? raw : undefined;
 }
 
 function scrollToMainTop(): void {

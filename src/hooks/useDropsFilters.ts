@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FeedItem, TaskType } from '../../shared/types';
+import { TASK_TYPES } from '../../shared/constants';
 
 export type DropsSort = 'score' | 'new';
 export const DROPS_PAGE_STEP = 24;
@@ -13,34 +14,23 @@ interface ParsedHashParams {
   query: string;
 }
 
-const VALID_TASK_TYPES = new Set<string>([
-  'testnet',
-  'faucet',
-  'quest',
-  'waitlist',
-  'bridge',
-  'stake',
-  'mint',
-  'points',
-  'trade',
-  'social',
-  'node',
-  'other',
-]);
+const DEFAULT_FILTERS: ParsedHashParams = {
+  taskType: 'All', chain: 'All', hideRisk: true, minSources: 1, sort: 'score', query: '',
+};
+
+const VALID_TASK_TYPES = new Set<string>(TASK_TYPES);
 
 function readDropsHashParams(): ParsedHashParams {
   const hash = window.location.hash.replace(/^#/, '');
   const qIdx = hash.indexOf('?');
   const tab = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
-  if (tab && tab !== 'drops') {
-    return { taskType: 'All', chain: 'All', hideRisk: true, minSources: 1, sort: 'score', query: '' };
-  }
+  if (tab && tab !== 'drops') return DEFAULT_FILTERS;
   const params = new URLSearchParams(qIdx >= 0 ? hash.slice(qIdx + 1) : '');
   const rawType = params.get('type') ?? 'All';
   const taskType = VALID_TASK_TYPES.has(rawType) ? (rawType as TaskType) : 'All';
   const chain = params.get('chain') || 'All';
   const hideRisk = params.get('risk') !== 'show';
-  const minSources = Math.max(1, Number.parseInt(params.get('min') ?? '1', 10) || 1);
+  const minSources = Math.min(3, Math.max(1, Number.parseInt(params.get('min') ?? '1', 10) || 1));
   const sort: DropsSort = params.get('sort') === 'new' ? 'new' : 'score';
   const query = params.get('q') ?? '';
   return { taskType, chain, hideRisk, minSources, sort, query };
@@ -48,7 +38,7 @@ function readDropsHashParams(): ParsedHashParams {
 
 function writeDropsHashParams(state: ParsedHashParams): void {
   const currentTab = window.location.hash.replace(/^#/, '').split('?')[0];
-  if (currentTab && currentTab !== 'drops') return;
+  if (currentTab && currentTab !== 'drops' && currentTab !== 'main') return;
   const params = new URLSearchParams();
   if (state.taskType !== 'All') params.set('type', state.taskType);
   if (state.chain !== 'All') params.set('chain', state.chain);
@@ -59,64 +49,38 @@ function writeDropsHashParams(state: ParsedHashParams): void {
   const qs = params.toString();
   const nextHash = qs ? `#drops?${qs}` : '#drops';
   if (window.location.hash !== nextHash) {
-    history.replaceState(null, '', nextHash);
+    history.replaceState(history.state, '', nextHash);
   }
 }
 
-export function useDropsFilters(items: FeedItem[], isDropsTab: boolean) {
-  const initial = useMemo(() => readDropsHashParams(), []);
-  const [taskType, setTaskTypeState] = useState<'All' | TaskType>(initial.taskType);
-  const [chain, setChainState] = useState<string>(initial.chain);
-  const [hideRisk, setHideRiskState] = useState<boolean>(initial.hideRisk);
-  const [minSources, setMinSourcesState] = useState<number>(initial.minSources);
-  const [sort, setSortState] = useState<DropsSort>(initial.sort);
-  const [query, setQueryState] = useState<string>(initial.query);
-  const [limit, setLimit] = useState<number>(DROPS_PAGE_STEP);
+export function useDropsFilters(items: FeedItem[]) {
+  const [filters, setFilters] = useState(readDropsHashParams);
+  const { taskType, chain, hideRisk, minSources, sort, query } = filters;
+  const [limit, setLimit] = useState(DROPS_PAGE_STEP);
 
   useEffect(() => {
-    if (!isDropsTab) return;
-    writeDropsHashParams({ taskType, chain, hideRisk, minSources, sort, query });
-  }, [isDropsTab, taskType, chain, hideRisk, minSources, sort, query]);
+    const onHashChange = () => {
+      if (window.location.hash.slice(1).split('?')[0] !== 'drops') return;
+      setFilters(readDropsHashParams());
+      setLimit(DROPS_PAGE_STEP);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
-  const setTaskType = useCallback((next: 'All' | TaskType) => {
-    setTaskTypeState(next);
+  const updateFilters = useCallback((next: ParsedHashParams) => {
+    setFilters(next);
+    writeDropsHashParams(next);
     setLimit(DROPS_PAGE_STEP);
   }, []);
 
-  const setChain = useCallback((next: string) => {
-    setChainState(next);
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
-
-  const toggleHideRisk = useCallback(() => {
-    setHideRiskState(v => !v);
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
-
-  const setMinSources = useCallback((next: number) => {
-    setMinSourcesState(next);
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
-
-  const setSort = useCallback((next: DropsSort) => {
-    setSortState(next);
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
-
-  const setQuery = useCallback((next: string) => {
-    setQueryState(next);
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
-
-  const resetFilters = useCallback(() => {
-    setTaskTypeState('All');
-    setChainState('All');
-    setHideRiskState(true);
-    setMinSourcesState(1);
-    setSortState('score');
-    setQueryState('');
-    setLimit(DROPS_PAGE_STEP);
-  }, []);
+  const setTaskType = (taskType: ParsedHashParams['taskType']) => updateFilters({ ...filters, taskType });
+  const setChain = (chain: string) => updateFilters({ ...filters, chain });
+  const toggleHideRisk = () => updateFilters({ ...filters, hideRisk: !filters.hideRisk });
+  const setMinSources = (minSources: number) => updateFilters({ ...filters, minSources });
+  const setSort = (sort: DropsSort) => updateFilters({ ...filters, sort });
+  const setQuery = (query: string) => updateFilters({ ...filters, query });
+  const resetFilters = () => updateFilters(DEFAULT_FILTERS);
 
   const chainOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -125,8 +89,10 @@ export function useDropsFilters(items: FeedItem[], isDropsTab: boolean) {
         counts.set(c, (counts.get(c) ?? 0) + 1);
       }
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
-  }, [items]);
+    const options = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+    if (chain !== 'All' && !options.some(([name]) => name === chain)) options.push([chain, counts.get(chain) ?? 0]);
+    return options;
+  }, [items, chain]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -153,7 +119,7 @@ export function useDropsFilters(items: FeedItem[], isDropsTab: boolean) {
   const rendered = useMemo(() => visible.slice(0, limit), [visible, limit]);
   const remaining = Math.max(0, visible.length - rendered.length);
   const hasAnyFilter =
-    taskType !== 'All' || chain !== 'All' || !hideRisk || minSources > 1 || query.trim() !== '';
+    taskType !== 'All' || chain !== 'All' || !hideRisk || minSources > 1 || sort !== 'score' || query.trim() !== '';
 
   return {
     taskType,
