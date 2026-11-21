@@ -1,8 +1,9 @@
 export const orDash = <T,>(v: T | null | undefined): T | string => (v == null ? '—' : v);
 
 export function sortVal(s: string): number | null {
-  const cleaned = s.replace(/[$,+%\s]/g, '');
-  const m = cleaned.match(/^(-?\d+(?:\.\d+)?)([KMBT]?)$/i);
+  // Legacy display strings can include direction arrows and CJK magnitude units.
+  const cleaned = s.replace(/[▲▼$,+%\s]/g, '');
+  const m = cleaned.match(/^(-?\d+(?:\.\d+)?)([KMBT\u4e07\u4ebf]?)$/i);
   if (!m) return null;
   const mult: Record<string, number> = {
     '': 1,
@@ -10,8 +11,11 @@ export function sortVal(s: string): number | null {
     M: 1e6,
     B: 1e9,
     T: 1e12,
+    '\u4e07': 1e4,
+    '\u4ebf': 1e8,
   };
-  return parseFloat(m[1]) * mult[m[2].toUpperCase()];
+  const value = parseFloat(m[1]) * mult[m[2].toUpperCase()];
+  return /▼/.test(s) ? -Math.abs(value) : value;
 }
 
 export function cmpCells(a: string, b: string): number {
