@@ -234,13 +234,44 @@ export async function ingestPostIntoCluster(
   });
 
   if (existing) {
+    // Merge against the STORED row, not the stale in-memory `existing` read:
+    // a concurrent ingest may have escalated risk between our SELECT and this
+    // UPDATE, and a plain `risk_level = ?9` would silently downgrade it.
+    // Same JSON-union + escalation as the first-insert conflict path; dates
+    // stay monotonic; an AI summary is never overwritten by rule output.
     await db
       .prepare(
         `UPDATE clusters SET
-           project = ?2, ticker = ?3, domain = ?4, chains = ?5, task_types = ?6,
-           summary = ?7, summary_source = ?8, risk_level = ?9, risk_reasons = ?10,
-           score = ?11, source_count = ?12, surf_tier = ?13, surf_rank = ?14,
-           first_seen = ?15, last_seen = ?16
+           chains = (
+             SELECT json_group_array(DISTINCT value)
+             FROM (SELECT value FROM json_each(clusters.chains)
+                   UNION SELECT value FROM json_each(?5))
+           ),
+           task_types = (
+             SELECT CASE
+                      WHEN COUNT(DISTINCT value) > 1
+                      THEN json_group_array(value) FILTER (WHERE value != 'other')
+                      ELSE json_group_array(DISTINCT value)
+                    END
+             FROM (SELECT value FROM json_each(clusters.task_types)
+                   UNION SELECT value FROM json_each(?6))
+           ),
+           summary = CASE WHEN clusters.summary_source = 'ai' THEN clusters.summary ELSE ?7 END,
+           summary_source = CASE WHEN clusters.summary_source = 'ai' THEN 'ai' ELSE ?8 END,
+           risk_reasons = (
+             SELECT json_group_array(DISTINCT value)
+             FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                   UNION SELECT value FROM json_each(?10))
+           ),
+           risk_level = CASE
+             WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
+             WHEN clusters.risk_level = 'warn' OR ?9 = 'warn' THEN 'warn'
+             ELSE 'ok'
+           END,
+           score = ?11, source_count = MAX(clusters.source_count, ?12),
+           surf_tier = COALESCE(?13, clusters.surf_tier), surf_rank = COALESCE(?14, clusters.surf_rank),
+           first_seen = MIN(clusters.first_seen, ?15), last_seen = MAX(clusters.last_seen, ?16),
+           project = ?2, ticker = COALESCE(?3, clusters.ticker), domain = COALESCE(?4, clusters.domain)
          WHERE id = ?1`,
       )
       .bind(
