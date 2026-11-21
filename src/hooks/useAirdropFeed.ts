@@ -57,5 +57,7 @@ export function useAirdropFeed(): AirdropFeedState {
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
 
-  return { feed, loading, failed, isLiveApi, refresh };
+  // A failed refresh must not keep the stale feed labelled "Live API";
+  // consumers already render their failed branches off `failed`.
+  return { feed, loading, failed, isLiveApi: isLiveApi && !failed, refresh };
 }
