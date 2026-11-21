@@ -58,7 +58,9 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
     const onHash = (event: HashChangeEvent) => {
       const oldHash = new URL(event.oldURL).hash;
       if (findHashTab(oldHash) === 'drops') dropsHash.current = oldHash;
-      const next = window.location.hash ? findHashTab() : TABS[0].id;
+      const hash = window.location.hash;
+      if (!hash) dropsHash.current = '#drops';
+      const next = hash ? findHashTab(hash) : TABS[0].id;
       if (!next) return;
       setTab(next);
       markVisited(next);
@@ -111,7 +113,13 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
 
 function findHashTab(hash = window.location.hash): string | undefined {
   const raw = hash.slice(1).split('?')[0];
+  if (raw === '' && hash.includes('?')) return 'drops';
   return TABS.some(t => t.id === raw) ? raw : undefined;
+}
+
+/** True when this hash targets the Drops tab: `#drops`, `#drops?…`, or an empty segment with query (`#?type=…`). */
+export function isDropsQueryHash(hash: string): boolean {
+  return findHashTab(hash) === 'drops';
 }
 
 function scrollToMainTop(): void {

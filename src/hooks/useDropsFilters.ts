@@ -20,6 +20,13 @@ const DEFAULT_FILTERS: ParsedHashParams = {
 
 const VALID_TASK_TYPES = new Set<string>(TASK_TYPES);
 
+/** True when this hash targets the Drops tab: `#drops`, `#drops?…`, or an empty segment with query (`#?type=…`). */
+export function isDropsQueryHash(hash: string): boolean {
+  const segment = hash.replace(/^#/, '').split('?')[0];
+  if (segment === 'drops') return true;
+  return segment === '' && hash.includes('?');
+}
+
 function readDropsHashParams(): ParsedHashParams {
   const hash = window.location.hash.replace(/^#/, '');
   const qIdx = hash.indexOf('?');
@@ -61,7 +68,12 @@ export function useDropsFilters(items: FeedItem[]) {
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash;
-      if (hash && hash.slice(1).split('?')[0] !== 'drops') return;
+      if (hash === '') {
+        setFilters(DEFAULT_FILTERS);
+        setLimit(DROPS_PAGE_STEP);
+        return;
+      }
+      if (!isDropsQueryHash(hash)) return;
       setFilters(readDropsHashParams());
       setLimit(DROPS_PAGE_STEP);
     };
