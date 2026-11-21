@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
 import { formatTgeStatus } from '../lib/labels';
 import { Avatar } from './ProjectCard';
@@ -31,13 +31,6 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
   const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
   const otherCount = normalized.length - claimableCount - verifyCount;
-
-  useEffect(() => {
-    if (filter === 'other' && otherCount === 0) {
-      setFilter('all');
-    }
-  }, [filter, otherCount]);
-
   const activeFilter: TgeFilter = filter === 'other' && otherCount === 0 ? 'all' : filter;
 
   const visible = useMemo(() => {
@@ -56,11 +49,7 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   };
 
   return (
-    <div
-      className="tge-section"
-      role="region"
-      aria-label="Upcoming TGE and claimable airdrops"
-    >
+    <div className="tge-section">
       <div className="tge-toolbar">
         <div className="chipline" role="group" aria-label="Filter TGE status">
           <button type="button" className="chip" aria-pressed={activeFilter === 'all'} onClick={() => setFilter('all')}>
@@ -103,36 +92,44 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
         </div>
       </div>
 
-      <div className="tge-rail" ref={railRef} tabIndex={0}>
-        {visible.map(it => (
-          <article key={`${it.name}-${it.d}`} className="tge-card">
-            <div className="tge-card-top">
-              <Avatar name={it.name} src={it.logo ?? ''} size={30} />
-              <div className="tge-card-title">
-                <span className="tn">{it.name}</span>
-                {it.ticker && <span className="tt mono">${it.ticker}</span>}
+      {visible.length > 0 ? (
+        <div
+          className="tge-rail"
+          ref={railRef}
+          role="region"
+          aria-label="Upcoming TGE and claimable airdrops"
+          tabIndex={0}
+        >
+          {visible.map(it => (
+            <article key={`${it.name}-${it.d}`} className="tge-card">
+              <div className="tge-card-top">
+                <Avatar name={it.name} src={it.logo ?? ''} size={30} />
+                <div className="tge-card-title">
+                  <span className="tn">{it.name}</span>
+                  {it.ticker && <span className="tt mono">${it.ticker}</span>}
+                </div>
+                {it.tier && <span className={`gradetip ${it.tier}`}>{it.tier}</span>}
               </div>
-              {it.tier && <span className={`gradetip ${it.tier}`}>{it.tier}</span>}
-            </div>
-            <div className="tge-card-meta">
-              <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
-              <span className="tt mono">{it.d}</span>
-              {it.raise && <span className="tt mono">{it.raise}</span>}
-            </div>
-            {it.url && (
-              <a
-                className="tge-link"
-                href={it.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Open ${it.name} link (opens in a new tab)`}
-              >
-                Open link ↗
-              </a>
-            )}
-          </article>
-        ))}
-      </div>
+              <div className="tge-card-meta">
+                <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
+                <span className="tt mono">{it.d}</span>
+                {it.raise && <span className="tt mono">{it.raise}</span>}
+              </div>
+              {it.url && (
+                <a className="tge-link" href={it.url} target="_blank" rel="noopener noreferrer">
+                  Open link
+                  <span className="sr"> for {it.name} (opens in a new tab)</span>
+                  <span aria-hidden="true"> ↗</span>
+                </a>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="note" role="status">
+          No TGE events match this filter.
+        </p>
+      )}
     </div>
   );
 }

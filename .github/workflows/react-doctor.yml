@@ -1,0 +1,50 @@
+# React Doctor: security, performance, correctness, accessibility, bundle-size,
+# and architecture checks for React.
+#
+# These settings were written by `react-doctor ci config`. Run it again to change them.
+# Docs: https://react.doctor/ci
+
+name: React Doctor
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: ["master"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+
+concurrency:
+  group: react-doctor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  react-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 gives React Doctor the full git history it needs to find the merge base with the target branch. Without it a shallow checkout has no merge base, so PR runs can't compare against the base and fall back to reporting every issue in the changed files (pre-existing ones included) instead of only the ones the PR introduced.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - id: doctor
+        uses: millionco/react-doctor@695e46eee203a5d1855020191aa7e9c010a1250e # v2
+        with:
+          blocking: warning
+          scope: full
+
+      - name: Enforce 100/100 React Doctor score
+        if: github.event_name == 'pull_request'
+        env:
+          DOCTOR_SCORE: ${{ steps.doctor.outputs.score }}
+          DOCTOR_ISSUES: ${{ steps.doctor.outputs.total-issues }}
+        run: |
+          echo "React Doctor score: ${DOCTOR_SCORE}/100 (issues: ${DOCTOR_ISSUES})"
+          if [ "$DOCTOR_SCORE" != "100" ] || [ "${DOCTOR_ISSUES:-1}" != "0" ]; then
+            echo "::error::React Doctor score must be 100/100 with 0 issues before merge (got ${DOCTOR_SCORE}/100, ${DOCTOR_ISSUES} issues)."
+            exit 1
+          fi
