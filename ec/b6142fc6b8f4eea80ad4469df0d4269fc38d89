@@ -1,0 +1,16 @@
+worker/src/sources/registry.ts
+  h_cc1f32aec57e6b 57-79,81-89,91-126,128-136
+worker/test/registry-sync.test.ts
+  h_cc1f32aec57e6b 1-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ecb6142fc6b8f4eea80ad4469df0d4269fc38d89",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
