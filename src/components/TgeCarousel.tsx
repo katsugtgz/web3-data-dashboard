@@ -3,7 +3,7 @@ import type { Tge } from '../../shared/types';
 import { formatTgeStatus } from '../lib/labels';
 import { Avatar } from './ProjectCard';
 
-type TgeFilter = 'all' | 'claimable' | 'verify';
+type TgeFilter = 'all' | 'claimable' | 'verify' | 'other';
 
 export function TgeCarousel({ items }: { items: Tge[] }) {
   const [filter, setFilter] = useState<TgeFilter>('all');
@@ -30,12 +30,15 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
 
   const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
   const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
+  const otherCount = normalized.length - claimableCount - verifyCount;
+  const activeFilter: TgeFilter = filter === 'other' && otherCount === 0 ? 'all' : filter;
 
   const visible = useMemo(() => {
-    if (filter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
-    if (filter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
+    if (activeFilter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
+    if (activeFilter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
+    if (activeFilter === 'other') return normalized.filter(i => i.statusKind === 'other');
     return normalized;
-  }, [normalized, filter]);
+  }, [normalized, activeFilter]);
 
   if (items.length === 0) return null;
 
@@ -53,13 +56,13 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
     >
       <div className="tge-toolbar">
         <div className="chipline" role="group" aria-label="Filter TGE status">
-          <button type="button" className="chip" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>
+          <button type="button" className="chip" aria-pressed={activeFilter === 'all'} onClick={() => setFilter('all')}>
             All <span className="chip-count mono">{normalized.length}</span>
           </button>
           <button
             type="button"
             className="chip"
-            aria-pressed={filter === 'claimable'}
+            aria-pressed={activeFilter === 'claimable'}
             onClick={() => setFilter('claimable')}
           >
             Claimable <span className="chip-count mono">{claimableCount}</span>
@@ -67,11 +70,21 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           <button
             type="button"
             className="chip"
-            aria-pressed={filter === 'verify'}
+            aria-pressed={activeFilter === 'verify'}
             onClick={() => setFilter('verify')}
           >
             Eligibility check <span className="chip-count mono">{verifyCount}</span>
           </button>
+          {otherCount > 0 && (
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={activeFilter === 'other'}
+              onClick={() => setFilter('other')}
+            >
+              Other <span className="chip-count mono">{otherCount}</span>
+            </button>
+          )}
         </div>
         <div className="tge-nav">
           <button type="button" className="iconbtn" onClick={() => scrollBy(-1)} aria-label="Scroll TGE list left">

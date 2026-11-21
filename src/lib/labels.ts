@@ -30,7 +30,7 @@ export const TGE_STATUS_MAP: Record<string, TgeStatusInfo> = {
 };
 
 const NEGATED_CLAIM_RE =
-  /\b(?:unclaimable|not\s+claimable|non[- ]?claimable|cannot\s+claim|can't\s+claim|claim\s+(?:closed|ended))\b|不可领取|无法领取/i;
+  /\b(?:unclaimable|non[- ]?claimable|not\s+(?:(?:\w+\s+){0,3})?claim(?:able)?|cannot\s+claim|can't\s+claim|no\s+longer\s+claim(?:able)?|claim\s+(?:closed|ended|unavailable|disabled))\b|不可领取|无法领取|暂不可领取|尚未开放领取/i;
 const POSITIVE_CLAIM_RE = /\bclaim(?:able)?\b|可领取/i;
 const VERIFY_RE = /\b(?:verif(?:y|ication)|eligib(?:le|ility)|check)\b|核验|资格/i;
 

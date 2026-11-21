@@ -92,7 +92,7 @@ export function ProjectCard({ card: c, fit, icons, saved, doneTasks, onToggleSav
             className="iconbtn starbtn"
             aria-pressed={saved}
             aria-label={`Save ${c.n} to watchlist`}
-            title="Save to watchlist"
+            title={saved ? 'Remove from watchlist' : 'Save to watchlist'}
             onClick={() => onToggleSaved(c.n)}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

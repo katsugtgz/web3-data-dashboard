@@ -3,6 +3,7 @@ import { formatRaiseShort } from './format';
 
 export const AIRDROPS_URL = 'https://import-command-query-8ca052.surf.computer/api/airdrops';
 export const POLL_MS = 60_000;
+export const FETCH_TIMEOUT_MS = 20_000;
 
 interface UpstreamTask {
   title?: string;
@@ -210,23 +211,35 @@ function mapTge(p: UpstreamProject): Tge {
   };
 }
 
-export async function fetchAirdrops(signal?: AbortSignal): Promise<AirdropFeed> {
-  const res = await fetch(AIRDROPS_URL, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = (await res.json()) as UpstreamBody | null;
-  if (!body || !Array.isArray(body.active) || !body.active.length) {
-    throw new Error('unexpected airdrops payload');
+export async function fetchAirdrops(signal?: AbortSignal, timeoutMs = FETCH_TIMEOUT_MS): Promise<AirdropFeed> {
+  const reqCtrl = new AbortController();
+  const onCallerAbort = () => reqCtrl.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) reqCtrl.abort(signal.reason);
+    else signal.addEventListener('abort', onCallerAbort, { once: true });
   }
-  const cards = body.active.map((p, i) => mapProject(p, i + 1));
-  const tge = Array.isArray(body.tge) ? body.tge.map(mapTge) : [];
-  const preToken = body.counts?.active_unlaunched ?? cards.filter(c => !c.b.includes('token')).length;
-  return {
-    cards,
-    tge,
-    counts: {
-      active: body.counts?.active_total ?? cards.length,
-      preToken,
-    },
-    fetchedAt: Date.now(),
-  };
+  const timer = setTimeout(() => reqCtrl.abort(new Error('Request timed out')), timeoutMs);
+  try {
+    const res = await fetch(AIRDROPS_URL, { signal: reqCtrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as UpstreamBody | null;
+    if (!body || !Array.isArray(body.active) || !body.active.length) {
+      throw new Error('unexpected airdrops payload');
+    }
+    const cards = body.active.map((p, i) => mapProject(p, i + 1));
+    const tge = Array.isArray(body.tge) ? body.tge.map(mapTge) : [];
+    const preToken = body.counts?.active_unlaunched ?? cards.filter(c => !c.b.includes('token')).length;
+    return {
+      cards,
+      tge,
+      counts: {
+        active: body.counts?.active_total ?? cards.length,
+        preToken,
+      },
+      fetchedAt: Date.now(),
+    };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
+  }
 }

@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { DemoSection } from '../../shared/types';
 import { cmpCells, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
 import { translateColumn } from '../lib/labels';
@@ -12,6 +12,8 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
   const [chain, setChain] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort>({ col: -1, dir: 1 });
+  const [announcedCount, setAnnouncedCount] = useState<number | null>(null);
+  const prevCountRef = useRef(section.rows.length);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchId = useId();
   const captionId = useId();
@@ -47,6 +49,15 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
       .sort((a, b) => sort.dir * cmpCells(a.cells[sort.col] ?? '', b.cells[sort.col] ?? ''));
   }, [section.rows, chain, query, sort, visibleColIndices]);
 
+  useEffect(() => {
+    if (rows.length === prevCountRef.current) return;
+    const id = setTimeout(() => {
+      prevCountRef.current = rows.length;
+      setAnnouncedCount(rows.length);
+    }, 300);
+    return () => clearTimeout(id);
+  }, [rows.length]);
+
   const toggleSort = (col: number) =>
     setSort(s => ({ col, dir: s.col === col ? (-s.dir as 1 | -1) : 1 }));
 
@@ -57,8 +68,11 @@ export function DemoPanel({ section, label }: { section: DemoSection; label: str
           <div className="paneltitle">
             <h2 className="section">{label}</h2>
             <span className="badge badge-demo">Snapshot</span>
-            <span className="countchip mono" role="status" aria-live="polite" aria-atomic="true">
+            <span className="countchip mono">
               {rows.length} / {section.rows.length} rows
+            </span>
+            <span className="sr" role="status" aria-live="polite">
+              {announcedCount !== null ? `${announcedCount} of ${section.rows.length} rows` : ''}
             </span>
           </div>
           <p className="panel-blurb">{section.blurb}</p>
