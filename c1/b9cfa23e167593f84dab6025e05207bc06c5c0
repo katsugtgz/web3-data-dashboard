@@ -1,0 +1,112 @@
+.github/workflows/ci.yml
+  h_cc1f32aec57e6b 18,28-34,44-53
+.github/workflows/ingest-heavy.yml
+  h_cc1f32aec57e6b 1-34
+.github/workflows/pages.yml
+  h_cc1f32aec57e6b 30
+.github/workflows/worker-deploy.yml
+  h_cc1f32aec57e6b 1-39
+README.md
+  h_cc1f32aec57e6b 1,3,5,7,9-14,16,18-26,28,33-38,40-41,44,46-52,54,56-59
+bun.lock
+  h_cc1f32aec57e6b 20-27,30-49,56-167,172-177,212-215,222-223,228-231,274-279,282-291,294-295,298-317,320-325,328-345,370-379,382-389,404-407,410-411,414-415,420-421,424-425,428-447,449-452
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+index.html
+  h_cc1f32aec57e6b 15-16,18-20
+lighthouserc.json
+  h_cc1f32aec57e6b 4
+package.json
+  h_cc1f32aec57e6b 5-7,12-17
+public/icon.svg
+  h_cc1f32aec57e6b 1-8
+scripts/build-pages.mts
+  h_cc1f32aec57e6b 1-2,6-12
+scripts/check-no-cjk.sh
+  h_cc1f32aec57e6b 1-20
+scripts/ingest-heavy.mts
+  h_cc1f32aec57e6b 1-62
+scripts/snapshot.mts
+  h_cc1f32aec57e6b 1-78
+shared/constants.ts
+  h_cc1f32aec57e6b 1-75
+shared/types.ts
+  h_cc1f32aec57e6b 75-92,95,97-115
+src/App.tsx
+  h_cc1f32aec57e6b 2-3,9,13,16-18,22-23,27-29,31-32,45-46,49-51,63-65,69,86,98-103,114-116,118,125,148-169,172-187,193-217,219,229
+src/components/AirdropPanel.tsx
+  h_cc1f32aec57e6b 2-3,65,87,134
+src/components/DashboardHeader.tsx
+  h_cc1f32aec57e6b 8,14-24,28,40,48,53,63,70,72,81,89-90
+src/components/DetailDialog.tsx
+  h_cc1f32aec57e6b 2,45,151,168,243
+src/components/FilterDock.tsx
+  h_cc1f32aec57e6b 2,9,13
+src/components/MarketPanel.tsx
+  h_cc1f32aec57e6b 2-3,10-36,46-52,59,65,84-92,104-105,125,131,153,157-158,161,165-166,179-181,183-191,197,199-201,206-208,212,221
+src/components/ProjectCard.tsx
+  h_cc1f32aec57e6b 2,162,169,171
+src/hooks/useAirdropFeed.ts
+  h_cc1f32aec57e6b 3-5,11,15,21,32-33,36-40,74
+src/hooks/useAirdropFilters.ts
+  h_cc1f32aec57e6b 2,71
+src/hooks/useMarkets.ts
+  h_cc1f32aec57e6b 1-3,5,7-11,14-21,23-25,27-46,48-59,61-66,68,70,72
+src/lib/api.ts
+  h_cc1f32aec57e6b 1-74
+src/lib/format.ts
+  h_cc1f32aec57e6b 4-5,14,84-95
+src/lib/labels.ts
+  h_cc1f32aec57e6b 25,31-33
+src/styles.css
+  h_cc1f32aec57e6b 1392-1407
+tsconfig.json
+  h_cc1f32aec57e6b 17
+vite.config.ts
+  h_cc1f32aec57e6b 5,7,12,14,19-20,25,33
+worker/.wrangler/state/v3/cache/default/blobs/4f65843cfcf5cb84404c8a9358ba03f64c89c6327516a4e7c15b8b2561f291b0000001a1fce04f32
+  h_cc1f32aec57e6b 1
+worker/.wrangler/state/v3/cache/default/blobs/f65ef0834d65f72d84b09114ff83c011bd486cf4c6fca8897fbde77b2fef8c26000001a1fce04f50
+  h_cc1f32aec57e6b 1
+worker/migrations/0001_init.sql
+  h_cc1f32aec57e6b 1-8
+worker/package.json
+  h_cc1f32aec57e6b 1-16
+worker/schema.sql
+  h_cc1f32aec57e6b 1-8
+worker/src/index.ts
+  h_cc1f32aec57e6b 1-26,29-42,45-73,77-130,134,136-140,142-146,148-160,162-166,170-171,173-179,182-189,192-233
+worker/src/lib/db.ts
+  h_cc1f32aec57e6b 1-80
+worker/src/lib/format.ts
+  h_cc1f32aec57e6b 1-39
+worker/src/lib/hash.ts
+  h_cc1f32aec57e6b 1-5
+worker/src/normalize/i18n.ts
+  h_cc1f32aec57e6b 1-102
+worker/src/sources/markets.ts
+  h_cc1f32aec57e6b 1-412
+worker/src/sources/surf.ts
+  h_cc1f32aec57e6b 1-10,12,14-20,31,37,54,83-84,92,94,104-109,113-114,117-119,124,127-130,136,138,146,172-182,185,188,192-193,197,199,201,221-223,225,227,232-235,237-258
+worker/test/fixtures/surf-airdrops.json
+  h_cc1f32aec57e6b 1
+worker/test/markets.test.ts
+  h_cc1f32aec57e6b 1-43
+worker/test/surf.test.ts
+  h_cc1f32aec57e6b 1-40
+worker/tsconfig.json
+  h_cc1f32aec57e6b 1-16
+worker/wrangler.toml
+  h_cc1f32aec57e6b 1-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c1b9cfa23e167593f84dab6025e05207bc06c5c0",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
