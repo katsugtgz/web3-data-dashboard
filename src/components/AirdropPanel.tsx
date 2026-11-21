@@ -12,6 +12,7 @@ interface Props {
   cardCount: number;
   tgeItems: Tge[];
   isLive: boolean;
+  failed: boolean;
   saved: Set<string>;
   doneTasks: Set<string>;
   searchRef: RefObject<HTMLInputElement | null>;
@@ -25,6 +26,7 @@ export function AirdropPanel({
   cardCount,
   tgeItems,
   isLive,
+  failed,
   saved,
   doneTasks,
   searchRef,
@@ -43,6 +45,7 @@ export function AirdropPanel({
         counts={filters.counts}
         tgeCount={tgeItems.length}
         isLive={isLive}
+        failed={failed}
         status={filters.status}
         grade={filters.grade}
         onSelectAll={() => {
@@ -70,7 +73,7 @@ export function AirdropPanel({
         <p className="note" role="status">
           Showing <strong className="mono">{filters.renderedCards.length}</strong>
           {filters.renderedCards.length < filters.visible.length ? ` of ${filters.visible.length} matching` : ''} (
-          {cardCount} {isLive ? 'live' : 'snapshot'} total)
+          {cardCount} {failed ? 'previously loaded' : isLive ? 'live' : 'snapshot'} total)
         </p>
         {filters.hasAnyFilter && (
           <button type="button" className="link-btn" onClick={filters.resetFilters}>
@@ -124,7 +127,7 @@ export function AirdropPanel({
               Upcoming TGE / Claimable
             </h2>
             <p className="note">
-              {tgeItems.length} TGE and verification events tracked ({isLive ? 'live feed' : 'snapshot'}).
+              {tgeItems.length} TGE and verification events tracked ({failed ? 'last available data' : isLive ? 'live feed' : 'snapshot'}).
             </p>
           </div>
         </div>

@@ -124,8 +124,10 @@ export function MainPanels({
             <section role="tabpanel" id="panel-airdrops" aria-labelledby="tab-airdrops">
               {airdropsProps.loading ? (
                 <p className="note" role="status">Loading airdrop data…</p>
+              ) : airdropsProps.failed ? (
+                <p className="empty" role="alert">Unable to load airdrop data. Please refresh to retry.</p>
               ) : (
-                <p className="empty" role="alert">{airdropsProps.failed ? 'Unable to load airdrop data. Please refresh to retry.' : 'No airdrop data available.'}</p>
+                <p className="empty" role="status">No airdrop data available.</p>
               )}
             </section>
           )}
@@ -134,6 +136,9 @@ export function MainPanels({
 
       {mountedMarkets.map(section => (
         <div key={section.id} hidden={tab !== section.id}>
+          {marketsFailed && (
+            <p className="note" role="status">Market refresh failed. Showing the last available data.</p>
+          )}
           <ChunkErrorBoundary label={section.title}>
             <Suspense fallback={<p className="note" role="status">Loading {section.title}…</p>}>
               <LazyMarketPanel

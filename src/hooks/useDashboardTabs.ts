@@ -58,7 +58,7 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
     const onHash = (event: HashChangeEvent) => {
       const oldHash = new URL(event.oldURL).hash;
       if (findHashTab(oldHash) === 'drops') dropsHash.current = oldHash;
-      const next = findHashTab();
+      const next = window.location.hash ? findHashTab() : TABS[0].id;
       if (!next) return;
       setTab(next);
       markVisited(next);

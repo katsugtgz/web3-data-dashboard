@@ -60,7 +60,8 @@ export function useDropsFilters(items: FeedItem[]) {
 
   useEffect(() => {
     const onHashChange = () => {
-      if (window.location.hash.slice(1).split('?')[0] !== 'drops') return;
+      const hash = window.location.hash;
+      if (hash && hash.slice(1).split('?')[0] !== 'drops') return;
       setFilters(readDropsHashParams());
       setLimit(DROPS_PAGE_STEP);
     };
