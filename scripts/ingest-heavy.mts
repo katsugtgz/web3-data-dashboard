@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
-import { collectKnownDomainEntries } from '../worker/src/safety';
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
 
 const dryRun = process.argv.includes('--dry-run');
@@ -33,6 +32,12 @@ async function main() {
 
   console.log(`Normalized DeFi: ${defi.rows.length} rows, Yields: ${yields.rows.length} rows`);
 
+  // An empty/filtered-out section would overwrite the last good snapshot with
+  // `rows: []` and ok=1; fail before any write so the old data ages out instead.
+  if (defi.rows.length === 0 || yields.rows.length === 0) {
+    throw new Error(`Empty DefiLlama section (defi=${defi.rows.length}, yields=${yields.rows.length}) — refusing to overwrite D1 snapshots`);
+  }
+
   if (dryRun) {
     console.log('Dry-run complete (skipping D1 remote write).');
     return;
@@ -49,11 +54,9 @@ async function main() {
       `INSERT OR REPLACE INTO snapshots (key, body, etag, fetched_at, ok, error) VALUES (${sqlQuote(key)}, ${sqlQuote(body)}, ${sqlQuote(etag)}, ${nowMs}, 1, NULL);`,
     );
   }
-  for (const entry of collectKnownDomainEntries(null, defi)) {
-    statements.push(
-      `INSERT INTO known_domains (domain, project, origin) VALUES (${sqlQuote(entry.domain)}, ${sqlQuote(entry.project)}, ${sqlQuote(entry.origin)}) ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin;`,
-    );
-  }
+  // known_domains is NOT touched here: without the surf input this loop
+  // relabelled surf-owned domains (origin surf -> defi) every 30 minutes;
+  // the Worker's 5-minute cron reseeds the table from both feeds.
 
   const sqlPath = join(tmpdir(), `web3-radar-heavy-${nowMs}.sql`);
   await writeFile(sqlPath, statements.join('\n'), 'utf8');
