@@ -1,6 +1,6 @@
 import { lazy, Suspense, type RefObject } from 'react';
 import { TABS } from '../../shared/constants';
-import type { Card, MarketSection, MarketSector, Tge } from '../../shared/types';
+import type { Card, FeedItem, MarketSection, MarketSector, Tge } from '../../shared/types';
 import type { AirdropFiltersState } from '../hooks/useAirdropFilters';
 import type { DropsFiltersState } from '../hooks/useDropsFilters';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
@@ -62,6 +62,7 @@ interface MainContentProps {
     failed: boolean;
     searchRef: RefObject<HTMLInputElement | null>;
     onApplyPending: () => void;
+    onCopyBrief: (item: FeedItem) => void;
   };
   airdropsProps: {
     filters: AirdropFiltersState;
@@ -73,6 +74,7 @@ interface MainContentProps {
     searchRef: RefObject<HTMLInputElement | null>;
     onToggleSaved: (name: string) => void;
     onSelectDetail: (card: Card) => void;
+    onCopyBrief: (card: Card) => void;
   };
   mountedMarkets: MarketSection[];
   sectors?: MarketSector[];

@@ -8,6 +8,7 @@ interface Props {
   isLiveApi: boolean;
   resolvedTheme: 'light' | 'dark';
   onRefresh: () => void;
+  onOpenProfile: () => void;
   onToggleTheme: () => void;
 }
 
@@ -48,6 +49,7 @@ export function DashboardHeader({
   isLiveApi,
   resolvedTheme,
   onRefresh,
+  onOpenProfile,
   onToggleTheme,
 }: Props) {
   const isLive = fetchedAt !== null && isLiveApi;
@@ -105,6 +107,16 @@ export function DashboardHeader({
               <path d="M21 3v5h-5" />
             </svg>
             <span>Refresh</span>
+          </button>
+
+          <button
+            type="button"
+            className="ctrl-btn"
+            onClick={onOpenProfile}
+            aria-label="Configure agent profile"
+            title="Configure agent environment profile"
+          >
+            <span>Agent profile</span>
           </button>
 
           <button

@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import type { FeedItem } from '../../shared/types';
 import { DROPS_PAGE_STEP, type DropsFiltersState } from '../hooks/useDropsFilters';
 import { formatRelativeTime } from '../lib/format';
 import { DropsFilterDock } from './DropsFilterDock';
@@ -13,6 +14,7 @@ interface Props {
   failed: boolean;
   searchRef: RefObject<HTMLInputElement | null>;
   onApplyPending: () => void;
+  onCopyBrief: (item: FeedItem) => void;
 }
 
 export function DropsPanel({
@@ -24,6 +26,7 @@ export function DropsPanel({
   failed,
   searchRef,
   onApplyPending,
+  onCopyBrief,
 }: Props) {
   return (
     <section role="tabpanel" id="panel-drops" aria-labelledby="tab-drops">
@@ -70,7 +73,7 @@ export function DropsPanel({
         <>
           <div className="grid">
             {filters.rendered.map(item => (
-              <FeedCard key={item.id} item={item} />
+              <FeedCard key={item.id} item={item} onCopyBrief={onCopyBrief} />
             ))}
           </div>
           {filters.remaining > 0 && (

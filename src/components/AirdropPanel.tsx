@@ -17,6 +17,7 @@ interface Props {
   searchRef: RefObject<HTMLInputElement | null>;
   onToggleSaved: (name: string) => void;
   onSelectDetail: (card: Card) => void;
+  onCopyBrief: (card: Card) => void;
 }
 
 export function AirdropPanel({
@@ -29,6 +30,7 @@ export function AirdropPanel({
   searchRef,
   onToggleSaved,
   onSelectDetail,
+  onCopyBrief,
 }: Props) {
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
@@ -89,6 +91,7 @@ export function AirdropPanel({
                 doneTasks={doneTasks}
                 onToggleSaved={onToggleSaved}
                 onDetails={onSelectDetail}
+                onCopyBrief={onCopyBrief}
               />
             ))}
           </div>

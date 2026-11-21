@@ -170,3 +170,18 @@ export interface FeedResponse {
   items: FeedItem[];
   cursor?: string;
 }
+
+export interface AgentProfile {
+  agent: 'hermes' | 'openclaw' | 'claude-computer-use' | 'browser-use' | 'other';
+  agentNote?: string;
+  host: 'local-pc' | 'vps' | 'cloud-vm';
+  os: 'windows' | 'macos' | 'linux';
+  specs?: string;
+  browserMode: 'headless' | 'headed' | 'computer-use';
+  residentialIp: boolean;
+  wallet: 'browser-extension' | 'hardware' | 'burner-extension' | 'none';
+  walletNote?: string;
+  budgetUsd: number;
+  maxMinutes: number;
+  language: 'en';
+}

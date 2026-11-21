@@ -164,9 +164,10 @@ interface Props {
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onDetails: (card: Card) => void;
+  onCopyBrief: (card: Card) => void;
 }
 
-export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onDetails }: Props) {
+export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onDetails, onCopyBrief }: Props) {
   const fitLabels = c.fit.map(f => fit[f]).filter(Boolean);
   const icon = c.img ?? '';
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
@@ -233,7 +234,12 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
 
       <div className="card-bottom">
         <CardBestTask card={c} onDetails={onDetails} />
-        <CardScore card={c} />
+        <div className="card-bottom-row">
+          <CardScore card={c} />
+          <button type="button" className="chip" onClick={() => onCopyBrief(c)}>
+            Copy agent brief
+          </button>
+        </div>
       </div>
     </article>
   );

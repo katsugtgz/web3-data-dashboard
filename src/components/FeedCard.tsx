@@ -4,6 +4,7 @@ import { formatRelativeTime, hostnameLabel, isHttpUrl } from '../lib/format';
 
 interface Props {
   item: FeedItem;
+  onCopyBrief: (item: FeedItem) => void;
 }
 
 function RiskBadge({ level, reasons }: { level: FeedItem['risk']['level']; reasons: string[] }) {
@@ -16,8 +17,9 @@ function RiskBadge({ level, reasons }: { level: FeedItem['risk']['level']; reaso
   );
 }
 
-export function FeedCard({ item }: Props) {
+export function FeedCard({ item, onCopyBrief }: Props) {
   const [showSources, setShowSources] = useState(false);
+  const isRisk = item.risk.level === 'risk';
 
   return (
     <article className={`cardx feed-card${item.risk.level === 'risk' ? ' is-risk' : ''}`}>
@@ -89,17 +91,26 @@ export function FeedCard({ item }: Props) {
       )}
 
       <div className="feed-foot">
-        <button
-          type="button"
-          className="link-btn"
-          aria-expanded={showSources}
-          onClick={() => setShowSources(v => !v)}
-        >
-          Seen in {item.sourceCount} {item.sourceCount === 1 ? 'source' : 'sources'}
-        </button>
-        <span className="note mono">
-          {formatRelativeTime(item.lastSeen)} · score {item.score.toFixed(2)}
-        </span>
+        <div className="feed-foot-left">
+          <button
+            type="button"
+            className="link-btn"
+            aria-expanded={showSources}
+            onClick={() => setShowSources(v => !v)}
+          >
+            Seen in {item.sourceCount} {item.sourceCount === 1 ? 'source' : 'sources'}
+          </button>
+          <span className="note mono">
+            {formatRelativeTime(item.lastSeen)} · score {item.score.toFixed(2)}
+          </span>
+        </div>
+        {isRisk ? (
+          <span className="note risk-blocked">⚠ Not available for RISK items</span>
+        ) : (
+          <button type="button" className="chip" onClick={() => onCopyBrief(item)}>
+            Copy agent brief
+          </button>
+        )}
       </div>
 
       {showSources && item.sources.length > 0 && (

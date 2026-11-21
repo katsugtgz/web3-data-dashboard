@@ -1,5 +1,7 @@
-import { useEffect, useRef, type RefObject } from 'react';
-import type { Card, CardTask, FitKey } from '../../shared/types';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
+import { buildBrief } from '../lib/agentBrief';
+import { downloadMarkdown } from '../lib/clipboard';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
@@ -149,27 +151,34 @@ function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
 interface BodyProps {
   card: Card;
   fit: Record<FitKey, string>;
+  profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onToggleTask: (taskKey: string) => void;
+  onCopyBrief: (card: Card) => void;
   onDismiss: () => void;
 }
 
 function DetailDialogBody({
   card,
   fit,
+  profile,
   saved,
   doneTasks,
   onToggleSaved,
   onToggleTask,
+  onCopyBrief,
   onDismiss,
 }: BodyProps) {
+  const [showBrief, setShowBrief] = useState(false);
   const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
   const taskKeys = getTaskStorageKeys(card.n, taskList);
   const rows = buildDetailRows(card, chains, fit);
+  const renderedBrief = showBrief ? buildBrief(card, profile) : null;
+  const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
 
   return (
     <div className="dlg-inner">
@@ -204,6 +213,34 @@ function DetailDialogBody({
             <BadgeChip key={k} k={k} riskLabel={card.riskLabel} />
           ))}
         </div>
+      )}
+
+      <div className="dlg-brief-bar">
+        <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
+          Copy agent brief
+        </button>
+        <button
+          type="button"
+          className="chip"
+          aria-expanded={showBrief}
+          onClick={() => setShowBrief(v => !v)}
+        >
+          {showBrief ? 'Hide preview' : 'Preview brief'}
+        </button>
+        <button
+          type="button"
+          className="chip"
+          onClick={() => {
+            const md = buildBrief(card, profile);
+            if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
+          }}
+        >
+          Download .md
+        </button>
+      </div>
+
+      {showBrief && renderedBrief && (
+        <pre className="brief-preview mono">{renderedBrief}</pre>
       )}
 
       <DetailScores card={card} />
@@ -241,20 +278,24 @@ function DetailDialogBody({
 interface Props {
   card: Card | null;
   fit: Record<FitKey, string>;
+  profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onToggleTask: (taskKey: string) => void;
+  onCopyBrief: (card: Card) => void;
   onClose: () => void;
 }
 
 export function DetailDialog({
   card,
   fit,
+  profile,
   saved,
   doneTasks,
   onToggleSaved,
   onToggleTask,
+  onCopyBrief,
   onClose,
 }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -278,12 +319,15 @@ export function DetailDialog({
     >
       {card && (
         <DetailDialogBody
+          key={`${card.r}-${card.n}`}
           card={card}
           fit={fit}
+          profile={profile}
           saved={saved}
           doneTasks={doneTasks}
           onToggleSaved={onToggleSaved}
           onToggleTask={onToggleTask}
+          onCopyBrief={onCopyBrief}
           onDismiss={() => ref.current?.close()}
         />
       )}
