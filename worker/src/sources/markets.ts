@@ -317,7 +317,7 @@ export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls 
     title: 'Trending Tokens',
     blurb: 'Recently boosted and updated tokens across on-chain DEX pairs.',
     cols: ['Token', 'Chain', 'Boosts', 'Links'],
-    rows,
+    rows: normalizeTrendingRows(items),
     source: 'DexScreener',
     sourceUrl: 'https://dexscreener.com',
     fetchedAt: nowMs,
@@ -397,7 +397,9 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
       const chains = Array.isArray(p.chains) && p.chains.length > 0 ? p.chains : p.chain ? [p.chain] : ['Multi-Chain'];
       const chainLabel = chains.length > 2 ? `${chains[0]}, ${chains[1]} +${chains.length - 2}` : chains.join(', ');
       return {
-        id: p.slug ?? (p.id != null ? String(p.id) : p.name),
+        // id must stay zero-CJK too: the p.name fallback can carry Han
+        // (slug/id absent on some payloads) and then leaks into snapshots.
+        id: p.slug ?? (p.id != null ? String(p.id) : stripOrTranslateCjk(p.name ?? '') || 'protocol'),
         cells: [
           stripOrTranslateCjk(p.name ?? '') || p.name || 'Protocol',
           stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi',

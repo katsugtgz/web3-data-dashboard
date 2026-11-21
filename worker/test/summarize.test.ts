@@ -169,7 +169,7 @@ describe('Workers AI summary normalization & budget guard', () => {
     expect(usage.results?.length ?? 0).toBe(0);
   });
 
-  test('concurrent summaries cannot exceed the daily cap and exact parse-zero of seeded rows is honored', async () => {
+  test('concurrent summaries cannot exceed the daily cap', async () => {
     const db = createSqliteD1();
     const cap = 3;
     let calls = 0;
@@ -180,10 +180,11 @@ describe('Workers AI summary normalization & budget guard', () => {
       },
     };
 
-    // Seed the counter with a stringified number to prove `calls` parses as a
-    // number (D1 may hand back text), then fire 8 concurrent callers at cap 3.
+    // Seed the counter at 0 (INTEGER column: SQLite stores '0' as integer 0,
+    // so this does not exercise a text-typed D1 — the upsert's own arithmetic
+    // and RETURNING are what's under test), then fire 8 concurrent callers at cap 3.
     const day = new Date().toISOString().slice(0, 10);
-    await db.prepare(`INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)`).bind(day, '0').run();
+    await db.prepare(`INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)`).bind(day, 0).run();
 
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>

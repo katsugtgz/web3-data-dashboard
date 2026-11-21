@@ -78,4 +78,48 @@ describe('source auto-discovery', () => {
     expect(md).toContain('"enabled": false');
     expect(md).toContain('"trust": 0.4');
   });
+
+  test('merges from_sources inside the upsert, so interleaved writers never lose a source', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_240_000_000;
+    // Both writers target the same handle concurrently: each statement must
+    // merge against the stored list, not a pre-read copy.
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)
+           VALUES (?1, 1, ?2, ?2, json_array(?3))
+           ON CONFLICT(handle) DO UPDATE SET
+             mentions = mentions + 1,
+             last_seen = excluded.last_seen,
+             from_sources = (
+               SELECT json_group_array(DISTINCT value)
+               FROM (SELECT value FROM json_each(source_candidates.from_sources)
+                     UNION SELECT value FROM json_each(excluded.from_sources))
+             )`,
+        )
+        .bind('racy', now, 'telegram:chA'),
+      db
+        .prepare(
+          `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)
+           VALUES (?1, 1, ?2, ?2, json_array(?3))
+           ON CONFLICT(handle) DO UPDATE SET
+             mentions = mentions + 1,
+             last_seen = excluded.last_seen,
+             from_sources = (
+               SELECT json_group_array(DISTINCT value)
+               FROM (SELECT value FROM json_each(source_candidates.from_sources)
+                     UNION SELECT value FROM json_each(excluded.from_sources))
+             )`,
+        )
+        .bind('racy', now, 'telegram:chB'),
+    ]);
+
+    const rows = await db
+      .prepare('SELECT mentions, from_sources FROM source_candidates WHERE handle = ?1')
+      .bind('racy')
+      .first<{ mentions: number; from_sources: string }>();
+    expect(rows?.mentions).toBe(2);
+    expect(JSON.parse(rows?.from_sources ?? '[]').sort()).toEqual(['telegram:chA', 'telegram:chB']);
+  });
 });

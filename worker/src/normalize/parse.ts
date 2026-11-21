@@ -72,7 +72,7 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
 ];
 
 const TASK_PATTERNS: [TaskType, RegExp][] = [
-  ['faucet', /\bfaucet\b|test\s*tokens?|claim test/i],
+  ['faucet', /\bfaucet\b|\btest\s*tokens?\b|\bclaim test\b/i],
   ['testnet', /\btestnet\b|\bdevnet\b|sepolia|holesky/i],
   ['quest', /\b(?:galxe|zealy|layer3|intract|questn|guild|quest|campaign|bounty)\b/i],
   ['waitlist', /\b(?:waitlist|whitelist|early access|invite code|beta access|form)\b/i],
@@ -229,8 +229,10 @@ export function buildRuleSummary(
     };
   }
 
+  // Code-point truncation: UTF-16 slice could split an emoji surrogate pair
+  // and leave a lone surrogate at the end of the summary.
   return {
-    summary: cleaned.length > 200 ? `${cleaned.slice(0, 197)}…` : cleaned,
+    summary: cleaned.length > 200 ? `${[...cleaned].slice(0, 197).join('')}…` : cleaned,
     isNonLatin: false,
   };
 }
@@ -260,11 +262,15 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
     (ticker && ctx.surfByTicker?.get(ticker)) ||
     undefined;
 
+  // Domain-derived name outranks a capitalized filler word from the text:
+  // 'Hey degens ... https://foo.xyz' must become "Foo", not "Hey". The surf
+  // match and the registry still take precedence (they are verified names).
   const project =
     surfMatch?.name ||
     (projectDomain && ctx.knownDomains?.get(projectDomain)) ||
+    (projectDomain && titleFromDomain(projectDomain)) ||
     guessCapitalizedToken(text) ||
-    (projectDomain ? titleFromDomain(projectDomain) : ticker ? `$${ticker}` : 'Web3 Project');
+    (ticker ? `$${ticker}` : 'Web3 Project');
 
   const { summary, isNonLatin } = buildRuleSummary(text, project, taskTypes, chains);
 

@@ -30,44 +30,58 @@ export function computeScore(input: ScoreInput): number {
 }
 
 export async function decayClusterScores(db: D1Database, nowMs = Date.now()): Promise<void> {
-  const res = await db
-    .prepare(
-      `SELECT c.id, c.source_count, c.last_seen, c.surf_tier, c.risk_level,
-              COALESCE(MAX(s.trust), 0.5) AS trust_max
-       FROM clusters c
-       LEFT JOIN posts p ON p.cluster_id = c.id
-       LEFT JOIN sources s ON s.id = p.source_id
-       GROUP BY c.id
-       ORDER BY c.last_seen DESC
-       LIMIT 250`,
-    )
-    .all<{
-      id: string;
-      source_count: number;
-      last_seen: number;
-      surf_tier: Grade | null;
-      risk_level: RiskLevel;
-      trust_max: number;
-    }>();
+  // Keyset-paged decay over ALL clusters: a LIMIT-250 cap froze scores of
+  // older (but still retained) clusters, letting them outrank fresh ones.
+  // The `score IS NOT ?2` guard skips no-op writes so stable clusters cost
+  // zero D1 row writes per tick.
+  const PAGE = 400;
+  let lastId = '';
+  for (;;) {
+    const res = await db
+      .prepare(
+        `SELECT c.id, c.source_count, c.last_seen, c.surf_tier, c.risk_level, c.score,
+                COALESCE(MAX(s.trust), 0.5) AS trust_max
+         FROM clusters c
+         LEFT JOIN posts p ON p.cluster_id = c.id
+         LEFT JOIN sources s ON s.id = p.source_id
+         WHERE c.id > ?1
+         GROUP BY c.id
+         ORDER BY c.id ASC
+         LIMIT ?2`,
+      )
+      .bind(lastId, PAGE)
+      .all<{
+        id: string;
+        source_count: number;
+        last_seen: number;
+        surf_tier: Grade | null;
+        risk_level: RiskLevel;
+        score: number;
+        trust_max: number;
+      }>();
 
-  const rows = res.results ?? [];
-  if (rows.length === 0) return;
+    const rows = res.results ?? [];
+    if (rows.length === 0) break;
 
-  const stmts = rows.map(r => {
-    const nextScore = computeScore({
-      trustMax: r.trust_max,
-      sourceCount: r.source_count,
-      lastSeen: r.last_seen,
-      nowMs,
-      surfTier: r.surf_tier,
-      riskLevel: r.risk_level,
-    });
-    return db.prepare('UPDATE clusters SET score = ?2 WHERE id = ?1').bind(r.id, nextScore);
-  });
+    const stmts = rows
+      .map(r => ({ r, nextScore: computeScore({
+        trustMax: r.trust_max,
+        sourceCount: r.source_count,
+        lastSeen: r.last_seen,
+        nowMs,
+        surfTier: r.surf_tier,
+        riskLevel: r.risk_level,
+      }) }))
+      .filter(x => x.nextScore !== x.r.score)
+      .map(x => db.prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND score IS NOT ?2').bind(x.r.id, x.nextScore));
 
-  const chunks = [];
-  for (let i = 0; i < stmts.length; i += 40) {
-    chunks.push(db.batch(stmts.slice(i, i + 40)));
+    const chunks = [];
+    for (let i = 0; i < stmts.length; i += 40) {
+      chunks.push(db.batch(stmts.slice(i, i + 40)));
+    }
+    await Promise.all(chunks);
+
+    lastId = rows[rows.length - 1].id;
+    if (rows.length < PAGE) break;
   }
-  await Promise.all(chunks);
 }

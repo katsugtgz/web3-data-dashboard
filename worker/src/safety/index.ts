@@ -13,8 +13,12 @@ export const URL_SHORTENERS = new Set([
   'shorturl.at',
 ]);
 
+// Wallet-drain phrasing: require the scam-specific shape (a claim promise
+// gated behind connecting a wallet, or an eligibility check that asks for
+// wallet validation). Plain 'claim now' / 'seed phrase' in security warnings
+// and ordinary airdrop announcements must NOT match, or legit posts get hidden.
 export const DRAINER_RE =
-  /claim (?:now|your)|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ .*(?:verify|validate) wallet|seed phrase|private key|airdrop is live.*claim/i;
+  /claim (?:now|your)[^.!?]*\b(?:connect|wallet)\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ .*(?:verify|validate) wallet|airdrop is live[^.!?]*claim/i;
 
 export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['galxe.com', 'Galxe'],
@@ -81,6 +85,8 @@ export interface SafetyInput {
   urls: string[];
   text: string;
   knownProjectDomains: Map<string, string>;
+  /** Quest-platform domains, used as lookalike targets only (never trusted). */
+  platformDomains?: Set<string>;
   trustMax: number;
   sourceCount: number;
 }
@@ -93,6 +99,15 @@ export interface SafetyResult {
 export function evaluateSafety(input: SafetyInput): SafetyResult {
   let level: RiskLevel = 'ok';
   const reasons = new Set<string>();
+
+  // Lookalike targets = verified project domains PLUS quest platforms:
+  // zea1y.io must be flagged against zealy.io, so the platform set is merged
+  // into the comparison baseline (but not into the trusted project set).
+  let lookalikeBaseline = input.knownProjectDomains;
+  if (input.platformDomains instanceof Set) {
+    lookalikeBaseline = new Map<string, string>(input.knownProjectDomains);
+    for (const d of input.platformDomains) lookalikeBaseline.set(d, 'platform');
+  }
 
   const bump = (next: RiskLevel, reason: string) => {
     reasons.add(reason);
@@ -107,10 +122,11 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
         bump('risk', `Punycode or mixed-script domain: ${host}`);
       }
       const reg = getRegistrableDomain(u);
-      if (reg && URL_SHORTENERS.has(reg)) {
+      // Shorteners hide the real destination: always at least a warning.
+      if (reg && URL_SHORTENERS[reg]) {
         bump('warn', `URL shortener used: ${reg}`);
       }
-      if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS.has(reg)) {
+      if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) {
         const similar = findLookalikeDomain(reg, input.knownProjectDomains);
         if (similar) {
           bump('risk', `Possible lookalike domain (${reg} vs ${similar})`);
@@ -197,7 +213,9 @@ export async function seedKnownDomains(
     db
       .prepare(
         `INSERT INTO known_domains (domain, project, origin) VALUES (?1, ?2, ?3)
-         ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin`,
+         ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin
+         WHERE known_domains.project IS NOT excluded.project
+            OR known_domains.origin IS NOT excluded.origin`,
       )
       .bind(e.domain, e.project, e.origin),
   );
@@ -213,6 +231,10 @@ export async function seedKnownDomains(
 export interface KnownDomainsLoaded {
   projectDomains: Map<string, string>;
   allKnownDomains: Set<string>;
+  /** Platform domains (Galxe, Zealy, …) live only here: known for the feed's
+   *  `known` link flag and as lookalike targets, never trusted as project
+   *  identity (impersonations of these must still be flagged). */
+  platformDomains: Set<string>;
 }
 
 export async function loadKnownDomains(db: D1Database): Promise<KnownDomainsLoaded> {
@@ -223,12 +245,15 @@ export async function loadKnownDomains(db: D1Database): Promise<KnownDomainsLoad
   }>();
   const projectDomains = new Map<string, string>();
   const allKnownDomains = new Set<string>();
+  const platformDomains = new Set<string>();
   for (const row of res.results ?? []) {
     const dom = row.domain.toLowerCase();
     allKnownDomains.add(dom);
-    if (row.origin !== 'platform') {
+    if (row.origin === 'platform') {
+      platformDomains.add(dom);
+    } else {
       projectDomains.set(dom, row.project);
     }
   }
-  return { projectDomains, allKnownDomains };
+  return { projectDomains, allKnownDomains, platformDomains };
 }

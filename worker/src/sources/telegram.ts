@@ -30,13 +30,15 @@ const NAMED_ENTITIES: Record<string, string> = {
 
 export function decodeHtmlEntities(input: string): string {
   return input.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/g, (m, code: string) => {
+    // Range-check before fromCodePoint: an out-of-range numeric entity
+    // (e.g. &#x110000;) must not throw and fail the whole channel parse.
     if (code.startsWith('#x') || code.startsWith('#X')) {
       const cp = Number.parseInt(code.slice(2), 16);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : m;
+      return Number.isFinite(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
     }
     if (code.startsWith('#')) {
       const cp = Number.parseInt(code.slice(1), 10);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : m;
+      return Number.isFinite(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
     }
     return NAMED_ENTITIES[code] ?? m;
   });
@@ -123,9 +125,9 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
       element(el) {
         if (!current || textDepth <= 0) return;
         const href = el.getAttribute('href');
-        if (href && /^https?:\/\//i.test(href)) {
-          current.urls.push(href);
-        }
+        // Telegram HTML-escapes hrefs (&amp;); store decoded so identical
+        // destinations dedupe instead of producing `&amp;s=20` twins.
+        if (href && /^https?:\/\//i.test(href)) current.urls.push(decodeHtmlEntities(href));
       },
     })
     .on('a.tgme_widget_message_date time', {

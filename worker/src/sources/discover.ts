@@ -1,5 +1,19 @@
 const HANDLE_RE = /^[A-Za-z0-9_]{4,32}$/;
-const RESERVED_PATHS = new Set(['s', 'addlist', 'joinchat', 'c', 'share', 'iv', 'proxy', 'socks']);
+const RESERVED_PATHS = new Set([
+  's',
+  'addlist',
+  'addstickers',
+  'addemoji',
+  'addtheme',
+  'bg',
+  'setlanguage',
+  'joinchat',
+  'c',
+  'share',
+  'iv',
+  'proxy',
+  'socks',
+]);
 
 export interface CandidateSource {
   handle: string;
@@ -24,7 +38,9 @@ export function extractCandidateHandles(
     if (!HANDLE_RE.test(h)) return;
     const lower = h.toLowerCase();
     if (lower === selfLower || RESERVED_PATHS.has(lower) || existingHandles.has(lower)) return;
-    if (!found.has(lower)) found.set(lower, h);
+    // Store the canonical lowercase form: source_candidates.handle is a
+    // case-sensitive PRIMARY KEY, so mixed-case variants would split rows.
+    if (!found.has(lower)) found.set(lower, lower);
   };
 
   tryAdd(forwardedFrom);
@@ -57,31 +73,25 @@ export async function recordCandidates(
 ): Promise<void> {
   if (handles.length === 0) return;
 
-  const existingRows = await Promise.all(
-    handles.map(h =>
-      db
-        .prepare('SELECT handle, mentions, from_sources FROM source_candidates WHERE handle = ?1')
-        .bind(h)
-        .first<{ handle: string; mentions: number; from_sources: string }>(),
-    ),
-  );
-
-  const stmts = handles.map((h, i) => {
-    const prev = existingRows[i];
-    const prevSources = prev ? (JSON.parse(prev.from_sources) as string[]) : [];
-    const nextSources = new Set(prevSources);
-    nextSources.add(fromSourceId);
-    return db
+  // Merge inside the upsert: reading from_sources first and writing the
+  // extended list loses sources when two ingests for the same handle race.
+  // json_group_array(DISTINCT ...) unions the stored list with the new source.
+  const stmts = handles.map(h =>
+    db
       .prepare(
         `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)
-         VALUES (?1, 1, ?2, ?2, ?3)
+         VALUES (?1, 1, ?2, ?2, json_array(?3))
          ON CONFLICT(handle) DO UPDATE SET
            mentions = mentions + 1,
            last_seen = excluded.last_seen,
-           from_sources = ?3`,
+           from_sources = (
+             SELECT json_group_array(DISTINCT value)
+             FROM (SELECT value FROM json_each(source_candidates.from_sources)
+                   UNION SELECT value FROM json_each(excluded.from_sources))
+           )`,
       )
-      .bind(h, nowMs, JSON.stringify([...nextSources]));
-  });
+      .bind(h, nowMs, fromSourceId),
+  );
 
   await db.batch(stmts);
 }

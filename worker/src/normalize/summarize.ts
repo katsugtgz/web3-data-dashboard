@@ -1,4 +1,5 @@
 import type { TaskType } from '../../../shared/types';
+import { TASK_TYPES } from '../../../shared/constants';
 import { HAN_RE } from './i18n';
 
 export const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
@@ -10,20 +11,8 @@ export interface AiBindingLike {
   ): Promise<unknown>;
 }
 
-const VALID_TASKS = new Set<TaskType>([
-  'testnet',
-  'faucet',
-  'quest',
-  'waitlist',
-  'bridge',
-  'stake',
-  'mint',
-  'points',
-  'trade',
-  'social',
-  'node',
-  'other',
-]);
+// Single source of truth: shared/constants TASK_TYPES tuple.
+const VALID_TASKS = new Set<TaskType>(TASK_TYPES);
 
 const NON_LATIN_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Thai}]/u;
 
@@ -54,15 +43,24 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     const summary = parsed.summary.replace(/\s+/g, ' ').trim();
     if (!summary || summary.length > 180) return null;
     if (HAN_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
+    // The model sees untrusted post text. A crafted post can steer the summary
+    // into links, wallet addresses, or drain instructions — never store those.
+    if (/https?:\/\/|www\.|[\w.-]+\.(?:xyz|fun|top|icu)/i.test(summary)) return null;
+    if (/0x[a-fA-F0-9]{6,}/.test(summary)) return null;
+    if (/\b(connect|visit|open)\b[^.]{0,40}\bwallet\b/i.test(summary) || /\bseed phrase\b|\bprivate key\b/i.test(summary)) {
+      return null;
+    }
 
     const taskTypes = Array.isArray(parsed.taskTypes)
       ? parsed.taskTypes.filter((t): t is TaskType => typeof t === 'string' && VALID_TASKS.has(t as TaskType))
       : [];
+    // Cap chain names: a steered model could emit unbounded junk here.
     const chains = Array.isArray(parsed.chains)
       ? parsed.chains
           .filter((c): c is string => typeof c === 'string')
           .map(c => c.trim())
-          .filter(c => c.length > 0 && !HAN_RE.test(c) && !NON_LATIN_RE.test(c))
+          .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !NON_LATIN_RE.test(c))
+          .slice(0, 8)
       : [];
 
     return { summary, taskTypes, chains };

@@ -84,8 +84,9 @@ export function translateTgeStatus(raw?: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return 'Upcoming';
   if (Object.hasOwn(TGE_STATUS_MAP, trimmed)) return TGE_STATUS_MAP[trimmed];
-  const translated = stripOrTranslateCjk(trimmed);
-  return translated || 'Upcoming';
+  // Unknown statuses must stay neutral: labelling e.g. 已结束 (ended) as
+  // 'Upcoming' would misinform. Empty input is the only 'Upcoming'.
+  return stripOrTranslateCjk(trimmed) || 'Unknown';
 }
 
 export function stripOrTranslateCjk(raw: string): string {
@@ -96,7 +97,13 @@ export function stripOrTranslateCjk(raw: string): string {
   if (Object.hasOwn(RISK_ITEM_MAP, trimmed)) return RISK_ITEM_MAP[trimmed];
   if (hasCjk(trimmed)) {
     console.warn('i18n-miss', trimmed);
-    return '';
+    // Keep the Latin remainder of mixed-script names instead of dropping the
+    // whole value: callers fall back to the raw CJK string when this returns
+    // '', which defeats the zero-CJK contract.
+    const latin = trimmed.replace(/\p{Script=Han}+/gu, '').replace(/\s+/g, ' ').trim();
+    if (latin) return latin;
+    // Fully non-Latin and unmapped: ASCII placeholder, never the raw input.
+    return 'Unknown';
   }
   return trimmed;
 }

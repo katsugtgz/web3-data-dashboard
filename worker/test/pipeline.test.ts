@@ -65,10 +65,23 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
 
   test('safety catches punycode, lookalikes, drainer phrasing, shorteners, and low-trust singletons', () => {
     const known = new Map([['arbitrum.io', 'Arbitrum'], ['uniswap.org', 'Uniswap']]);
+    const platforms = new Set(['zealy.io', 'galxe.com']);
 
     expect(isPunycodeOrMixedScript('xn--arbitrm-91a.io')).toBe(true);
     expect(levenshtein('arbitrurn.io', 'arbitrum.io')).toBe(2);
     expect(findLookalikeDomain('arbitrurn.io', known)).toBe('arbitrum.io');
+
+    // Quest-platform clones are lookalike targets even though platforms are
+    // never trusted as project identity.
+    expect(evaluateSafety({
+      domain: 'zea1y.io',
+      urls: [],
+      text: 'quest',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    }).level).toBe('risk');
 
     const riskRes = evaluateSafety({
       domain: 'arbitrurn.io',

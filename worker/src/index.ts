@@ -14,6 +14,7 @@ import {
   sha1Hex,
   toHealthMap,
   upsertSnapshot,
+  type SnapshotRow,
 } from './lib/db';
 import { queryFeed, querySourcesHealth, type IngestPostResult } from './normalize/cluster';
 import { decayClusterScores } from './normalize/score';
@@ -130,7 +131,15 @@ async function loadCachedSurfAndDefi(db: D1Database): Promise<{
   surf: AirdropFeed | null;
   defi: MarketSection | null;
 }> {
-  const [surfRow, defiRow] = await Promise.all([readSnapshot(db, 'airdrops'), readSnapshot(db, 'markets:defi')]);
+  // A transient D1 read failure here must not abort the rest of the cron
+  // (X polling, domain seeding, pruning, decay all follow). Degrade to nulls.
+  let surfRow: SnapshotRow | null = null;
+  let defiRow: SnapshotRow | null = null;
+  try {
+    [surfRow, defiRow] = await Promise.all([readSnapshot(db, 'airdrops'), readSnapshot(db, 'markets:defi')]);
+  } catch (err) {
+    console.error('cron-error:loadCachedSurfAndDefi', err);
+  }
   let surf: AirdropFeed | null = null;
   let defi: MarketSection | null = null;
   if (surfRow?.body && surfRow.body !== '{}') {
@@ -164,25 +173,33 @@ async function postProcessIngest(env: Env, ingested: IngestPostResult[], nowMs: 
   }
   await Promise.all(candidateJobs);
 
-  // 2. Workers AI summaries for eligible new / non-English non-RISK clusters (bounded per tick)
+  // 2. Workers AI summaries for eligible new / non-English non-RISK clusters.
+  // Group by cluster first: several posts of one cluster in the same tick must
+  // produce ONE summary call (one quota slot, no concurrent writes racing on
+  // the same cluster row), not one call per post.
   const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
-  const eligible = ingested
-    .filter(r => r.riskLevel !== 'risk' && (r.isNewCluster || r.isNonLatinSource))
-    .slice(0, 6);
+  const eligible = ingested.filter(r => r.riskLevel !== 'risk' && (r.isNewCluster || r.isNonLatinSource));
+  const byCluster = new Map<string, IngestPostResult[]>();
+  for (const r of eligible) {
+    const group = byCluster.get(r.clusterId);
+    if (group) group.push(r);
+    else byCluster.set(r.clusterId, [r]);
+  }
 
   await Promise.all(
-    eligible.map(r =>
-      summarizeClusterWithAi(env.AI, env.DB, {
-        clusterId: r.clusterId,
-        project: r.parsed.project,
-        rawTexts: [r.rawText],
-        isNewCluster: r.isNewCluster,
-        isNonLatinSource: r.isNonLatinSource,
-        riskLevel: r.riskLevel,
+    [...byCluster.values()].slice(0, 6).map(group => {
+      const head = group[0];
+      return summarizeClusterWithAi(env.AI, env.DB, {
+        clusterId: head.clusterId,
+        project: head.parsed.project,
+        rawTexts: group.map(g => g.rawText),
+        isNewCluster: head.isNewCluster,
+        isNonLatinSource: head.isNonLatinSource,
+        riskLevel: head.riskLevel,
         dailyMax,
         nowMs,
-      }),
-    ),
+      });
+    }),
   );
 }
 
@@ -365,9 +382,12 @@ export default {
           const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
           const sortParam = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
           const { allKnownDomains } = await loadKnownDomains(env.DB);
+          // Non-numeric limit=abc would bind NaN into LIMIT and fail the query;
+          // parseInt-or-default mirrors parseNonNegativeInt's env handling.
+          const limit = Number.parseInt(limitParam ?? '', 10);
           const feed = await queryFeed(env.DB, allKnownDomains, {
-            since: sinceParam ? Number(sinceParam) : 0,
-            limit: limitParam ? Number(limitParam) : 100,
+            since: sinceParam ? Number(sinceParam) || 0 : 0,
+            limit: Number.isFinite(limit) ? limit : 100,
             risk: riskParam,
             sort: sortParam,
           });

@@ -238,7 +238,10 @@ async function pollSingleXSource(
       .run();
 
     return { insertedPosts: ingestedResults.length, degraded: false, ingestedResults };
-  } catch {
+  } catch (err) {
+    // Log with source scope: silently swallowing here made ingest/D1 failures
+    // indistinguishable from X endpoint outages.
+    console.error(`x-poll-error:${src.id}`, err);
     const backoff = computeXBackoff(src.fail_count ?? 0, src.first_fail_at ?? null, nowMs);
     await db
       .prepare(
@@ -279,9 +282,20 @@ export async function pollXBatch(
   const surfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 
-  const outcomes = await Promise.all(
-    sources.map(src => pollSingleXSource(db, src, parseCtx, surfIndex, projectDomains, nowMs, fetcher)),
-  );
+  // Never reject: a failed D1 write inside one source poll must not skip the
+  // remaining five-minute cron steps (domain seeding, pruning, decay).
+  const outcomes = (
+    await Promise.all(
+      sources.map(async src => {
+        try {
+          return await pollSingleXSource(db, src, parseCtx, surfIndex, projectDomains, platformDomains, nowMs, fetcher);
+        } catch (err) {
+          console.error(`x-poll-error:${src.id}`, err);
+          return { insertedPosts: 0, degraded: true, ingestedResults: [] };
+        }
+      }),
+    )
+  ).flat();
 
   let insertedPosts = 0;
   let degraded = 0;

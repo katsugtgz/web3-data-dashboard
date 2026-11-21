@@ -22,7 +22,9 @@ describe('Telegram HTMLRewriter parser across >=15 real channel fixtures', () =>
 
       for (const p of posts) {
         expect(p.postUrl).toBe(`https://t.me/${handle}/${p.msgId}`);
-        expect(p.postedAt).toBeGreaterThan(0);
+        // Falls back to Date.now() when the page omits <time>, so only assert
+        // parseability here; the exact timestamp is checked in the known-datetime test.
+        expect(Number.isFinite(p.postedAt) && p.postedAt > 0).toBe(true);
         const parsed = parseDropPost(p.text, p.urls);
         expect(HAN_RE.test(parsed.summary)).toBe(false);
         expect(parsed.taskTypes.length).toBeGreaterThan(0);
@@ -49,6 +51,8 @@ describe('Telegram HTMLRewriter parser across >=15 real channel fixtures', () =>
     expect(posts.length).toBe(1);
     expect(posts[0].msgId).toBe('420');
     expect(posts[0].forwardedFrom).toBe('upstream_gems');
+    // Known datetime in the fixture: assert the exact parse (2026-11-20T12:00:00Z).
+    expect(posts[0].postedAt).toBe(Date.parse('2026-11-20T12:00:00+00:00'));
     expect(posts[0].text).toContain('$HNVA on Arbitrum');
     expect(posts[0].text).toContain('faucet & bridge');
     expect(posts[0].urls).toContain('https://hypernova.xyz/faucet?utm_source=tg');

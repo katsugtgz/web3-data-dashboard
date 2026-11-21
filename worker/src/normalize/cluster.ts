@@ -100,6 +100,7 @@ export async function ingestPostIntoCluster(
   parseCtx: ParseContext,
   surfIndex: SurfIndex,
   knownProjectDomains: Map<string, string>,
+  platformDomains?: Set<string>,
   nowMs = Date.now(),
 ): Promise<IngestPostResult> {
   const parsed = parseDropPost(input.text, input.htmlUrls ?? [], {
@@ -194,6 +195,7 @@ export async function ingestPostIntoCluster(
     urls: parsed.urls,
     text: input.text,
     knownProjectDomains,
+    platformDomains,
     trustMax,
     sourceCount,
   });
@@ -266,8 +268,36 @@ export async function ingestPostIntoCluster(
         `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(id) DO UPDATE SET
-           chains = excluded.chains,
-           task_types = excluded.task_types,
+           -- Two concurrent first posts for one cluster can both land here.
+           -- The loser must MERGE into the winner, not overwrite it: union the
+           -- chain/task sets, escalate risk conservatively, and merge reasons.
+           chains = (
+             SELECT json_group_array(DISTINCT value)
+             FROM (SELECT value FROM json_each(clusters.chains)
+                   UNION SELECT value FROM json_each(excluded.chains))
+           ),
+           task_types = (
+             SELECT CASE
+                      WHEN COUNT(DISTINCT value) > 1
+                      THEN json_group_array(value) FILTER (WHERE value != 'other')
+                      ELSE json_group_array(DISTINCT value)
+                    END
+             FROM (SELECT value FROM json_each(clusters.task_types)
+                   UNION SELECT value FROM json_each(excluded.task_types))
+           ),
+           risk_reasons = (
+             SELECT json_group_array(DISTINCT value)
+             FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                   UNION SELECT value FROM json_each(excluded.risk_reasons))
+           ),
+           risk_level = CASE
+             WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'
+             WHEN clusters.risk_level = 'warn' OR excluded.risk_level = 'warn' THEN 'warn'
+             ELSE 'ok'
+           END,
+           summary = CASE WHEN clusters.summary_source = 'ai' THEN clusters.summary ELSE excluded.summary END,
+           summary_source = CASE WHEN clusters.summary_source = 'ai' THEN 'ai' ELSE 'rule' END,
+           first_seen = MIN(clusters.first_seen, excluded.first_seen),
            score = MAX(clusters.score, excluded.score),
            source_count = MAX(clusters.source_count, excluded.source_count),
            last_seen = MAX(clusters.last_seen, excluded.last_seen)`,
@@ -319,7 +349,12 @@ export async function queryFeed(
   allKnownDomains: Set<string>,
   opts: FeedQueryOptions = {},
 ): Promise<FeedResponse> {
-  const limit = Math.min(200, Math.max(1, opts.limit ?? 100));
+  // D1 caps bound parameters per query (100): the posts IN (...) query binds
+  // one per returned cluster, so the effective limit can never exceed 100.
+  // NaN / non-finite fall back to the default instead of failing SQL.
+  const rawLimit = Number(opts.limit);
+  const safeLimit = Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 100;
+  const limit = Math.min(100, Math.max(1, safeLimit));
   const since = Number.isFinite(opts.since) ? Number(opts.since) : 0;
   const riskClause = opts.risk === 'exclude' ? `AND risk_level != 'risk'` : '';
   // Deterministic total order: score/last_seen ties are broken by id, so two
