@@ -1,24 +1,43 @@
-export type Grade = 'S' | 'A' | 'B';
+export type Grade = 'S' | 'A' | 'B' | 'C';
 
 export type Badge = 'live' | 'token' | 'early' | 'zero' | 'rerun' | 'risk';
 
 export type FitKey = 'zero' | 'multi' | 'small' | 'climber' | 'community' | 'technical';
 
+export interface CardTask {
+  title: string;
+  type: string;
+  status: string;
+  cost: number;
+  timeMinutes: number | null;
+  url: string | null;
+  isExclusive?: boolean;
+}
+
 export interface Card {
   r: number;
   n: string;
   chain?: string;
+  chains?: string[];
   t: string | null;
   g: Grade;
   b: Badge[];
   x?: string | null;
   img?: string | null;
   f: string;
+  raiseNum?: number;
   tk: string;
   h: number;
   u: string;
+  /** Unix timestamp in seconds. */
+  updatedTs?: number;
   fit: FitKey[];
   best: { n: string; ty: string; c: string; m: string };
+  costNum?: number;
+  taskTypes?: string[];
+  tasks?: CardTask[];
+  isStockToken?: boolean;
+  riskLabel?: string;
   sc: number;
   sub: [number, number, number | null];
   url: string | null;
@@ -29,6 +48,10 @@ export interface Tge {
   t: string;
   s: string;
   d: string;
+  logo?: string | null;
+  tier?: Grade;
+  raise?: string;
+  url?: string | null;
 }
 
 export interface Tab {
@@ -51,6 +74,14 @@ export interface DemoSection {
 export interface Counts {
   active: number;
   preToken: number;
+}
+
+export interface AirdropFeed {
+  cards: Card[];
+  tge: Tge[];
+  counts: Counts;
+  /** Unix timestamp in milliseconds (Date.now()). */
+  fetchedAt: number;
 }
 
 export interface Dashboard {

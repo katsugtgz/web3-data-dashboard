@@ -3,18 +3,29 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="light dark" />
+<script>
+try {
+  var s = localStorage.getItem('color-scheme');
+  if (s === 'light' || s === 'dark') {
+    document.querySelector('meta[name="color-scheme"]').content = s;
+  }
+} catch (_) {}
+</script>
 <title>Import Command Query · Web3 Data Dashboard</title>
-<meta name="description" content="English accessible clone of an 18-section Web3 data dashboard: project airdrops, crypto and stock markets, DeFi rankings, VC investors, X traffic, on-chain stocks, AI resources and more." />
+<meta name="description" content="English accessible edition of an 18-section Web3 data dashboard: live airdrop radar, upcoming TGEs, crypto & stock markets, DeFi rankings, VC investors, on-chain stocks, AI resources and more." />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Import Command Query · Web3 Data Dashboard" />
-<meta property="og:description" content="18-section Web3 overview dashboard · English accessible edition · original by @ASSO7878" />
+<meta property="og:description" content="18-section Web3 overview dashboard · live airdrop radar · English accessible edition · original by @ASSO7878" />
 <link rel="icon" href="https://import-command-query-8ca052.surf.computer/avatar-renji.png" />
 <meta property="og:image" content="https://import-command-query-8ca052.surf.computer/preview.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<!-- Optional webfont: non-blocking; falls back to system-ui when offline or blocked. -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
-<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap"></noscript>
+<!-- Optional webfonts: non-blocking; falls back to system-ui and monospace when offline or blocked. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'" />
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=swap" /></noscript>
 </head>
 <body>
 <div id="root"></div>
