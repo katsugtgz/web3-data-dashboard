@@ -1,0 +1,16 @@
+worker/src/normalize/summarize.ts
+  h_cc1f32aec57e6b 96-111,114
+worker/test/summarize.test.ts
+  h_cc1f32aec57e6b 145-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c675d8158479255d2abff63f8e8eb78e9e0b7d1a",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
