@@ -238,6 +238,7 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
           <CardScore card={c} />
           <button type="button" className="chip" onClick={() => onCopyBrief(c)}>
             Copy agent brief
+            <span className="sr"> for {c.n}</span>
           </button>
         </div>
       </div>

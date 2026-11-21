@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { MarketSection, MarketSector } from '../../shared/types';
-import { cmpCells, formatRelativeTime, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
+import type { MarketRow, MarketSection, MarketSector } from '../../shared/types';
+import { formatRelativeTime, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
+import { cmpRows, rowKey } from '../lib/marketSort';
 
 interface Sort {
   col: number;
@@ -61,8 +62,24 @@ export function MarketPanel({ section, sectors }: Props) {
     if (sort.col < 0) return filtered;
     return filtered
       .slice()
-      .sort((a, b) => sort.dir * cmpCells(a.cells[sort.col] ?? '', b.cells[sort.col] ?? ''));
+      .sort((a, b) => cmpRows(a, b, sort.col, sort.dir));
   }, [section.rows, chain, query, sort]);
+
+  // Stable per-row React keys. Source ids can repeat (e.g. two pools with the
+  // same chain/project/symbol), so repeat occurrences get a content-based
+  // disambiguator. Computed once from the unsorted payload order, so identity
+  // never depends on display position after sorting.
+  const rowKeys = useMemo(() => {
+    const keys = new Map<MarketRow, string>();
+    const seen = new Map<string, number>();
+    for (const r of section.rows) {
+      const base = rowKey(r, section.id);
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      keys.set(r, n === 0 ? base : `${base}#${n}`);
+    }
+    return keys;
+  }, [section.rows, section.id]);
 
   useEffect(() => {
     if (rows.length === prevCountRef.current) return;
@@ -160,7 +177,7 @@ export function MarketPanel({ section, sectors }: Props) {
                   <th
                     key={col}
                     scope="col"
-                    aria-sort={on ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'}
+                    aria-sort={on ? (sort.dir > 0 ? 'ascending' : 'descending') : undefined}
                   >
                     <button type="button" className="sort" onClick={() => toggleSort(idx)}>
                       {col}
@@ -174,8 +191,8 @@ export function MarketPanel({ section, sectors }: Props) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, ri) => (
-              <tr key={`${row.cells[0]}-${ri}`}>
+            {rows.map(row => (
+              <tr key={rowKeys.get(row) ?? rowKey(row, section.id)}>
                 {section.cols.map((col, ci) => {
                   const cell = row.cells[ci] ?? '';
                   if (ci === 0) {

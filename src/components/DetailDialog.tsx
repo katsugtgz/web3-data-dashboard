@@ -1,43 +1,13 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
 import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
+import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
+import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { Avatar, BadgeChip } from './ProjectCard';
-
-function useBackdropDismiss(ref: RefObject<HTMLDialogElement | null>) {
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg || 'closedBy' in HTMLDialogElement.prototype) return;
-    let mouseDownOnBackdrop = false;
-    const isOnBackdrop = (event: MouseEvent): boolean => {
-      if (event.target !== dlg) return false;
-      const rect = dlg.getBoundingClientRect();
-      return !(
-        rect.top <= event.clientY &&
-        event.clientY <= rect.top + rect.height &&
-        rect.left <= event.clientX &&
-        event.clientX <= rect.left + rect.width
-      );
-    };
-    const onMouseDown = (event: MouseEvent) => {
-      mouseDownOnBackdrop = isOnBackdrop(event);
-    };
-    const onClick = (event: MouseEvent) => {
-      const shouldClose = mouseDownOnBackdrop && isOnBackdrop(event);
-      mouseDownOnBackdrop = false;
-      if (shouldClose) dlg.close();
-    };
-    dlg.addEventListener('mousedown', onMouseDown);
-    dlg.addEventListener('click', onClick);
-    return () => {
-      dlg.removeEventListener('mousedown', onMouseDown);
-      dlg.removeEventListener('click', onClick);
-    };
-  }, [ref]);
-}
 
 function resolveCardChains(card: Card): string[] {
   if (card.chains?.length) return card.chains;
@@ -158,6 +128,7 @@ interface BodyProps {
   onToggleTask: (taskKey: string) => void;
   onCopyBrief: (card: Card) => void;
   onDismiss: () => void;
+  copyStatus: CopyStatus | null;
 }
 
 function DetailDialogBody({
@@ -170,6 +141,7 @@ function DetailDialogBody({
   onToggleTask,
   onCopyBrief,
   onDismiss,
+  copyStatus,
 }: BodyProps) {
   const [showBrief, setShowBrief] = useState(false);
   const icon = card.img ?? '';
@@ -214,6 +186,8 @@ function DetailDialogBody({
           ))}
         </div>
       )}
+
+      {copyStatus && <CopyStatusBanner status={copyStatus} />}
 
       <div className="dlg-brief-bar">
         <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
@@ -285,6 +259,7 @@ interface Props {
   onToggleTask: (taskKey: string) => void;
   onCopyBrief: (card: Card) => void;
   onClose: () => void;
+  copyStatus: CopyStatus | null;
 }
 
 export function DetailDialog({
@@ -297,6 +272,7 @@ export function DetailDialog({
   onToggleTask,
   onCopyBrief,
   onClose,
+  copyStatus,
 }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -329,6 +305,7 @@ export function DetailDialog({
           onToggleTask={onToggleTask}
           onCopyBrief={onCopyBrief}
           onDismiss={() => ref.current?.close()}
+          copyStatus={copyStatus}
         />
       )}
     </dialog>

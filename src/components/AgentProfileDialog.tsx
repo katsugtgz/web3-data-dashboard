@@ -1,51 +1,25 @@
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { AgentProfile } from '../../shared/types';
-
-function useBackdropDismiss(ref: RefObject<HTMLDialogElement | null>) {
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg || 'closedBy' in HTMLDialogElement.prototype) return;
-    let mouseDownOnBackdrop = false;
-    const isOnBackdrop = (event: MouseEvent): boolean => {
-      if (event.target !== dlg) return false;
-      const rect = dlg.getBoundingClientRect();
-      return !(
-        rect.top <= event.clientY &&
-        event.clientY <= rect.top + rect.height &&
-        rect.left <= event.clientX &&
-        event.clientX <= rect.left + rect.width
-      );
-    };
-    const onMouseDown = (event: MouseEvent) => {
-      mouseDownOnBackdrop = isOnBackdrop(event);
-    };
-    const onClick = (event: MouseEvent) => {
-      const shouldClose = mouseDownOnBackdrop && isOnBackdrop(event);
-      mouseDownOnBackdrop = false;
-      if (shouldClose) dlg.close();
-    };
-    dlg.addEventListener('mousedown', onMouseDown);
-    dlg.addEventListener('click', onClick);
-    return () => {
-      dlg.removeEventListener('mousedown', onMouseDown);
-      dlg.removeEventListener('click', onClick);
-    };
-  }, [ref]);
-}
+import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
+import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 
 interface FormProps {
   initialProfile: AgentProfile;
   onSave: (next: AgentProfile) => void;
   onClose: () => void;
+  copyStatus: CopyStatus | null;
+  pendingCopyName: string | null;
+  onCopyPending: () => void;
 }
 
-function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
+function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pendingCopyName, onCopyPending }: FormProps) {
   const [form, setForm] = useState<AgentProfile>(initialProfile);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    // Save only; App owns close timing — during a pending copy the dialog
+    // stays up until the copy outcome is shown inside it.
     onSave(form);
-    onClose();
   };
 
   return (
@@ -64,10 +38,23 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
         Stored locally in your browser only. Never enter seed phrases, private keys, passwords, or cookies.
       </p>
 
+      {copyStatus && <CopyStatusBanner status={copyStatus} />}
+
+      {pendingCopyName && !copyStatus && (
+        <p className="privacy-banner">
+          Will copy the agent brief for <strong>{pendingCopyName}</strong> right after you save. Set up your
+          environment below, then press “Save profile”.
+          <button type="button" className="chip" style={{ marginLeft: 8 }} onClick={onCopyPending}>
+            Copy now without saving
+          </button>
+        </p>
+      )}
+
       <div className="profile-grid">
-        <label className="field">
+        <label className="field" htmlFor="profile-agent">
           <span>Agent</span>
           <select
+            id="profile-agent"
             className="select"
             value={form.agent}
             onChange={e => setForm({ ...form, agent: e.target.value as AgentProfile['agent'] })}
@@ -80,9 +67,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           </select>
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-agent-note">
           <span>Agent / model note (optional)</span>
           <input
+            id="profile-agent-note"
             type="text"
             placeholder="e.g. Claude Sonnet / Qwen 32B"
             value={form.agentNote ?? ''}
@@ -90,9 +78,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           />
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-host">
           <span>Host</span>
           <select
+            id="profile-host"
             className="select"
             value={form.host}
             onChange={e => setForm({ ...form, host: e.target.value as AgentProfile['host'] })}
@@ -103,9 +92,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           </select>
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-os">
           <span>OS</span>
           <select
+            id="profile-os"
             className="select"
             value={form.os}
             onChange={e => setForm({ ...form, os: e.target.value as AgentProfile['os'] })}
@@ -116,9 +106,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           </select>
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-specs">
           <span>Specs</span>
           <input
+            id="profile-specs"
             type="text"
             placeholder="4 vCPU / 8 GB / no GPU"
             value={form.specs ?? ''}
@@ -126,9 +117,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           />
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-browser-mode">
           <span>Browser mode</span>
           <select
+            id="profile-browser-mode"
             className="select"
             value={form.browserMode}
             onChange={e => setForm({ ...form, browserMode: e.target.value as AgentProfile['browserMode'] })}
@@ -139,9 +131,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           </select>
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-wallet">
           <span>Wallet policy</span>
           <select
+            id="profile-wallet"
             className="select"
             value={form.wallet}
             onChange={e => setForm({ ...form, wallet: e.target.value as AgentProfile['wallet'] })}
@@ -153,9 +146,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           </select>
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-wallet-note">
           <span>Wallet note (optional)</span>
           <input
+            id="profile-wallet-note"
             type="text"
             placeholder="e.g. Rabby burner, max $20"
             value={form.walletNote ?? ''}
@@ -163,9 +157,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           />
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-budget">
           <span>Per-task budget cap (USD)</span>
           <input
+            id="profile-budget"
             type="number"
             min={0}
             max={10000}
@@ -174,9 +169,10 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
           />
         </label>
 
-        <label className="field">
+        <label className="field" htmlFor="profile-time-cap">
           <span>Time cap (minutes)</span>
           <input
+            id="profile-time-cap"
             type="number"
             min={1}
             max={480}
@@ -186,8 +182,9 @@ function AgentProfileForm({ initialProfile, onSave, onClose }: FormProps) {
         </label>
       </div>
 
-      <label className="check-row">
+      <label className="check-row" htmlFor="profile-residential-ip">
         <input
+          id="profile-residential-ip"
           type="checkbox"
           checked={form.residentialIp}
           onChange={e => setForm({ ...form, residentialIp: e.target.checked })}
@@ -212,9 +209,21 @@ interface Props {
   profile: AgentProfile;
   onSave: (next: AgentProfile) => void;
   onClose: () => void;
+  copyStatus: CopyStatus | null;
+  /** Pending first-copy target: its project name, or null when opened plain. */
+  pendingCopyName: string | null;
+  onCopyPending: () => void;
 }
 
-export function AgentProfileDialog({ open, profile, onSave, onClose }: Props) {
+export function AgentProfileDialog({
+  open,
+  profile,
+  onSave,
+  onClose,
+  copyStatus,
+  pendingCopyName,
+  onCopyPending,
+}: Props) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -240,6 +249,9 @@ export function AgentProfileDialog({ open, profile, onSave, onClose }: Props) {
           initialProfile={profile}
           onSave={onSave}
           onClose={() => ref.current?.close()}
+          copyStatus={copyStatus}
+          pendingCopyName={pendingCopyName}
+          onCopyPending={onCopyPending}
         />
       )}
     </dialog>

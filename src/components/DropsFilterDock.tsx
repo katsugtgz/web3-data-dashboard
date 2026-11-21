@@ -47,7 +47,7 @@ export function DropsFilterDock({ filters, searchRef }: Props) {
         </div>
 
         <div className="dock-right">
-          <label className="sort-wrap">
+          <label className="sort-wrap" htmlFor="drops-sort">
             <span className="sr">Sort drops by</span>
             <select
               id="drops-sort"
@@ -60,7 +60,7 @@ export function DropsFilterDock({ filters, searchRef }: Props) {
             </select>
           </label>
 
-          <label className="sort-wrap">
+          <label className="sort-wrap" htmlFor="drops-min-sources">
             <span className="sr">Minimum sources</span>
             <select
               id="drops-min-sources"

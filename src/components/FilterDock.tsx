@@ -150,7 +150,7 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
             />
           </div>
 
-          <label className="sort-wrap">
+          <label className="sort-wrap" htmlFor="proj-sort">
             <span className="sr">Sort projects by</span>
             <select
               id="proj-sort"

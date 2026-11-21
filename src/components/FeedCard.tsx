@@ -115,6 +115,7 @@ export function FeedCard({ item, onCopyBrief }: Props) {
         ) : (
           <button type="button" className="chip" onClick={() => onCopyBrief(item)}>
             Copy agent brief
+            <span className="sr"> for {item.project}</span>
           </button>
         )}
       </div>

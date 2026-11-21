@@ -25,7 +25,12 @@ export function TabNav({
   return (
     <div className="tabbar" ref={tabbarRef}>
       <nav className="container" aria-label="Dashboard sections">
-        <div role="tablist" className="tabstrip" onKeyDown={onTabKey}>
+        <div
+          role="tablist"
+          aria-label="Dashboard sections"
+          className="tabstrip"
+          onKeyDown={onTabKey}
+        >
           {TABS.map(t => (
             <button
               key={t.id}
@@ -34,6 +39,7 @@ export function TabNav({
               role="tab"
               className="tab"
               aria-selected={t.id === tab}
+              aria-controls={`panel-${t.id}`}
               tabIndex={t.id === tab ? 0 : -1}
               ref={el => {
                 tabRefs.current[t.id] = el;
