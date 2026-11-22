@@ -73,7 +73,15 @@ export async function decayClusterScores(db: D1Database, nowMs = Date.now()): Pr
         riskLevel: r.risk_level,
       }) }))
       .filter(x => x.nextScore !== x.r.score)
-      .map(x => db.prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND score IS NOT ?2').bind(x.r.id, x.nextScore));
+      // Compare-and-set: guard the write on the values READ (old score and
+      // risk_level). A `score IS NOT ?2` guard compares the NEW value — a
+      // concurrent ingest that changed risk between our SELECT and this
+      // UPDATE would be silently overwritten by this stale-recomputed score.
+      // With WHERE score = old AND risk_level = read, a racing writer that
+      // touched the row makes our update match zero rows.
+      .map(x => db
+        .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND score = ?3 AND risk_level = ?4')
+        .bind(x.r.id, x.nextScore, x.r.score, x.r.risk_level));
 
     const chunks = [];
     for (let i = 0; i < stmts.length; i += 40) {

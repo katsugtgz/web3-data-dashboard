@@ -6,10 +6,12 @@ interface Props {
   dropsCount: number;
   sources: SourceHealth[];
   sourcesLoading: boolean;
+  sourcesIsLiveApi: boolean;
+  sourcesFailed: boolean;
 }
 
 /** Data-attribution footer with the sources-health popover. */
-export function DashboardFooter({ preCount, dropsCount, sources, sourcesLoading }: Props) {
+export function DashboardFooter({ preCount, dropsCount, sources, sourcesLoading, sourcesIsLiveApi, sourcesFailed }: Props) {
   return (
     <footer>
       <div className="container footer-inner footer-row">
@@ -41,7 +43,7 @@ export function DashboardFooter({ preCount, dropsCount, sources, sourcesLoading 
           </a>
           . Snapshot sections are static reference data. Not financial advice.
         </p>
-        <SourcesHealthPopover sources={sources} loading={sourcesLoading} />
+        <SourcesHealthPopover sources={sources} loading={sourcesLoading} isLiveApi={sourcesIsLiveApi} failed={sourcesFailed} />
       </div>
     </footer>
   );

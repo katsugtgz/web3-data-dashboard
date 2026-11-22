@@ -5,6 +5,17 @@ import { parseCost, parseMinutes } from '../lib/format';
 const SAVED_KEY = 'icq:saved-projects';
 const TASKS_KEY = 'icq:done-tasks';
 
+/**
+ * Watchlist/done-task entries key on the stable upstream project id
+ * (`card.id`), falling back to the display name — pre-id storage was
+ * name-keyed, so the fallback keeps old entries readable with no migration
+ * shim. ponytail: name fallback still collides for CJK-stripped duplicates;
+ * drop it once every surf payload carries project_id.
+ */
+export function cardStorageKey(card: Pick<Card, 'id' | 'n'>): string {
+  return card.id ?? card.n;
+}
+
 function readSet(key: string): Set<string> {
   try {
     const raw = localStorage.getItem(key);

@@ -7,12 +7,18 @@ import { SEED_SOURCES, syncSources, validateSources } from '../src/sources/regis
  * SQLite-backed D1 shim that counts every mutation statement actually run
  * against `sources`, so tests can assert "no write happened" exactly.
  */
-function createCountingD1(): { db: D1Database; sourceWriteCount(): number } {
+function createCountingD1(): {
+  db: D1Database;
+  sourceWriteCount(): number;
+  /** Patches the results of exactly the next `all()` read, then disarms — simulates syncSources reading a stale snapshot. */
+  staleReadOnce(patch: (rows: object[]) => void): void;
+} {
   const sqlite = new Database(':memory:');
   for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
     sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
   }
   let writes = 0;
+  let staleNext: ((rows: object[]) => void) | null = null;
   const makeStmt = (sql: string, params: unknown[] = []) => ({
     bind(...args: unknown[]) {
       return makeStmt(sql, args);
@@ -23,11 +29,17 @@ function createCountingD1(): { db: D1Database; sourceWriteCount(): number } {
     },
     async all<T = unknown>() {
       const results = sqlite.query(sql).all(...(params as [])) as T[];
+      if (staleNext) {
+        staleNext(results as object[]);
+        staleNext = null;
+      }
       return { results, success: true, meta: { changes: 0 } };
     },
     async run() {
-      if (/\b(INSERT|UPDATE|DELETE)\b/i.test(sql)) writes++;
       const info = sqlite.query(sql).run(...(params as []));
+      // Count rows actually written, not statements issued: a guarded UPDATE
+      // that matches no row (the race-loser case) must count as zero writes.
+      writes += info.changes;
       return { success: true, meta: { changes: info.changes } };
     },
   });
@@ -45,7 +57,7 @@ function createCountingD1(): { db: D1Database; sourceWriteCount(): number } {
       return { count: 1, duration: 0 };
     },
   } as unknown as D1Database;
-  return { db, sourceWriteCount: () => writes };
+  return { db, sourceWriteCount: () => writes, staleReadOnce: patch => (staleNext = patch) };
 }
 
 /** Minimal prepared-statement shape used by the D1 shim above. */
@@ -192,12 +204,23 @@ describe('syncSources conditional registry sync', () => {
   });
 
   test('guarded update is a no-op when a concurrent writer already applied the same config', async () => {
-    const { db, sourceWriteCount } = createCountingD1();
+    const { db, sourceWriteCount, staleReadOnce } = createCountingD1();
     await syncSources(db, ONE);
     // Concurrent writer applies the same trust bump first...
     await db.prepare('UPDATE sources SET trust = 0.9 WHERE id = ?1').bind('telegram:alpha_feed').run();
+
+    // Make the stale view real: patch syncSources' one full-table read to
+    // return the pre-bump trust 0.8, exactly as it would mid-race; the
+    // concurrent writer's 0.9 lands only after that read.
+    staleReadOnce(rows => {
+      for (const row of rows) {
+        if ('id' in row && row.id === 'telegram:alpha_feed' && 'trust' in row) row.trust = 0.8;
+      }
+    });
+
     const baseline = sourceWriteCount();
-    // ...this sync's stale-view UPDATE (still seeing 0.8) must write nothing.
+    // syncSources now diffs against the stale 0.8 view and still must write
+    // nothing: the guarded UPDATE's WHERE re-checks live values and matches no row.
     await syncSources(db, validateSources([{ platform: 'telegram', handle: 'alpha_feed', lang: 'en', trust: 0.9, tags: [], enabled: true }]));
     expect(sourceWriteCount() - baseline).toBe(0);
 

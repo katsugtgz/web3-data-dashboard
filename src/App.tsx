@@ -18,7 +18,7 @@ import { useFeed } from './hooks/useFeed';
 import { useMarkets } from './hooks/useMarkets';
 import { useSourcesHealth } from './hooks/useSourcesHealth';
 import { useTheme } from './hooks/useTheme';
-import { useWatchlist } from './hooks/useWatchlist';
+import { cardStorageKey, useWatchlist } from './hooks/useWatchlist';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
 
@@ -26,7 +26,7 @@ export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed();
   const { markets, loading: marketsLoading, failed: marketsFailed, refresh: refreshMarkets } = useMarkets();
-  const { sources, loading: sourcesLoading, refresh: refreshSources } = useSourcesHealth();
+  const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
@@ -140,7 +140,7 @@ export default function App() {
         sectors={markets?.sectors}
       />
 
-      <DashboardFooter preCount={airdropFilters.counts.pre} dropsCount={drops.items.length} sources={sources} sourcesLoading={sourcesLoading} />
+      <DashboardFooter preCount={airdropFilters.counts.pre} dropsCount={drops.items.length} sources={sources} sourcesLoading={sourcesLoading} sourcesIsLiveApi={sourcesIsLiveApi} sourcesFailed={sourcesFailed} />
 
 
       <AgentProfileDialog
@@ -160,7 +160,7 @@ export default function App() {
               card={detail}
               fit={FIT}
               profile={profile}
-              saved={saved.has(detail.n)}
+              saved={saved.has(cardStorageKey(detail))}
               doneTasks={doneTasks}
               onToggleSaved={toggleSaved}
               onToggleTask={toggleTaskDone}

@@ -68,22 +68,30 @@ async function upsertGithubIssue(title: string, body: string): Promise<void> {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'web3-radar-discovery/1.0',
   };
-  const listRes = await fetch(
-    `https://api.github.com/repos/${repo}/issues?state=open&per_page=100`,
-    { headers },
-  );
-  if (!listRes.ok) throw new Error(`GitHub list issues HTTP ${listRes.status}`);
-  const issues = (await listRes.json()) as { number: number; title: string }[];
-  const existing = issues.find(i => i.title === title);
+  // Paginate with the same label filter the POST applies: the tracker carries
+  // unrelated open issues, so an unfiltered first-100 scan missed an older
+  // source-discovery issue outside the window and created a duplicate.
+  const existing: { number: number; title: string }[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const listRes = await fetch(
+      `https://api.github.com/repos/${repo}/issues?state=open&labels=source-discovery&per_page=100&page=${page}`,
+      { headers },
+    );
+    if (!listRes.ok) throw new Error(`GitHub list issues HTTP ${listRes.status}`);
+    const issues = (await listRes.json()) as { number: number; title: string }[];
+    existing.push(...issues);
+    if (issues.length < 100) break;
+  }
+  const existingIssue = existing.find(i => i.title === title);
 
-  if (existing) {
-    const patchRes = await fetch(`https://api.github.com/repos/${repo}/issues/${existing.number}`, {
+  if (existingIssue) {
+    const patchRes = await fetch(`https://api.github.com/repos/${repo}/issues/${existingIssue.number}`, {
       method: 'PATCH',
       headers,
       body: JSON.stringify({ body }),
     });
     if (!patchRes.ok) throw new Error(`GitHub patch issue HTTP ${patchRes.status}`);
-    console.log(`Updated existing issue #${existing.number}`);
+    console.log(`Updated existing issue #${existingIssue.number}`);
   } else {
     const createRes = await fetch(`https://api.github.com/repos/${repo}/issues`, {
       method: 'POST',
@@ -98,10 +106,14 @@ async function upsertGithubIssue(title: string, body: string): Promise<void> {
 async function main() {
   const candidates = await loadCandidates();
   const body = renderCandidatesIssueBody(candidates);
-  if (dryRun || !repo || !token) {
+  if (dryRun) {
     console.log('=== DRY-RUN ISSUE BODY ===\n' + body);
     return;
   }
+  // Missing credentials must fail the run: a silent exit 0 reads as "published"
+  // in CI while nothing was upserted (the old gate swallowed upsertGithubIssue's
+  // credential check forever).
+  if (!repo || !token) throw new Error('GITHUB_REPOSITORY and GITHUB_TOKEN are required to publish the issue');
   await upsertGithubIssue('Source candidates', body);
 }
 

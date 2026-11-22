@@ -134,7 +134,11 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   const copyPendingNow = useCallback(() => {
     const pending = pendingCopyTargetRef.current;
     if (!pending) return;
-    copyCurrent(pending.target, profile, 'profile');
+    // Copying without saving: clear the first-copy gate so the "Will copy
+    // after you save" prompt never resurfaces and a later save cannot double-copy.
+    pendingCopyTargetRef.current = null;
+    setPendingCopyName(null);
+    copyCurrent(pending.target, profile, 'profile', ' Brief used placeholder environment values.');
   }, [profile, copyCurrent]);
 
   const handleSaveProfile = useCallback(

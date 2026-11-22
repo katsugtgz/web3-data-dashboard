@@ -82,38 +82,12 @@ describe('source auto-discovery', () => {
   test('recordCandidates upserts merge against the stored from_sources row, not a pre-read copy', async () => {
     const db = createSqliteD1();
     const now = 1_795_240_000_000;
-    // Both writers target the same handle concurrently: each statement must
-    // merge against the stored list, not a pre-read copy.
-    await db.batch([
-      db
-        .prepare(
-          `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)
-           VALUES (?1, 1, ?2, ?2, json_array(?3))
-           ON CONFLICT(handle) DO UPDATE SET
-             mentions = mentions + 1,
-             last_seen = excluded.last_seen,
-             from_sources = (
-               SELECT json_group_array(DISTINCT value)
-               FROM (SELECT value FROM json_each(source_candidates.from_sources)
-                     UNION SELECT value FROM json_each(excluded.from_sources))
-             )`,
-        )
-        .bind('racy', now, 'telegram:chA'),
-      db
-        .prepare(
-          `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)
-           VALUES (?1, 1, ?2, ?2, json_array(?3))
-           ON CONFLICT(handle) DO UPDATE SET
-             mentions = mentions + 1,
-             last_seen = excluded.last_seen,
-             from_sources = (
-               SELECT json_group_array(DISTINCT value)
-               FROM (SELECT value FROM json_each(source_candidates.from_sources)
-                     UNION SELECT value FROM json_each(excluded.from_sources))
-             )`,
-        )
-        .bind('racy', now, 'telegram:chB'),
-    ]);
+    // Two recordCandidates calls target the same handle. (Sequential sqlite
+    // batches cannot exercise true concurrent writers; what IS pinned here is
+    // that the upsert merges against the STORED list — each call's write
+    // unions the row left by the previous one instead of overwriting it.)
+    await recordCandidates(db, ['racy'], 'telegram:chA', now);
+    await recordCandidates(db, ['racy'], 'telegram:chB', now);
 
     const rows = await db
       .prepare('SELECT mentions, from_sources FROM source_candidates WHERE handle = ?1')

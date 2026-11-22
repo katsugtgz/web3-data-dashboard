@@ -115,15 +115,17 @@ export function stripOrTranslateCjk(raw: string): string {
       // U+FF10–FF19 sit inside the U+FF01–FF9F range below — so edge digits
       // survive. Fullwidth Latin (ＡＢＣ) is decoration and collapses away.
       .replace(/[\uFF10-\uFF19]/gu, d => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
-      .replace(/\p{Script=Han}+/gu, '')
-      .replace(/\p{Script=Hiragana}+/gu, '')
-      .replace(/\p{Script=Katakana}+/gu, '')
-      .replace(/\p{Script=Hangul}+/gu, '')
-      .replace(/\p{Script=Bopomofo}+/gu, '')
-      // Forbidden punctuation/fullwidth forms swap to spaces globally —
-      // single pass, no edge-only regexes — so mixed labels like
-      // 中foo。bar文 keep token boundaries (→ 'foo bar'); trailing trim
-      // cleans the edges. FF61–FF9F halfwidth forms are not output-safe.
+      .replace(/\p{Script=Han}+/gu, ' ')
+      .replace(/\p{Script=Hiragana}+/gu, ' ')
+      .replace(/\p{Script=Katakana}+/gu, ' ')
+      .replace(/\p{Script=Hangul}+/gu, ' ')
+      .replace(/\p{Script=Bopomofo}+/gu, ' ')
+      // Each CJK run swaps to a space, not '': deleting would fuse adjacent
+      // Latin tokens (Galxe任务Zealy → 'GalxeZealy'). Punctuation/fullwidth
+      // forms swap to spaces globally — single pass, no edge-only regexes —
+      // so mixed labels like 中foo。bar文 keep token boundaries (→ 'foo bar');
+      // trailing trim cleans the edges. FF61–FF9F halfwidth forms are not
+      // output-safe.
       .replace(/[\u3000-\u303F\uFF01-\uFF9F]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();

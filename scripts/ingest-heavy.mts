@@ -50,8 +50,19 @@ async function main() {
   ] as const) {
     const body = JSON.stringify(section);
     const etag = `"${await sha1Hex(body)}"`;
+    // Same fetched_at guard as the Worker's upsertSnapshot (worker/src/lib/db.ts):
+    // completion order ≠ schedule order, so a delayed overlapping heavy run must
+    // never regress a newer snapshot. `fetched_at` is fixed per run, so older run
+    // loses, newer wins.
     statements.push(
-      `INSERT OR REPLACE INTO snapshots (key, body, etag, fetched_at, ok, error) VALUES (${sqlQuote(key)}, ${sqlQuote(body)}, ${sqlQuote(etag)}, ${nowMs}, 1, NULL);`,
+      `INSERT INTO snapshots (key, body, etag, fetched_at, ok, error) VALUES (${sqlQuote(key)}, ${sqlQuote(body)}, ${sqlQuote(etag)}, ${nowMs}, 1, NULL)
+ON CONFLICT(key) DO UPDATE SET
+  body = excluded.body,
+  etag = excluded.etag,
+  fetched_at = excluded.fetched_at,
+  ok = 1,
+  error = NULL
+WHERE excluded.fetched_at >= snapshots.fetched_at;`,
     );
   }
   // known_domains is NOT touched here: without the surf input this loop

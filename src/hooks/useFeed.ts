@@ -81,7 +81,19 @@ export function useFeed(): FeedState {
             // and clear any stale queue: the newest fetch supersedes it.
             const queued = selectPending(res.body.items, known);
             setPendingItems(queued ?? []);
-            setItems(prev => (prev.length === 0 ? prev : mergeVisibleUpdates(prev, res.body.items)));
+            // Nothing displayed (e.g. first load failed) → show the latest list
+            // now instead of hiding the whole feed behind the new-drops pill.
+            setItems(prev => {
+              if (prev.length === 0) {
+                knownIdsRef.current = new Set(res.body.items.map(it => it.id));
+                return res.body.items;
+              }
+              const merged = mergeVisibleUpdates(prev, res.body.items);
+              // Rebuild from the merged list: an item that left the top-100
+              // window and returned must be re-queued as new, not treated as known.
+              knownIdsRef.current = new Set(merged.map(it => it.id));
+              return merged;
+            });
           }
         }
         setFailed(false);

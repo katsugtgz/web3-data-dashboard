@@ -8,6 +8,8 @@ const SOURCES_POLL_MS = 120_000;
 export function useSourcesHealth() {
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isLiveApi, setIsLiveApi] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
@@ -22,12 +24,15 @@ export function useSourcesHealth() {
         if (res.status === 200) {
           etagRef.current = res.etag;
           setSources(res.body);
+          setIsLiveApi(res.source === 'api');
         }
+        setFailed(false);
         setLoading(false);
       })
       .catch(() => {
         if (!signal.aborted) {
           poll.settle();
+          setFailed(true);
           setLoading(false);
         }
       });
@@ -41,5 +46,5 @@ export function useSourcesHealth() {
   poll.useInterval(fetchNowRef, SOURCES_POLL_MS);
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
-  return { sources, loading, refresh };
+  return { sources, loading, isLiveApi, failed, refresh };
 }

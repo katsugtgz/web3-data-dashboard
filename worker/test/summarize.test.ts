@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { HAN_RE } from '../src/normalize/i18n';
-import { summarizeClusterWithAi, type AiBindingLike } from '../src/normalize/summarize';
+import { summarizeClusterWithAi, unsafeContentRe, type AiBindingLike } from '../src/normalize/summarize';
 
 function createSqliteD1(): D1Database {
   const sqlite = new Database(':memory:');
@@ -47,6 +47,88 @@ function createSqliteD1(): D1Database {
 }
 
 describe('Workers AI summary normalization & budget guard', () => {
+
+  test('unsafeContentRe strips defanged hosts and catches base58 addresses', () => {
+    // Plain content passes.
+    expect(unsafeContentRe('Complete daily quests on the testnet')).toBe(false);
+    // Two-label domains now match (previously only foo.bar.tld did).
+    expect(unsafeContentRe('Visit claim-now.xyz for rewards')).toBe(true);
+    // Defanged and obfuscated hosts are normalized before the test.
+    expect(unsafeContentRe('claim-now[.]xyz')).toBe(true);
+    expect(unsafeContentRe('claim-now(.)xyz')).toBe(true);
+    expect(unsafeContentRe('claim-now\u3002xyz')).toBe(true);
+    // Zero-width chars splitting the host do not hide it.
+    expect(unsafeContentRe('claim-now\u200b.xyz')).toBe(true);
+    // EVM and Solana (base58, no 0OIl) addresses both match.
+    expect(unsafeContentRe('send funds to 0xAbCdEf0123456789AbCdEf0123456789AbCdEf01')).toBe(true);
+    expect(unsafeContentRe('4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T')).toBe(true);
+    // Base58 lookalike with forbidden char (0/O/I/l) is not an address.
+    expect(unsafeContentRe('staking OI0l pool rewards here')).toBe(false);
+  });
+
+
+  test('AI summary rejects URLs and domain-like chains; merge caps and unions SQL-side', async () => {
+    const db = createSqliteD1();
+
+    // Uppercase URL / bare domain in a chain entry must be rejected CI.
+    const urlAi: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Bridge assets and farm points this week on the new network.',
+            taskTypes: ['bridge'],
+            chains: ['HTTPS://CLAIM-NOW.XYZ/AIRDROP', 'base'],
+          }),
+        };
+      },
+    };
+    const res = await summarizeClusterWithAi(urlAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+    });
+    expect(res).not.toBeNull();
+    // The uppercase URL is rejected; the plain chain name survives.
+    expect(res!.chains).toEqual(['base']);
+
+    // Merge: stored chains survive, new ones union in, capped at 8 total;
+    // concurrent ingest between SELECT and UPDATE is not lost (SQL-side merge).
+    const seed = await db
+      .prepare(`SELECT chains FROM clusters WHERE id = 'c1'`)
+      .first<{ chains: string }>();
+    // First call stored the surviving plain name.
+    expect(JSON.parse(seed!.chains)).toEqual(['base']);
+    const multiAi: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Bridge assets and farm points this week on the new network.',
+            taskTypes: ['bridge'],
+            chains: ['Base', 'Arbitrum', 'Ethereum', 'Solana', 'Sui', 'Aptos', 'Polygon', 'TON', 'Scroll'],
+          }),
+        };
+      },
+    };
+    const res2 = await summarizeClusterWithAi(multiAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+    });
+    expect(res2).not.toBeNull();
+    const row = await db
+      .prepare(`SELECT chains FROM clusters WHERE id = 'c1'`)
+      .first<{ chains: string }>();
+    const chains = JSON.parse(row!.chains) as string[];
+    expect(chains.length).toBeLessThanOrEqual(8);
+    expect(chains).toContain('Base');
+  });
+
   test('produces English AI summary from non-Latin post and updates cluster', async () => {
     const db = createSqliteD1();
     const ai: AiBindingLike = {

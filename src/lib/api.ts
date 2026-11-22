@@ -13,6 +13,17 @@ declare global {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Fallback-eligible failures: transport errors, deadlines, or a reachable
+ * Worker answering 5xx (e.g. 503 while a cold deploy warms up). 4xx client
+ * errors still throw.
+ */
+export function fallbackEligible(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) return true;
+  return err instanceof Error && /^HTTP 5\d\d$/.test(err.message);
+}
+
 export async function readPrefetched<T>(key: string, signal?: AbortSignal, consume = false): Promise<T | null> {
   signal?.throwIfAborted();
   const map = typeof window !== 'undefined' ? window.__RADAR_PREFETCH__ : undefined;
@@ -68,9 +79,8 @@ export async function getJson<T>(
   try {
     return await fetchJson(`${API_BASE}${cleanPath}`, 'api', headers, signal);
   } catch (err) {
-    // Only transport failures and deadlines qualify for offline fallback.
-    if (signal?.aborted || !(err instanceof TypeError || (err instanceof DOMException &&
-      (err.name === 'TimeoutError' || err.name === 'AbortError')))) throw err;
+    // Transport failures, deadlines, and Worker 5xx qualify for offline fallback.
+    if (signal?.aborted || !fallbackEligible(err)) throw err;
     try {
       return await fetchJson(snapshotUrl, 'snapshot', {}, signal);
     } catch (snapshotError) {

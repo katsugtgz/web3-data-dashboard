@@ -265,9 +265,21 @@ export async function ingestPostIntoCluster(
              WHERE value != 'Single low-trust source'
                 OR MAX(clusters.source_count, ?12) <= 1
            ),
+           -- Mirrors the JS mergedRisk merge: 'warn' survives only while
+           -- reasons remain after the single-low-trust filter (which drops
+           -- it once the merged cluster has 2+ sources); no reasons → 'ok'.
            risk_level = CASE
              WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
-             WHEN clusters.risk_level = 'warn' OR ?9 = 'warn' THEN 'warn'
+             WHEN (clusters.risk_level = 'warn' OR ?9 = 'warn')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                          UNION
+                          SELECT value FROM json_each(?10))
+                    WHERE value != 'Single low-trust source'
+                       OR MAX(clusters.source_count, ?12) <= 1
+                  )
+               THEN 'warn'
              ELSE 'ok'
            END,
            -- The racing writer computed ?11 from its stale (pre-escalation)
@@ -277,7 +289,16 @@ export async function ingestPostIntoCluster(
            score = CASE
              WHEN CASE
                     WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
-                    WHEN clusters.risk_level = 'warn' OR ?9 = 'warn' THEN 'warn'
+                    WHEN (clusters.risk_level = 'warn' OR ?9 = 'warn')
+                         AND EXISTS (
+                           SELECT 1
+                           FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                                 UNION
+                                 SELECT value FROM json_each(?10))
+                           WHERE value != 'Single low-trust source'
+                              OR MAX(clusters.source_count, ?12) <= 1
+                         )
+                      THEN 'warn'
                     ELSE 'ok'
                   END = 'risk'
              THEN MIN(clusters.score, ?11)
@@ -343,15 +364,47 @@ export async function ingestPostIntoCluster(
              WHERE value != 'Single low-trust source'
                 OR MAX(clusters.source_count, excluded.source_count) <= 1
            ),
+           -- Mirrors the JS mergedRisk merge: 'warn' survives only while
+           -- reasons remain after the single-low-trust filter; none → 'ok'.
            risk_level = CASE
              WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'
-             WHEN clusters.risk_level = 'warn' OR excluded.risk_level = 'warn' THEN 'warn'
+             WHEN (clusters.risk_level = 'warn' OR excluded.risk_level = 'warn')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                          UNION
+                          SELECT value FROM json_each(excluded.risk_reasons))
+                    WHERE value != 'Single low-trust source'
+                       OR MAX(clusters.source_count, excluded.source_count) <= 1
+                  )
+               THEN 'warn'
              ELSE 'ok'
            END,
            summary = CASE WHEN clusters.summary_source = 'ai' THEN clusters.summary ELSE excluded.summary END,
            summary_source = CASE WHEN clusters.summary_source = 'ai' THEN 'ai' ELSE 'rule' END,
            first_seen = MIN(clusters.first_seen, excluded.first_seen),
-           score = MAX(clusters.score, excluded.score),
+           -- A concurrent risky first post escalates the merged level to
+           -- 'risk', but its own score is the only penalized one: the stored
+           -- safe post's score was computed risk-free. MIN applies the
+           -- penalty; MAX keeps a legitimately higher risk-free score.
+           score = CASE
+             WHEN CASE
+                    WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'
+                    WHEN (clusters.risk_level = 'warn' OR excluded.risk_level = 'warn')
+                         AND EXISTS (
+                           SELECT 1
+                           FROM (SELECT value FROM json_each(clusters.risk_reasons)
+                                 UNION
+                                 SELECT value FROM json_each(excluded.risk_reasons))
+                           WHERE value != 'Single low-trust source'
+                              OR MAX(clusters.source_count, excluded.source_count) <= 1
+                         )
+                      THEN 'warn'
+                    ELSE 'ok'
+                  END = 'risk'
+             THEN MIN(clusters.score, excluded.score)
+             ELSE MAX(clusters.score, excluded.score)
+           END,
            source_count = MAX(clusters.source_count, excluded.source_count),
            last_seen = MAX(clusters.last_seen, excluded.last_seen)`,
       )

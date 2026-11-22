@@ -28,9 +28,16 @@ export const PLATFORM_DOMAINS = new Set<string>([
   'guild.xyz',
 ]);
 
+// ponytail: curated slice of the Public Suffix List — just the common
+// multipart suffixes feed URLs actually use. Ceiling: a full vendored PSL
+// (publicsuffix.org list, refreshed at build time); upgrade when an exotic
+// ccTLD merges unrelated projects. Unknown suffixes fall back to
+// last-two-labels.
 const MULTI_PART_TLDS = new Set([
   'co.uk',
   'org.uk',
+  'gov.uk',
+  'ac.uk',
   'com.au',
   'co.id',
   'com.br',
@@ -40,12 +47,20 @@ const MULTI_PART_TLDS = new Set([
   'co.kr',
   'com.cn',
   'com.hk',
+  'co.in',
+  'com.mx',
+  'co.nz',
+  'com.ar',
+  'co.za',
 ]);
 
 const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Ethereum', /\b(?:ethereum|eth mainnet|erc-?20)\b/i],
-  ['Base', /\bbase\b(?:\s+(?:chain|mainnet|testnet|network|ecosystem))?|\bon base\b/i],
-  ['Arbitrum', /\barbitrum\b|\barb\b/i],
+  // base/scroll/blast/abstract/movement/arb are English words: bare matches
+  // false-tagged 'scroll down to claim', 'knowledge base'. They need a chain
+  // qualifier (X chain / on X / $X); unambiguous names stay bare.
+  ['Base', /\bbase\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon base\b|\$base\b/i],
+  ['Arbitrum', /\barbitrum\b|\barb\s+(?:chain|mainnet|network|ecosystem)|\bon arb\b|\$arb\b/i],
   ['Optimism', /\boptimism\b|\bop mainnet\b/i],
   ['Solana', /\bsolana\b|\bspl\b/i],
   ['BNB', /\bbnb\s*(?:chain|smart chain)?\b|\bbsc\b/i],
@@ -57,7 +72,7 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Starknet', /\bstarknet\b/i],
   ['zkSync', /\bzksync\b/i],
   ['Linea', /\blinea\b/i],
-  ['Scroll', /\bscroll\b/i],
+  ['Scroll', /\bscroll\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon scroll\b|\$scroll\b/i],
   ['Polygon', /\bpolygon\b|\bmatic\b/i],
   // The coin/network phrases need case-insensitivity ('Toncoin', 'Telegram
   // Open Network'); the bare ticker stays uppercase-only so 'a ton of
@@ -70,12 +85,12 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Celestia', /\bcelestia\b|\btia\b/i],
   ['Avalanche', /\bavalanche\b|\bavax\b/i],
   ['Mantle', /\bmantle\b/i],
-  ['Blast', /\bblast\b/i],
-  ['Abstract', /\babstract\b(?:\s+chain)?/i],
+  ['Blast', /\bblast\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon blast\b|\$blast\b/i],
+  ['Abstract', /\babstract\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon abstract\b/i],
   ['Sonic', /\bsonic\b/i],
   ['MegaETH', /\bmegaeth\b/i],
   ['Initia', /\binitia\b/i],
-  ['Movement', /\bmovement\b/i],
+  ['Movement', /\bmovement\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon movement\b|\$move\b/i],
 ];
 
 const TASK_PATTERNS: [TaskType, RegExp][] = [
@@ -119,7 +134,25 @@ export interface SurfMatch {
 
 export function cleanUrl(raw: string): string | null {
   try {
-    const u = new URL(raw.trim().replace(/[),.;!?]+$/, ''));
+    // Trailing text glued to the last path segment (CJK-adjacent posts emit
+    // `.../status/<id>Update` — the bare-URL regex cannot know where the link
+    // ends) and percent-encoded non-ASCII decoration (`.../103153%F0%9F%8F%82`
+    // → dead pages) both survive into the feed without this trim.
+    // ponytail: targets the observed shapes (pure-digit final segment with
+    // alphanumeric glue, ≥8 digits to skip `/page-2`-style slugs and version
+    // paths like /v2/12345abc; trailing %XX runs — percent-encoded non-ASCII
+    // never appears in a real link the bare-URL regex can capture). A real
+    // URL-token extractor over the post text is the full fix if a third
+    // shape appears.
+    let cleaned = raw.trim().replace(/[),.;!?]+$/, '');
+    const path = cleaned.split(/[?#]/)[0];
+    const lastSeg = path.slice(path.lastIndexOf('/') + 1);
+    const m = lastSeg.match(/^(\d{8,})([A-Za-z][A-Za-z0-9]*)$/);
+    if (m) {
+      cleaned = cleaned.slice(0, cleaned.lastIndexOf(lastSeg)) + m[1] + cleaned.slice(cleaned.lastIndexOf(lastSeg) + lastSeg.length);
+    }
+    cleaned = cleaned.replace(/(?:%[0-9A-Fa-f]{2})+$/, '');
+    const u = new URL(cleaned);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
     for (const key of [...u.searchParams.keys()]) {
       if (/^(?:utm_|fbclid|gclid|igshid|si$|ref_)/i.test(key)) {
@@ -268,9 +301,12 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
   const chains = extractChainsFromText(text);
   const taskTypes = extractTaskTypes(text, urls);
 
+  // A domain-identified post keeps its identity: a $TICKER pointing at a
+  // different surf card must not rename it. Ticker fallback only applies
+  // when no project domain was identified.
   const surfMatch =
     (projectDomain && ctx.surfByDomain?.get(projectDomain)) ||
-    (ticker && ctx.surfByTicker?.get(ticker)) ||
+    (!projectDomain && ticker && ctx.surfByTicker?.get(ticker)) ||
     undefined;
 
   // Domain-derived name outranks a capitalized filler word from the text:

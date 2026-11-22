@@ -59,11 +59,23 @@ function normalizeProfile(raw: unknown): AgentProfile {
   };
 }
 
+/** Pure parse of a stored value; non-object JSON (e.g. `null`) is not a configuration. */
+export function storedProfileFromRaw(raw: string | null): { profile: AgentProfile; hasConfigured: boolean } {
+  if (!raw) return { profile: DEFAULT_AGENT_PROFILE, hasConfigured: false };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    // Any non-object payload (e.g. `null`) is not a real configuration; the
+    // profile stays at defaults and the first-copy gate stays armed.
+    if (parsed === null || typeof parsed !== 'object') return { profile: DEFAULT_AGENT_PROFILE, hasConfigured: false };
+    return { profile: normalizeProfile(parsed), hasConfigured: true };
+  } catch {
+    return { profile: DEFAULT_AGENT_PROFILE, hasConfigured: false };
+  }
+}
+
 function readStoredProfile(): { profile: AgentProfile; hasConfigured: boolean } {
   try {
-    const raw = localStorage.getItem(AGENT_PROFILE_KEY);
-    if (!raw) return { profile: DEFAULT_AGENT_PROFILE, hasConfigured: false };
-    return { profile: normalizeProfile(JSON.parse(raw)), hasConfigured: true };
+    return storedProfileFromRaw(localStorage.getItem(AGENT_PROFILE_KEY));
   } catch {
     return { profile: DEFAULT_AGENT_PROFILE, hasConfigured: false };
   }

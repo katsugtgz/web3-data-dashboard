@@ -33,6 +33,25 @@ export function extractAiTextResponse(raw: unknown): string | null {
   return null;
 }
 
+// Scam text defangs itself to slip past filters: zero-width chars split
+// hosts, [.] / (.) / \u3002 (ideographic full stop) stand in for dots.
+const DEFANG_CHARS_RE = /[\u200b-\u200f\u2060\ufeff]/g;
+
+export function unsafeContentRe(s: string): boolean {
+  const t = s.replace(DEFANG_CHARS_RE, '').replace(/\[\.\]|\(\.\)|\u3002/g, '.');
+  return (
+    /https?:\/\//i.test(t) ||
+    /www\./i.test(t) ||
+    // Domain-like token: one or more labels ending in a TLD-ish suffix, so
+    // example.com AND foo.bar.tld both match (case-insensitive).
+    /\b[\w-]+(?:\.[\w-]+)*\.(?:[a-z]{2,24})\b/i.test(t) ||
+    // EVM address
+    /0x[a-fA-F0-9]{6,}/.test(t) ||
+    // Solana address: 32-44 chars base58 (alphabet excludes 0OIl)
+    /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/.test(t)
+  );
+}
+
 export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null {
   const start = rawText.indexOf('{');
   const end = rawText.lastIndexOf('}');
@@ -45,9 +64,7 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     if (HAN_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
     // The model sees untrusted post text. A crafted post can steer the summary
     // into links, wallet addresses, or drain instructions — never store those.
-    // Any domain-like token (foo.tld, foo.bar.tld) — not just a fixed TLD list.
-    if (/https?:\/\/|www\.|\b[\w-]+(?:\.[\w-]+)+\.(?:[a-z]{2,24})\b/i.test(summary)) return null;
-    if (/0x[a-fA-F0-9]{6,}/.test(summary)) return null;
+    if (unsafeContentRe(summary)) return null;
     if (/\b(connect|visit|open)\b[^.]{0,40}\bwallet\b/i.test(summary) || /\bseed phrase\b|\bprivate key\b/i.test(summary)) {
       return null;
     }
@@ -63,7 +80,7 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
           .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !NON_LATIN_RE.test(c))
           // Chains render into feed + agent briefs: same unsafe-content bar
           // as the summary (no URLs, no addresses).
-          .filter(c => !/https?:\/\/|www\.|0x[a-fA-F0-9]{6,}/.test(c))
+          .filter(c => !unsafeContentRe(c))
           .slice(0, 8)
       : [];
 
@@ -148,19 +165,43 @@ export async function summarizeClusterWithAi(
     .bind(opts.clusterId)
     .first<{ chains: string; task_types: string }>();
 
-  const prevChains = existing ? (JSON.parse(existing.chains) as string[]) : [];
   const prevTasks = existing ? (JSON.parse(existing.task_types) as TaskType[]) : [];
-  const mergedChains = [...new Set([...prevChains, ...validated.chains])];
   const mergedTasksRaw = [...new Set([...prevTasks, ...validated.taskTypes])];
   const mergedTasks = mergedTasksRaw.length > 1 ? mergedTasksRaw.filter(t => t !== 'other') : mergedTasksRaw;
 
+  // SQL-side merge against the CURRENT columns: a concurrent ingest may have
+  // extended chains/tasks between our SELECT and this UPDATE — replacing the
+  // arrays wholesale would drop those entries. Cap: same 8-entry bound the
+  // model output gets, or steered merge lists grow unbounded.
   await db
     .prepare(
       `UPDATE clusters
-       SET summary = ?2, summary_source = 'ai', chains = ?3, task_types = ?4
+       SET summary = ?2,
+           summary_source = 'ai',
+           chains = (
+             SELECT json_group_array(value)
+             FROM (
+               SELECT DISTINCT value FROM json_each(clusters.chains)
+               UNION
+               SELECT DISTINCT value FROM json_each(?3)
+               LIMIT 8
+             )
+           ),
+           task_types = (
+             SELECT CASE
+                      WHEN COUNT(DISTINCT value) > 1
+                      THEN json_group_array(value) FILTER (WHERE value != 'other')
+                      ELSE json_group_array(DISTINCT value)
+                    END
+             FROM (
+               SELECT value FROM json_each(clusters.task_types)
+               UNION
+               SELECT value FROM json_each(?4)
+             )
+           )
        WHERE id = ?1`,
     )
-    .bind(opts.clusterId, validated.summary, JSON.stringify(mergedChains), JSON.stringify(mergedTasks))
+    .bind(opts.clusterId, validated.summary, JSON.stringify(validated.chains), JSON.stringify(mergedTasks))
     .run();
 
   return validated;

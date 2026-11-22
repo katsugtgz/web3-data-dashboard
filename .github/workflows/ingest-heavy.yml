@@ -10,7 +10,9 @@ permissions:
 
 concurrency:
   group: ingest-heavy
-  cancel-in-progress: true
+  # Each run writes to remote D1; canceling mid-ingest may leave it half-done
+  # and never retried, so let an in-flight ingest finish.
+  cancel-in-progress: false
 
 jobs:
   ingest:

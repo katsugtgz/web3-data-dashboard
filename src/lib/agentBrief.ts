@@ -34,6 +34,19 @@ function sanitizeEnglish(input: string): string {
   return input.replace(HAN_RE, '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Fence delimiter + backticks must not appear inside untrusted fenced text;
+ * remaining markdown chars are inert mid-line (text never starts a line).
+ */
+function stripMdChars(input: string): string {
+  return input.replace(/[«»`]/g, '');
+}
+
+/** Free text must never own a full brief line: single line, no fence delimiters. */
+function sanitizeEnglishTrim(input: string): string {
+  return sanitizeEnglish(stripMdChars(input)) || '(unspecified)';
+}
+
 export function isFeedItem(item: FeedItem | Card): item is FeedItem {
   return 'sources' in item && 'risk' in item;
 }
@@ -91,7 +104,9 @@ function buildStepsForCard(card: Card): string[] {
       .filter(Boolean)
       .join(' · ');
     const text = meta ? `${t.title} (${meta})` : t.title;
-    return formatStepLine(i + 1, text, true);
+    // Untrusted data: fence the title so a hostile title cannot speak as the
+    // brief; delimiter sequences neutralized by sanitizeEnglishTrim.
+    return formatStepLine(i + 1, `Untrusted task data « ${sanitizeEnglishTrim(text)} »`, true);
   });
 }
 
@@ -152,7 +167,7 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
     if (item.risk.level === 'risk') return null;
     const project = sanitizeEnglish(item.project) || 'Web3 Project';
     const taskTypes = item.taskTypes.join(', ') || 'other';
-    const chains = item.chains.join(', ') || 'Not specified';
+    const chains = item.chains.map(sanitizeEnglish).filter(Boolean).join(', ') || 'Not specified';
     const verifiedLinks: string[] = [];
     const unverifiedLinks: string[] = [];
     for (const link of item.links) {
@@ -204,7 +219,11 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
   if (item.b.includes('risk')) return null;
   const project = sanitizeEnglish(item.n) || 'Web3 Project';
   const taskTypes = (item.taskTypes?.length ? item.taskTypes : [item.best.ty || 'airdrop']).join(', ');
-  const chains = (item.chains?.length ? item.chains : item.chain ? [item.chain] : []).join(', ') || 'Not specified';
+  const chains =
+    (item.chains?.length ? item.chains : item.chain ? [item.chain] : [])
+      .map(sanitizeEnglish)
+      .filter(Boolean)
+      .join(', ') || 'Not specified';
   const linkSet = new Set<string>();
   if (item.url && isHttpUrl(item.url)) linkSet.add(item.url);
   for (const t of item.tasks ?? []) {
