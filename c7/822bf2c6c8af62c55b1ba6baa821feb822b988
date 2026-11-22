@@ -1,0 +1,20 @@
+data/snapshot/airdrops.json
+  h_cc1f32aec57e6b 1
+data/snapshot/feed.json
+  h_cc1f32aec57e6b 1
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+data/snapshot/sources.json
+  h_cc1f32aec57e6b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7822bf2c6c8af62c55b1ba6baa821feb822b988",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
