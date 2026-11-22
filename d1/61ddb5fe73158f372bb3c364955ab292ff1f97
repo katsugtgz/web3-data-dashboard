@@ -1,0 +1,14 @@
+worker/wrangler.toml
+  h_cc1f32aec57e6b 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d161ddb5fe73158f372bb3c364955ab292ff1f97",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
