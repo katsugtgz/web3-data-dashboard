@@ -1,0 +1,18 @@
+src/hooks/useFeed.ts
+  h_cc1f32aec57e6b 86-95
+worker/src/index.ts
+  h_cc1f32aec57e6b 222-253
+worker/src/sources/x.ts
+  h_cc1f32aec57e6b 297-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "729d1f5c4e1e3c2685b62008c4901881a539e8d2",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
