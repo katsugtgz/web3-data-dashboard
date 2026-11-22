@@ -1,0 +1,340 @@
+shared/types.ts
+  h_cc1f32aec57e6b 79-105,108,110-128,130,132-187
+  h_cc1f32aec57e6b 1-2,22-23,129,131
+src/hooks/useDashboardTabs.ts
+  h_cc1f32aec57e6b 1-30,34-46,52-57,65-113,123-134
+  h_cc1f32aec57e6b 31-33,47-51,58-64,114-122
+src/hooks/useBackdropDismiss.ts
+  h_cc1f32aec57e6b 1-42
+scripts/ingest-heavy.mts
+  h_cc1f32aec57e6b 1-34,41-56,60-71
+  h_cc1f32aec57e6b 35-40,57-59,72-82
+src/components/FilterDock.tsx
+  h_cc1f32aec57e6b 2,9,13,153
+.github/workflows/pages.yml
+  h_cc1f32aec57e6b 30
+src/main.tsx
+  h_cc1f32aec57e6b 7,11-19
+  h_cc1f32aec57e6b 4,8-10
+src/components/AgentProfileDialog.tsx
+  h_cc1f32aec57e6b 1-16,18-20,22-39,41-165,167-178,182-260
+  h_cc1f32aec57e6b 17,21,40,166,179-181
+worker/test/fixtures/surf-airdrops.json
+  h_cc1f32aec57e6b 1
+src/components/AirdropPanel.tsx
+  h_cc1f32aec57e6b 2-3,22,36,71,93,98,141
+  h_cc1f32aec57e6b 5,16,20,30,49,77,94,131
+worker/test/fixtures/telegram/cointelegraph.html
+  h_cc1f32aec57e6b 1-93
+worker/src/lib/db.ts
+  h_cc1f32aec57e6b 1-26,31-37,39-40,48-50,56,58-75,95-104
+  h_cc1f32aec57e6b 27-30,38,41-47,51-55,57,76-94
+worker/src/lib/format.ts
+  h_cc1f32aec57e6b 1-5,8-12,20-26,31-44,47-50
+  h_cc1f32aec57e6b 6-7,13-19,27-30,45-46
+data/snapshot/airdrops.json
+  h_cc1f32aec57e6b 1
+worker/src/sources/discover.ts
+  h_cc1f32aec57e6b 1,17-40,44-75,81-82,84-86,93,96-105,109-127
+  h_cc1f32aec57e6b 2-16,41-43,76-80,83,87-92,94-95,106-108
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+worker/test/fixtures/telegram/ssipalingtestnet.html
+  h_cc1f32aec57e6b 1-93
+src/App.tsx
+  h_cc1f32aec57e6b 1-4,6,8-10,13-19,26-27,29,31,36-56,59,61-66,68-77,87-89,93-94,98-104,106-125,129-137,140-141,143-144,146-154,161-162,167-168,174-175
+  h_cc1f32aec57e6b 21,28,57,67,78,90-91,105,126-128,138-139,142,145,163
+worker/src/normalize/parse.ts
+  h_cc1f32aec57e6b 1-2,4-19,21-61,68-81,83-184,188,190,192-240,243,245-259,263-275,279-281,283,285-298
+  h_cc1f32aec57e6b 3,20,62-67,82,185-187,189,191,241-242,244,260-262,276-278,282,284,299-334
+worker/test/discover.test.ts
+  h_cc1f32aec57e6b 1-8,10-80
+  h_cc1f32aec57e6b 9,81-113
+src/hooks/useDropsFilters.ts
+  h_cc1f32aec57e6b 1-2,5-17,23-27,29-33,35-41,43-52,54-56,61-62,76-77,81-83,91-98,103-128,130-155
+  h_cc1f32aec57e6b 3-4,18-20,22,28,34,42,53,57-60,63-75,78-80,84-90,99-102,129
+shared/constants.ts
+  h_cc1f32aec57e6b 1-42,58-91
+  h_cc1f32aec57e6b 43-57
+worker/test/fixtures/telegram/layergg.html
+  h_cc1f32aec57e6b 1-97
+src/components/SourcesHealthPopover.tsx
+  h_cc1f32aec57e6b 1-64
+  h_cc1f32aec57e6b 65-80
+worker/migrations/0001_init.sql
+  h_cc1f32aec57e6b 1-8
+worker/test/fixtures/telegram/shoalresearch.html
+  h_cc1f32aec57e6b 1-81
+worker/test/x.test.ts
+  h_cc1f32aec57e6b 1-7,9-75,105-129,195
+  h_cc1f32aec57e6b 8,76-104,130-194
+src/components/MarketPanel.tsx
+  h_cc1f32aec57e6b 2-4,11-37,47-53,60,65-66,69,77-79,82-88,106-114,126-127,147,153,175,179-180,183,185,187-188,199-203,205-213,219,221-223,228-230,234,243
+  h_cc1f32aec57e6b 67-68,70-76,80-81
+src/hooks/useMarkets.ts
+  h_cc1f32aec57e6b 1-4,6,8-12,15-19,21,24-33,42-52,54-61,63,65
+  h_cc1f32aec57e6b 5,7,13-14,20,22-23,34-41,53,62,64,66
+worker/test/summarize.test.ts
+  h_cc1f32aec57e6b 1-8,10-171,173-182,186,188-210
+  h_cc1f32aec57e6b 9,172,183-185,187,211-292
+src/components/DashboardPanels.tsx
+  h_cc1f32aec57e6b 1-77,81-89,92-101,104-105,107-116,134-138,142-152,166-169
+  h_cc1f32aec57e6b 78-80,90-91,102-103,106,117-133,139-141,153-165
+worker/src/normalize/summarize.ts
+  h_cc1f32aec57e6b 1,3-13,16-45,54-57,59-62,68-113,116,119-165
+  h_cc1f32aec57e6b 2,14-15,46-53,58,63-67,114-115,117-118,166-208
+worker/src/lib/hash.ts
+  h_cc1f32aec57e6b 1-5
+src/hooks/useAgentProfile.ts
+  h_cc1f32aec57e6b 1-86,88-90,92-93,95-102
+  h_cc1f32aec57e6b 87,91,94,103-114
+worker/src/index.ts
+  h_cc1f32aec57e6b 1-10,12-17,19-42,44-48,51-78,81-128,132-135,145-163,166,175,177-178,191,251-252,254,261-290,300-342,346,348-354,356-360,362-374,376-380,384-387,389-395,398-405,408-422,425-455,457,459-474,479-491
+  h_cc1f32aec57e6b 11,18,43,49-50,79-80,129-131,136-144,164-165,167-174,176,179-190,192-250,253,255-260,291-299,343-345,347,355,361,375,381-383,388,396-397,406-407,423-424,456,458,475-478
+scripts/check-no-cjk.sh
+  h_cc1f32aec57e6b 1-3,8,10-24
+  h_cc1f32aec57e6b 4-7,9
+src/components/Toast.tsx
+  h_cc1f32aec57e6b 3-8,15,27-28
+  h_cc1f32aec57e6b 1-2,9-14,16-26
+index.html
+  h_cc1f32aec57e6b 15-16,18,24
+  h_cc1f32aec57e6b 19-20,23
+worker/test/fixtures/telegram/HappyCuanAirdrop.html
+  h_cc1f32aec57e6b 1-90
+public/icon.svg
+  h_cc1f32aec57e6b 1-8
+worker/test/fixtures/telegram/airdropalphs.html
+  h_cc1f32aec57e6b 1-85
+worker/src/normalize/i18n.ts
+  h_cc1f32aec57e6b 1-4,11-92,96-103,105,131-134
+  h_cc1f32aec57e6b 5-10,93-95,104,106-130,135-136
+scripts/snapshot.mts
+  h_cc1f32aec57e6b 1-15,17-45,52-63,70-87,95,97-106,126-135,146,152-155,166-187,189,194-199,203-256,258-330,335-343
+  h_cc1f32aec57e6b 16,46-51,64-69,88-94,96,107-125,136-145,147-151,156-165,188,190-193,200-202,257,331-334,344-531
+worker/migrations/0003_p4.sql
+  h_cc1f32aec57e6b 1-15
+worker/test/fixtures/telegram/AirdropAnalyst.html
+  h_cc1f32aec57e6b 1-83
+src/lib/feedMerge.ts
+  h_cc1f32aec57e6b 1-4,6-37
+  h_cc1f32aec57e6b 5
+bun.lock
+  h_cc1f32aec57e6b 20-27,30-49,56-167,172-177,212-215,222-223,228-231,274-279,282-291,294-295,298-317,320-325,328-345,370-379,382-389,404-407,410-411,414-415,420-421,424-425,428-447,449-452
+scripts/discover-sources-issue.mts
+  h_cc1f32aec57e6b 1-17,23-110
+  h_cc1f32aec57e6b 18-22,111-122
+worker/test/telegram.test.ts
+  h_cc1f32aec57e6b 1-3,5-24,29,31-54,57-60,79
+  h_cc1f32aec57e6b 4,25-28,30,55-56,61-78
+src/lib/feedMerge.test.ts
+  h_cc1f32aec57e6b 1-75
+worker/test/pipeline.test.ts
+  h_cc1f32aec57e6b 1-14,16-17,19-69,71-75,88-134,136-152,154-170,172-187,316-322
+  h_cc1f32aec57e6b 15,18,70,76-87,135,153,171,188-315,323-556
+worker/sources.json
+  h_cc1f32aec57e6b 1-65
+worker/src/safety/index.ts
+  h_cc1f32aec57e6b 1-2,4,6,12,14-79,82-94,110-117,123-127,130-131,134-150,152-153,161-194,196-204,206-224,228-242,247-256,258-260,264-266,268
+  h_cc1f32aec57e6b 3,5,7-11,13,80-81,95-109,118-122,128-129,132-133,151,154-160,195,205,225-227,243-246,257,261-263,267
+worker/test/sources.test.ts
+  h_cc1f32aec57e6b 1-36
+src/lib/api.ts
+  h_cc1f32aec57e6b 1-3,5-15,18-20,26,32,34-36,50-59,63-68,70,80-81
+  h_cc1f32aec57e6b 4,16-17,21-25,27-31,33,37-49,60-62,69,71-79,82-91
+worker/test/fixtures/telegram/pk_oa.html
+  h_cc1f32aec57e6b 1-88
+worker/wrangler.toml
+  h_cc1f32aec57e6b 1-8,10-21
+  h_cc1f32aec57e6b 9
+src/hooks/useDashboardDerived.ts
+  h_cc1f32aec57e6b 1-27,32-41,43-44
+  h_cc1f32aec57e6b 28-31,42
+.github/workflows/ci.yml
+  h_cc1f32aec57e6b 18,25-28,32-38,48-55,64-65,69
+  h_cc1f32aec57e6b 56-63,66-68
+src/styles.css
+  h_cc1f32aec57e6b 279-308,1422-1437,1574-1576,1585-1590,1594,1599-1604,1606-1607,1610-1611,1616-1617,1938-2293
+.github/workflows/discover-sources.yml
+  h_cc1f32aec57e6b 1-29
+worker/src/normalize/score.ts
+  h_cc1f32aec57e6b 1-32,62,65,77,86-87
+  h_cc1f32aec57e6b 33-61,63-64,66-76,78-85,88-95
+.github/workflows/worker-deploy.yml
+  h_cc1f32aec57e6b 1-15,20-22,28,32-44,53-57
+  h_cc1f32aec57e6b 16-19,23-27,29-31,45-52
+src/lib/marketSort.ts
+  h_cc1f32aec57e6b 1-42
+worker/src/sources/registry.ts
+  h_cc1f32aec57e6b 1-47,54-85,87-90,92-93,98-99,103,105-108,113-116,118,120,122-126,129-131,134-135,138,140-141,143,152,157-162
+  h_cc1f32aec57e6b 48-53,86,91,94-97,100-102,104,109-112,117,119,121,127-128,132-133,136-137,139,142,144-151,153-156
+scripts/build-pages.mts
+  h_cc1f32aec57e6b 1-2,6-12
+worker/package.json
+  h_cc1f32aec57e6b 1-16
+src/components/ProjectCard.tsx
+  h_cc1f32aec57e6b 2,162,167,170,172,237-238,247
+  h_cc1f32aec57e6b 4,43,85,165,176,239-246
+README.md
+  h_cc1f32aec57e6b 1,3,5,9-13,15,17-22,24,29-35,37-38,41,43-49,51,53-56
+src/components/CopyStatusBanner.tsx
+  h_cc1f32aec57e6b 1-19,22-24,30-37,40-42,45-46
+  h_cc1f32aec57e6b 20-21,25-29,38-39,43-44
+src/components/DashboardHeader.tsx
+  h_cc1f32aec57e6b 8,11,15-25,38,46,49,62,69,71,80,88-89,111-120
+  h_cc1f32aec57e6b 29-30,36,52
+worker/test/etag.test.ts
+  h_cc1f32aec57e6b 1-19
+src/lib/polling.ts
+  h_cc1f32aec57e6b 1-76
+data/snapshot/sources.json
+  h_cc1f32aec57e6b 1
+src/components/DetailDialog.tsx
+  h_cc1f32aec57e6b 1-4,8-9,17,123-124,129,131,137,142,144,146-147,152-153,219-223,258-259,264,266,272,277,279,302,305,310,312
+  h_cc1f32aec57e6b 7,150,172,190-218
+worker/test/fixtures/telegram/drops_analytics.html
+  h_cc1f32aec57e6b 1-96
+worker/src/normalize/cluster.ts
+  h_cc1f32aec57e6b 1-102,104-197,199-236,242-244,290-316,354-404,411-566
+  h_cc1f32aec57e6b 103,198,237-241,245-289,317-353,405-410,567-619
+tsconfig.json
+  h_cc1f32aec57e6b 17
+.github/workflows/ingest-heavy.yml
+  h_cc1f32aec57e6b 1-29,36-40
+  h_cc1f32aec57e6b 30-35,41-42
+worker/test/fixtures/telegram/CG_yangmaoqianxian.html
+  h_cc1f32aec57e6b 1-79
+src/components/DashboardFooter.tsx
+  h_cc1f32aec57e6b 1-37,43-48
+  h_cc1f32aec57e6b 38-42,49-50
+src/hooks/useAirdropFeed.ts
+  h_cc1f32aec57e6b 4-6,12,16,22,24,26,28-37,39,44-45,49,51,53-54,56,58
+  h_cc1f32aec57e6b 3,21,23,38,60-62
+worker/src/sources/x.ts
+  h_cc1f32aec57e6b 1-52,55,57-67,69-90,92,94-99,101-198,200-230,232-247,252-287,305-307,322-333
+  h_cc1f32aec57e6b 53-54,56,68,91,93,100,199,231,248-251,288-304,308-321
+package.json
+  h_cc1f32aec57e6b 5-7,12-17
+src/lib/labels.ts
+  h_cc1f32aec57e6b 25,31-33
+worker/test/feed-determinism.test.ts
+  h_cc1f32aec57e6b 1-7,9-100
+  h_cc1f32aec57e6b 8
+worker/test/fixtures/telegram/AirdropJacks.html
+  h_cc1f32aec57e6b 1-91
+src/hooks/useSourcesHealth.ts
+  h_cc1f32aec57e6b 1-11,13-45
+  h_cc1f32aec57e6b 12,46-50
+worker/test/fixtures/telegram/airdropfind.html
+  h_cc1f32aec57e6b 1-120
+worker/test/registry-sync.test.ts
+  h_cc1f32aec57e6b 1-11,13-213,278
+  h_cc1f32aec57e6b 12,214-277,279-302
+worker/test/fixtures/telegram/WatcherGuru.html
+  h_cc1f32aec57e6b 1-83
+worker/tsconfig.json
+  h_cc1f32aec57e6b 1-5,7-15,17
+  h_cc1f32aec57e6b 6,16
+src/lib/format.ts
+  h_cc1f32aec57e6b 90-101
+  h_cc1f32aec57e6b 4,6,15-20
+worker/test/fixtures/telegram/uangdrop.html
+  h_cc1f32aec57e6b 1-95
+worker/src/sources/surf.ts
+  h_cc1f32aec57e6b 1-10,12,14-20,31,38,55,84,95,97,107-112,116-117,120-122,127,130-133,139,141,149,175-182,184,189,192,196,200-201,205,207,209,230-231,233,235,240-243,245-266
+  h_cc1f32aec57e6b 32,85-87,183,185-188,193,229
+worker/test/surf.test.ts
+  h_cc1f32aec57e6b 1-2,4,6-9,38-44,48,57-72,75,78-82
+  h_cc1f32aec57e6b 3,5,10-37,45-47,49-56,73-74,76-77
+src/hooks/useFeed.ts
+  h_cc1f32aec57e6b 1-12,14-19,22-32,34-36,38-42,45-62,70-112,114-124,126-132
+  h_cc1f32aec57e6b 13,20-21,33,37,43-44,63-69,113,125,133-144
+src/lib/agentBrief.ts
+  h_cc1f32aec57e6b 1,3,6,8-18,31-46,48-72,74-80,82-87,89-93,95-97,108-121,131-137,141-155,163-179,181-182,184-203,205-212,214-215,217-220,222-223,226-237
+  h_cc1f32aec57e6b 2,4-5,7,19-30,47,73,81,88,94,98-107,122-130,138-140,156-162,180,183,204,213,216,221,224-225,238-256
+vite.config.ts
+  h_cc1f32aec57e6b 6,11,18-21,26,34
+  h_cc1f32aec57e6b 13
+worker/src/sources/markets.ts
+  h_cc1f32aec57e6b 1-167,170-211,217-232,234,239-243,245-280,291,293-300,307-328,330-408,412,414-420,422-472,474,477-482,485-504
+  h_cc1f32aec57e6b 168-169,212-216,233,235-238,244,281-290,292,301-306,329,409-411,413,421,473,475-476,483-484
+src/hooks/useCopyBriefController.ts
+  h_cc1f32aec57e6b 1-18,20-41,43-91,93-94,97,100,107-111,120-128,130,132-135,139-141,143-146,149-150,152-153,155-183
+  h_cc1f32aec57e6b 19,42,92,95-96,98-99,101-106,112-119,129,131,136-138,142,147-148,151,154,184-187
+src/lib/clipboard.ts
+  h_cc1f32aec57e6b 1-17,24-37,41
+  h_cc1f32aec57e6b 18-23,38-40
+src/components/DropsFilterDock.tsx
+  h_cc1f32aec57e6b 1,3-120
+  h_cc1f32aec57e6b 2
+worker/test/fixtures/telegram/yourlittlething.html
+  h_cc1f32aec57e6b 1-93
+src/lib/agentBrief.test.ts
+  h_cc1f32aec57e6b 1-40,42-57,59-68,70-72,79-97,99-109,111-114,116-117,119-122
+  h_cc1f32aec57e6b 41,58,69,73-78,98,110,115,118,123-188
+.gitignore
+  h_cc1f32aec57e6b 13
+worker/test/fixtures/telegram/alphahunterTanaka.html
+  h_cc1f32aec57e6b 1-90
+worker/migrations/0002_feed.sql
+  h_cc1f32aec57e6b 1-53
+lighthouserc.json
+  h_cc1f32aec57e6b 4
+src/components/FeedCard.tsx
+  h_cc1f32aec57e6b 1-41,43-139
+  h_cc1f32aec57e6b 42
+worker/src/sources/telegram.ts
+  h_cc1f32aec57e6b 1-32,35-36,38-40,42-127,131-159,163-166,168-209,211-246,248-301,303-306,308-328
+  h_cc1f32aec57e6b 33-34,37,41,128-130,160-162,167,210,247,302,307
+worker/test/fixtures/telegram/diaryhabibi.html
+  h_cc1f32aec57e6b 1-81
+worker/test/fixtures/telegram/atoms_research.html
+  h_cc1f32aec57e6b 1-105
+worker/test/markets.test.ts
+  h_cc1f32aec57e6b 1-3,5-20,23-26,28-75,123-124
+  h_cc1f32aec57e6b 4,21-22,27,76-122
+src/hooks/useAirdropFilters.ts
+  h_cc1f32aec57e6b 3,72
+  h_cc1f32aec57e6b 2,31,144
+src/components/DropsPanel.tsx
+  h_cc1f32aec57e6b 1-18,21-51,53-101,103-137
+  h_cc1f32aec57e6b 19-20,52,102
+src/lib/marketSort.test.ts
+  h_cc1f32aec57e6b 1-54,56-64
+  h_cc1f32aec57e6b 55
+data/snapshot/feed.json
+  h_cc1f32aec57e6b 1
+scripts/snapshot.test.ts
+  h_cc1f32aec57e6b 1-117
+src/components/KpiStrip.tsx
+  h_cc1f32aec57e6b 8,22,40
+src/hooks/useAgentProfile.test.ts
+  h_cc1f32aec57e6b 1-24
+src/hooks/useWatchlist.ts
+  h_cc1f32aec57e6b 8-18,38-39,43,48,51
+src/lib/api.test.ts
+  h_cc1f32aec57e6b 1-15
+src/lib/format.test.ts
+  h_cc1f32aec57e6b 1-9
+worker/migrations/0004_tags.sql
+  h_cc1f32aec57e6b 1-3
+worker/src/safety/shorteners.ts
+  h_cc1f32aec57e6b 1-31
+worker/test/cron-resilience.test.ts
+  h_cc1f32aec57e6b 1-211
+worker/test/helpers.ts
+  h_cc1f32aec57e6b 1-9
+worker/test/workerFormat.test.ts
+  h_cc1f32aec57e6b 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ce76f526db4b683fceee4d303b8ea5cf0187729",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
