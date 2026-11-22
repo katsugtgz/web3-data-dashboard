@@ -1,0 +1,182 @@
+.github/workflows/ci.yml
+  h_cc1f32aec57e6b 18,37-38
+README.md
+  h_cc1f32aec57e6b 1,3,5,9-16,18,20-22,24,28-35,37,39-44,47,49-59,61,63
+data/dashboard.json
+  h_cc1f32aec57e6b 1-4396
+data/harvest-net/DEMO_MAP.md
+  h_cc1f32aec57e6b 1-60
+data/harvest-net/SUMMARY.json
+  h_cc1f32aec57e6b 1-47
+data/harvest-net/_capture-log.json
+  h_cc1f32aec57e6b 1-90
+data/harvest-net/airdrop-doit.json
+  h_cc1f32aec57e6b 1-3841
+data/harvest-net/raw/0000.json
+  h_cc1f32aec57e6b 1-162
+data/harvest-net/raw/0002.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0003.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0004.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0005.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0006.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0007.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/raw/0008.json
+  h_cc1f32aec57e6b 1
+data/harvest-net/section-AI_机器人.json
+  h_cc1f32aec57e6b 1-354
+data/harvest-net/section-下面这些项目已经发币_The_project_that_has_been_TGE_.json
+  h_cc1f32aec57e6b 1-1124
+data/harvest-net/section-下面这些项目是跑路的_A_project_that_has_gone_bankrupt_.json
+  h_cc1f32aec57e6b 1-376
+data/harvest-net/section-主网生态.json
+  h_cc1f32aec57e6b 1-156
+data/harvest-net/section-交易类.json
+  h_cc1f32aec57e6b 1-640
+data/harvest-net/section-候补.json
+  h_cc1f32aec57e6b 1-574
+data/harvest-net/section-博彩.json
+  h_cc1f32aec57e6b 1-68
+data/harvest-net/section-另类测试网.json
+  h_cc1f32aec57e6b 1-266
+data/harvest-net/section-嘴撸.json
+  h_cc1f32aec57e6b 1-90
+data/harvest-net/section-存款.json
+  h_cc1f32aec57e6b 1-244
+data/harvest-net/section-挂机.json
+  h_cc1f32aec57e6b 1-288
+data/harvest-net/section-放弃项目.json
+  h_cc1f32aec57e6b 1-1916
+data/harvest-net/section-未分类.json
+  h_cc1f32aec57e6b 1-1740
+data/harvest-net/section-模板项目.json
+  h_cc1f32aec57e6b 1-288
+data/harvest-net/section-测试网生态.json
+  h_cc1f32aec57e6b 1-332
+data/harvest-net/section-跨链桥.json
+  h_cc1f32aec57e6b 1-90
+data/harvest-net/section-钱包.json
+  h_cc1f32aec57e6b 1-200
+data/harvest-net/section-预测市场.json
+  h_cc1f32aec57e6b 1-288
+data/harvest-net/section-高频任务类.json
+  h_cc1f32aec57e6b 1-552
+data/harvest-net/tge.json
+  h_cc1f32aec57e6b 1-140
+data/harvest/COUNTS.json
+  h_cc1f32aec57e6b 1-235
+data/harvest/SUMMARY.md
+  h_cc1f32aec57e6b 1-45
+data/harvest/airdrop-doit.json
+  h_cc1f32aec57e6b 1-322
+data/harvest/icons-de1-hellotrade.json
+  h_cc1f32aec57e6b 1-54
+data/harvest/section-AI_资源.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-DOGE_监控.json
+  h_cc1f32aec57e6b 1-121
+data/harvest/section-DeFi_协议榜.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-GitHub_库.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-VC_投资方.json
+  h_cc1f32aec57e6b 1-25
+data/harvest/section-Web3_理财.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-X_流量赛道.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-交易赛.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-工具箱.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-币圈市场.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-板块异动.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-流动性池子.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-股票市场.json
+  h_cc1f32aec57e6b 1-369
+data/harvest/section-行情解析.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-钱包用户.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-链上美股.json
+  h_cc1f32aec57e6b 1-5520
+data/harvest/section-预测市场.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/tge-carousel.json
+  h_cc1f32aec57e6b 1-116
+index.html
+  h_cc1f32aec57e6b 15-16,18-21
+lighthouserc.json
+  h_cc1f32aec57e6b 4-6
+package.json
+  h_cc1f32aec57e6b 9-11
+scripts/build-pages.mts
+  h_cc1f32aec57e6b 1-7,11-12
+scripts/snapshot.test.ts
+  h_cc1f32aec57e6b 2-9,11-13,15-30,33-36,39-46,48,50-61,63-66,68-77,79,81-111,113-115
+server/index.ts
+  h_cc1f32aec57e6b 1-3,5-12,14-15,17-20,22-23,25-28,31-48,50,53-68,70-78,80-84,86,88-111,113-115,117-157,160-189
+shared/types.ts
+  h_cc1f32aec57e6b 62-73,87-98,101-102
+src/App.tsx
+  h_cc1f32aec57e6b 1-3,8,12,15-19,21-45,49-52,54-58,60-62,65-128,137-140,142,146-212,219-220
+src/components/AirdropPanel.tsx
+  h_cc1f32aec57e6b 2,10,18,23,66,72,88-90,126,136
+src/components/DashboardHeader.tsx
+  h_cc1f32aec57e6b 13,17,23-27,29,41,51,56-58,61,63-67,76,84-85
+src/components/DemoPanel.tsx
+  h_cc1f32aec57e6b 2-4,11,21-37,44,49-50,69-70,101,107,129,133-136,139,141,143-144,155-159,161-162,168,170,175-176,180,189
+src/components/DetailDialog.tsx
+  h_cc1f32aec57e6b 1-2,5,8-45,51,157-158,169,176,179,199,251-252,263,293
+src/components/FilterDock.tsx
+  h_cc1f32aec57e6b 2,9,13,153
+src/components/KpiStrip.tsx
+  h_cc1f32aec57e6b 38
+src/components/ProjectCard.tsx
+  h_cc1f32aec57e6b 2,4,43,85,162-163,166,170,172,176,237
+src/hooks/useAgentProfile.test.ts
+  h_cc1f32aec57e6b 2,4-10,13-18,21-22
+src/hooks/useAirdropFeed.ts
+  h_cc1f32aec57e6b 3,12,17-19,21-26,28-33,38-39,43,46-49,51-63,65,67
+src/hooks/useAirdropFilters.ts
+  h_cc1f32aec57e6b 2,30,71,143
+src/hooks/useDashboard.ts
+  h_cc1f32aec57e6b 1-10,13-16,18-21,23-29,31-32,34-64
+src/hooks/useWatchlist.ts
+  h_cc1f32aec57e6b 27-28,32,37,40
+src/lib/airdrops.ts
+  h_cc1f32aec57e6b 1-2,4-6,8,19,25,42,48-56,80,88,90,103,106-107,112,115-120,126,128,136,164,167,171-172,176,178-181,183,203-205,207,209,214-243
+src/lib/api.test.ts
+  h_cc1f32aec57e6b 2,4-13
+src/lib/format.ts
+  h_cc1f32aec57e6b 5,13-14,16-17
+src/lib/labels.ts
+  h_cc1f32aec57e6b 25-27,33-35,49-92
+src/main.tsx
+  h_cc1f32aec57e6b 6-10
+src/styles.css
+  h_cc1f32aec57e6b 1528-1529,1539,1542,1545-1546,1550,1553,1558
+tsconfig.json
+  h_cc1f32aec57e6b 17
+vite.config.ts
+  h_cc1f32aec57e6b 6,11,13,18,23,31-32,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1f5c2f6635ef17b935c49f1431d709d8aa9185c9",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
