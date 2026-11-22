@@ -40,7 +40,7 @@ interface CardHeaderProps {
   icon: string;
   chains: string[];
   saved: boolean;
-  onToggleSaved: (name: string) => void;
+  onToggleSaved: (key: string) => void;
   onDetails: (card: Card) => void;
 }
 
@@ -82,7 +82,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           aria-pressed={saved}
           aria-label={`Save ${c.n} to watchlist`}
           title={saved ? 'Remove from watchlist' : 'Save to watchlist'}
-          onClick={() => onToggleSaved(c.n)}
+          onClick={() => onToggleSaved(cardStorageKey(c))}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -162,7 +162,7 @@ interface Props {
   fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (name: string) => void;
+  onToggleSaved: (key: string) => void;
   onDetails: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
@@ -173,7 +173,7 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);
-  const taskKeys = getTaskStorageKeys(c.n, tasks);
+  const taskKeys = getTaskStorageKeys(cardStorageKey(c), tasks);
   const doneCount = taskKeys.filter(k => doneTasks.has(k)).length;
   const showBadges = c.b.length > 0 || Boolean(c.x) || doneCount > 0;
 

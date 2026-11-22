@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { cardStorageKey } from './useWatchlist';
 import type { Card, FitKey, Grade } from '../../shared/types';
 import { parseCost, parseFunding, parseUpdatedDays } from '../lib/format';
 
@@ -27,7 +28,7 @@ function getCardChains(c: Card): string[] {
 function matchesStatus(c: Card, status: StatusFilter, saved: Set<string>): boolean {
   if (status === 'pre') return !c.b.includes('token');
   if (status === 'launched') return c.b.includes('token');
-  if (status === 'saved') return saved.has(c.n);
+  if (status === 'saved') return saved.has(cardStorageKey(c));
   return true;
 }
 
@@ -140,7 +141,7 @@ export function useAirdropFilters(cards: Card[], saved: Set<string>, typeMap: Re
       if (c.b.includes('token')) launched++;
       else pre++;
       if (c.g === 'S') sTier++;
-      if (saved.has(c.n)) savedMatch++;
+      if (saved.has(cardStorageKey(c))) savedMatch++;
     }
     return { total: cards.length, pre, launched, sTier, savedMatch };
   }, [cards, saved]);

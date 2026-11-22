@@ -147,7 +147,7 @@ function DetailDialogBody({
   const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
-  const taskKeys = getTaskStorageKeys(card.n, taskList);
+  const taskKeys = getTaskStorageKeys(cardStorageKey(card), taskList);
   const rows = buildDetailRows(card, chains, fit);
   const renderedBrief = showBrief ? buildBrief(card, profile) : null;
   const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
@@ -169,7 +169,7 @@ function DetailDialogBody({
             type="button"
             className="chip"
             aria-pressed={saved}
-            onClick={() => onToggleSaved(card.n)}
+            onClick={() => onToggleSaved(cardStorageKey(card))}
           >
             <span aria-hidden="true">{saved ? '★' : '☆'}</span> Save
           </button>

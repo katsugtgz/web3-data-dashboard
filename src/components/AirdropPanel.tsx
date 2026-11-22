@@ -17,7 +17,7 @@ interface Props {
   saved: Set<string>;
   doneTasks: Set<string>;
   searchRef: RefObject<HTMLInputElement | null>;
-  onToggleSaved: (name: string) => void;
+  onToggleSaved: (key: string) => void;
   onSelectDetail: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
@@ -91,7 +91,7 @@ export function AirdropPanel({
                 key={`${c.r}-${c.n}`}
                 card={c}
                 fit={FIT}
-                saved={saved.has(c.n)}
+                saved={saved.has(cardStorageKey(c))}
                 doneTasks={doneTasks}
                 onToggleSaved={onToggleSaved}
                 onDetails={onSelectDetail}
