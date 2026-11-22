@@ -1,0 +1,78 @@
+.github/workflows/ingest-heavy.yml
+  h_cc1f32aec57e6b 13-15
+.github/workflows/worker-deploy.yml
+  h_cc1f32aec57e6b 23-27,29-31
+data/snapshot/airdrops.json
+  h_cc1f32aec57e6b 1
+data/snapshot/feed.json
+  h_cc1f32aec57e6b 1
+data/snapshot/markets.json
+  h_cc1f32aec57e6b 1
+data/snapshot/sources.json
+  h_cc1f32aec57e6b 1
+scripts/discover-sources-issue.mts
+  h_cc1f32aec57e6b 71-85,87-88,94,109,113-116
+scripts/ingest-heavy.mts
+  h_cc1f32aec57e6b 53-56,58-65
+scripts/snapshot.mts
+  h_cc1f32aec57e6b 10,36-110,123-125,140-172,175-177,184,197,207,211-212,218,221-222,229,302-308,310-323,336,344-349,363-430,436-441,445,450-452,466,474-479,495-496,500-503,505-530
+scripts/snapshot.test.ts
+  h_cc1f32aec57e6b 1-117
+src/App.tsx
+  h_cc1f32aec57e6b 21,29,143,163
+src/components/DashboardFooter.tsx
+  h_cc1f32aec57e6b 9-10,14,46
+src/components/SourcesHealthPopover.tsx
+  h_cc1f32aec57e6b 8-9,12,21-29,38,53-54,57-59
+src/hooks/useAgentProfile.test.ts
+  h_cc1f32aec57e6b 1-24
+src/hooks/useAgentProfile.ts
+  h_cc1f32aec57e6b 62-75,78
+src/hooks/useCopyBriefController.ts
+  h_cc1f32aec57e6b 137-141
+src/hooks/useFeed.ts
+  h_cc1f32aec57e6b 84-96
+src/hooks/useMarkets.ts
+  h_cc1f32aec57e6b 22,34-41
+src/hooks/useSourcesHealth.ts
+  h_cc1f32aec57e6b 11-12,27,29,35,49
+src/hooks/useWatchlist.ts
+  h_cc1f32aec57e6b 8-18
+src/lib/agentBrief.test.ts
+  h_cc1f32aec57e6b 70-78,128-188
+src/lib/agentBrief.ts
+  h_cc1f32aec57e6b 37-49,107-109,170,222-226
+src/lib/api.test.ts
+  h_cc1f32aec57e6b 1-15
+src/lib/api.ts
+  h_cc1f32aec57e6b 16-26,82-83
+worker/src/normalize/cluster.ts
+  h_cc1f32aec57e6b 268-270,273-282,292-301,367-368,371-380,386-407
+worker/src/normalize/i18n.ts
+  h_cc1f32aec57e6b 118-128
+worker/src/normalize/parse.ts
+  h_cc1f32aec57e6b 31-35,39-40,50-54,59-63,75,88-89,93,137-155,304-306,309
+worker/src/normalize/score.ts
+  h_cc1f32aec57e6b 76-84
+worker/src/normalize/summarize.ts
+  h_cc1f32aec57e6b 36-54,67,83,172-175,179-201,204
+worker/test/discover.test.ts
+  h_cc1f32aec57e6b 85-90
+worker/test/pipeline.test.ts
+  h_cc1f32aec57e6b 5-7,15,19,70-86,207-253,382-549
+worker/test/registry-sync.test.ts
+  h_cc1f32aec57e6b 10-15,21,32-35,40-42,60,207,211-220,222-223
+worker/test/summarize.test.ts
+  h_cc1f32aec57e6b 5,50-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77aebf99a2605f6f8fd8bd29ceddfff7b94553ba",
+  "prompts": {},
+  "humans": {
+    "h_cc1f32aec57e6b": {
+      "author": "Muhammad Naufal Mahdi <053792227@ecampus.ut.ac.id>"
+    }
+  }
+}
