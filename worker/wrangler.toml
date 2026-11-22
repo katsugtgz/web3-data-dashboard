@@ -17,5 +17,5 @@ crons = ["* * * * *", "*/5 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "web3-radar"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "8aab65b6-5de8-4cff-9ea6-14e0e286c0b0"
 migrations_dir = "migrations"
