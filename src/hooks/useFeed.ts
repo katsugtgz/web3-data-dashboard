@@ -83,17 +83,16 @@ export function useFeed(): FeedState {
             setPendingItems(queued ?? []);
             // Nothing displayed (e.g. first load failed) → show the latest list
             // now instead of hiding the whole feed behind the new-drops pill.
-            setItems(prev => {
-              if (prev.length === 0) {
-                knownIdsRef.current = new Set(res.body.items.map(it => it.id));
-                return res.body.items;
-              }
-              const merged = mergeVisibleUpdates(prev, res.body.items);
-              // Rebuild from the merged list: an item that left the top-100
-              // window and returned must be re-queued as new, not treated as known.
-              knownIdsRef.current = new Set(merged.map(it => it.id));
-              return merged;
-            });
+            // Compute-then-set from the ref mirror keeps the updater pure
+            // (knownIds rebuilt outside it); a fetch callback only runs after
+            // the previous commit, so itemsRef is the displayed list.
+            const displayed = itemsRef.current;
+            const next =
+              displayed.length === 0 ? res.body.items : mergeVisibleUpdates(displayed, res.body.items);
+            // Rebuild from the merged list: an item that left the top-100
+            // window and returned must be re-queued as new, not treated as known.
+            knownIdsRef.current = new Set(next.map(it => it.id));
+            setItems(next);
           }
         }
         setFailed(false);

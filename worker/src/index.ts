@@ -219,22 +219,38 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
     isNonLatinSource: boolean;
   }[] = [];
   const claimed = new Set<string>();
-  for (const row of backlog.results ?? []) {
-    claimed.add(row.id);
-    const texts = await env.DB
-      .prepare('SELECT text FROM posts WHERE cluster_id = ?1 ORDER BY posted_at DESC LIMIT 3')
-      .bind(row.id)
-      .all<{ text: string }>();
-    jobs.push({
-      clusterId: row.id,
-      project: row.project,
-      riskLevel: row.risk_level,
-      rawTexts: (texts.results ?? []).map(t => t.text),
-      // Eligibility was already decided by the summary_source = 'rule' filter;
-      // these flags only open the quota gate inside summarizeClusterWithAi.
-      isNewCluster: true,
-      isNonLatinSource: true,
-    });
+  if (backlog.results?.length) {
+    // One windowed fetch instead of one query per backlog cluster (N+1):
+    // results partitioned in JS preserves the 3-newest-per-cluster cap while
+    // issuing a single D1 round trip.
+    const placeholders = backlog.results.map((_, i) => `?${i + 1}`).join(', ');
+    const texts = await env.DB.prepare(
+      `SELECT cluster_id, text,
+              ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY posted_at DESC) AS rn
+       FROM posts WHERE cluster_id IN (${placeholders})`,
+    )
+      .bind(...backlog.results.map(r => r.id))
+      .all<{ cluster_id: string; text: string; rn: number }>();
+    const textsByCluster = new Map<string, string[]>();
+    for (const t of texts.results ?? []) {
+      if (t.rn > 3) continue;
+      let arr = textsByCluster.get(t.cluster_id);
+      if (!arr) textsByCluster.set(t.cluster_id, (arr = []));
+      arr.push(t.text);
+    }
+    for (const row of backlog.results) {
+      claimed.add(row.id);
+      jobs.push({
+        clusterId: row.id,
+        project: row.project,
+        riskLevel: row.risk_level,
+        rawTexts: (textsByCluster.get(row.id) ?? []).slice(0, 3),
+        // Eligibility was already decided by the summary_source = 'rule' filter;
+        // these flags only open the quota gate inside summarizeClusterWithAi.
+        isNewCluster: true,
+        isNonLatinSource: true,
+      });
+    }
   }
   for (const [clusterId, group] of byCluster) {
     if (claimed.has(clusterId)) continue;

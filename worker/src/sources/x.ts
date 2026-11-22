@@ -294,12 +294,16 @@ export async function pollXBatch(
     ({ projectDomains, platformDomains } = await loadKnownDomains(db));
   } catch (err) {
     console.error('x-poll-error:loadKnownDomains', err);
-    for (const src of sources) {
-      await db
-        .prepare(`UPDATE sources SET last_polled_at = ?2, status = 'degraded' WHERE id = ?1`)
-        .bind(src.id, nowMs)
-        .run();
-    }
+    // Mark the whole batch degraded in parallel (no await-in-loop: each write
+    // is independent, and the cron must not stall on N round trips).
+    await Promise.all(
+      sources.map(src =>
+        db
+          .prepare(`UPDATE sources SET last_polled_at = ?2, status = 'degraded' WHERE id = ?1`)
+          .bind(src.id, nowMs)
+          .run(),
+      ),
+    );
     return { polled: sources.length, insertedPosts: 0, degraded: sources.length, ingestedResults: [] };
   }
   const surfIndex = buildSurfIndex(surfFeed);
