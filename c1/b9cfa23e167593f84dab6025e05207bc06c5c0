@@ -1,19 +1,19 @@
 .github/workflows/ci.yml
-  h_cc1f32aec57e6b 18,28-34,44-53
+  h_cc1f32aec57e6b 18,28-34,44-53,44-47,48-49,51-52,53
 .github/workflows/ingest-heavy.yml
-  h_cc1f32aec57e6b 1-34
+  h_cc1f32aec57e6b 1-34,1-12,14-27,28-29,30-32,33-34
 .github/workflows/pages.yml
   h_cc1f32aec57e6b 30
 .github/workflows/worker-deploy.yml
-  h_cc1f32aec57e6b 1-39
+  h_cc1f32aec57e6b 1-39,1-15,17-19,20,21-33,35-39
 README.md
-  h_cc1f32aec57e6b 1,3,5,7,9-14,16,18-26,28,33-38,40-41,44,46-52,54,56-59
+  h_cc1f32aec57e6b 1,3,5,7,9-14,16,18-26,28,33-38,33-36,38,40-41,42,44,45,46-52,46-47,49-52,54,56-59,56-58
 bun.lock
   h_cc1f32aec57e6b 20-27,30-49,56-167,172-177,212-215,222-223,228-231,274-279,282-291,294-295,298-317,320-325,328-345,370-379,382-389,404-407,410-411,414-415,420-421,424-425,428-447,449-452
 data/snapshot/markets.json
   h_cc1f32aec57e6b 1
 index.html
-  h_cc1f32aec57e6b 15-16,18-20
+  h_cc1f32aec57e6b 15-16,18-20,18,20
 lighthouserc.json
   h_cc1f32aec57e6b 4
 package.json
@@ -23,43 +23,43 @@ public/icon.svg
 scripts/build-pages.mts
   h_cc1f32aec57e6b 1-2,6-12
 scripts/check-no-cjk.sh
-  h_cc1f32aec57e6b 1-20
+  h_cc1f32aec57e6b 1-20,1-3,4,6-20
 scripts/ingest-heavy.mts
-  h_cc1f32aec57e6b 1-62
+  h_cc1f32aec57e6b 1-62,1-34,35-46,47,49-50,51,52-62
 scripts/snapshot.mts
-  h_cc1f32aec57e6b 1-78
+  h_cc1f32aec57e6b 1-78,3,4-11,12,13-16,17-27,30-35,36-39,41,44-45,47-49,50,51,52-55,56-58,60,63,67-68,70-71
 shared/constants.ts
-  h_cc1f32aec57e6b 1-75
+  h_cc1f32aec57e6b 1-75,1-42,43-58,59-75
 shared/types.ts
-  h_cc1f32aec57e6b 75-92,95,97-115
+  h_cc1f32aec57e6b 75-92,75-78,79-92,95,97-115,116
 src/App.tsx
-  h_cc1f32aec57e6b 2-3,9,13,16-18,22-23,27-29,31-32,45-46,49-51,63-65,69,86,98-103,114-116,118,125,148-169,172-187,193-217,219,229
+  h_cc1f32aec57e6b 1,2-3,3,4,9,11,13,16-18,19-20,22-23,27-29,31-32,33,35-37,38,40-44,45-46,47-48,49-51,52,53-62,63-65,66-68,69,70,71-85,86,87-97,98-103,98,100,112-113,114-116,118,122-124,125,126-147,148-169,170-171,172-187,188-192,193-217,218,219,220-222,229,230
 src/components/AirdropPanel.tsx
-  h_cc1f32aec57e6b 2-3,65,87,134
+  h_cc1f32aec57e6b 2-3,18,65,71,87,88,124,134
 src/components/DashboardHeader.tsx
-  h_cc1f32aec57e6b 8,14-24,28,40,48,53,63,70,72,81,89-90
+  h_cc1f32aec57e6b 8,14-24,28,34-38,40,48,53,63,70,72,81,89-90
 src/components/DetailDialog.tsx
-  h_cc1f32aec57e6b 2,45,151,168,243
+  h_cc1f32aec57e6b 1,2,5,8,9-39,45,151,168,171,191,243
 src/components/FilterDock.tsx
-  h_cc1f32aec57e6b 2,9,13
+  h_cc1f32aec57e6b 2,9,13,153
 src/components/MarketPanel.tsx
-  h_cc1f32aec57e6b 2-3,10-36,46-52,59,65,84-92,104-105,125,131,153,157-158,161,165-166,179-181,183-191,197,199-201,206-208,212,221
+  h_cc1f32aec57e6b 2-3,10-36,46-52,59,64,65,66,84-92,104-105,125,131,153,157-158,161,163,165-166,177-178,179-181,183-191,197,199-201,206-208,212,221
 src/components/ProjectCard.tsx
-  h_cc1f32aec57e6b 2,162,169,171
+  h_cc1f32aec57e6b 2,4,43,85,162,165,169,171,175,236
 src/hooks/useAirdropFeed.ts
-  h_cc1f32aec57e6b 3-5,11,15,21,32-33,36-40,74
+  h_cc1f32aec57e6b 3-5,4-5,11,15,20,21,22-23,25-30,32-33,33,34-35,36-40,37-39,40,45-46,50,53-56,58-70,72,74
 src/hooks/useAirdropFilters.ts
-  h_cc1f32aec57e6b 2,71
+  h_cc1f32aec57e6b 2,30,71,143
 src/hooks/useMarkets.ts
-  h_cc1f32aec57e6b 1-3,5,7-11,14-21,23-25,27-46,48-59,61-66,68,70,72
+  h_cc1f32aec57e6b 1-3,4,5,6,7-11,12-13,14-21,14-17,19,22,23-25,27-46,29,31,35,36-42,45-46,47,48-59,49,50,55,61-66,68,69,70,71,72,73
 src/lib/api.ts
-  h_cc1f32aec57e6b 1-74
+  h_cc1f32aec57e6b 1-74,1-3,5-9,10-14,16-18,31,33,36-38,39-40,41-46,47,48,57-62,67,73-74
 src/lib/format.ts
   h_cc1f32aec57e6b 4-5,14,84-95
 src/lib/labels.ts
   h_cc1f32aec57e6b 25,31-33
 src/styles.css
-  h_cc1f32aec57e6b 1392-1407
+  h_cc1f32aec57e6b 1392-1407,1544-1545,1555,1558,1559-1560,1561-1562,1563-1564,1566,1569,1574
 tsconfig.json
   h_cc1f32aec57e6b 17
 vite.config.ts
@@ -75,29 +75,107 @@ worker/package.json
 worker/schema.sql
   h_cc1f32aec57e6b 1-8
 worker/src/index.ts
-  h_cc1f32aec57e6b 1-26,29-42,45-73,77-130,134,136-140,142-146,148-160,162-166,170-171,173-179,182-189,192-233
+  h_cc1f32aec57e6b 1-26,1,3,4-9,10,11-17,18,19-21,22-26,27-28,29-42,29-39,40-42,43-44,45-73,45-66,67-73,74-76,77-130,77,78-90,92-95,96-103,112-130,131-133,134,135,136-140,137,140,141,142-146,142-145,147,148-160,161,162-166,167-169,170-171,172,173-179,173-174,176-179,180-181,182-189,182-185,187-189,190-191,192-233,192-206,208-230,231-233
 worker/src/lib/db.ts
-  h_cc1f32aec57e6b 1-80
+  h_cc1f32aec57e6b 1-80,1-26,28-34,44-45,46-48,50,52-69,71-80
 worker/src/lib/format.ts
-  h_cc1f32aec57e6b 1-39
+  h_cc1f32aec57e6b 1-39,1-5,7-11,13-19,21-34,36-39
 worker/src/lib/hash.ts
   h_cc1f32aec57e6b 1-5
 worker/src/normalize/i18n.ts
-  h_cc1f32aec57e6b 1-102
+  h_cc1f32aec57e6b 1-102,1-4,5-86,89-96,98,99-100,101-102
 worker/src/sources/markets.ts
-  h_cc1f32aec57e6b 1-412
+  h_cc1f32aec57e6b 1-412,1-78,79-85,86-141,142,143-157,158-163,164-175,181-187,188-189,190,191-195,197-232,233-249,265-269,271-297,298-303,304-320,321-340,341,343-348,349-367,368-389,390,393-397,398-412
 worker/src/sources/surf.ts
-  h_cc1f32aec57e6b 1-10,12,14-20,31,37,54,83-84,92,94,104-109,113-114,117-119,124,127-130,136,138,146,172-182,185,188,192-193,197,199,201,221-223,225,227,232-235,237-258
+  h_cc1f32aec57e6b 1-10,12,14-20,31,37,54,83-84,83,92,94,104-109,113-114,117-119,124,127-130,136,138,146,172-182,172-179,181,182,185,188,192-193,197,199,201,221-223,222-223,225,227,232-235,237-258
 worker/test/fixtures/surf-airdrops.json
   h_cc1f32aec57e6b 1
 worker/test/markets.test.ts
-  h_cc1f32aec57e6b 1-43
+  h_cc1f32aec57e6b 1-43,1-3,5-20,22-25,27-43
 worker/test/surf.test.ts
-  h_cc1f32aec57e6b 1-40
+  h_cc1f32aec57e6b 1-40,1-2,4,5-8,9-15,17,18-33,34,36-40
 worker/tsconfig.json
-  h_cc1f32aec57e6b 1-16
+  h_cc1f32aec57e6b 1-16,1-5,6-12,14,16
 worker/wrangler.toml
-  h_cc1f32aec57e6b 1-12
+  h_cc1f32aec57e6b 1-12,1-4,5-12
+data/harvest/section-交易赛.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-GitHub_库.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-高频任务类.json
+  h_cc1f32aec57e6b 1-552
+data/harvest/section-链上美股.json
+  h_cc1f32aec57e6b 1-5520
+data/harvest/section-股票市场.json
+  h_cc1f32aec57e6b 1-369
+data/harvest-net/section-钱包.json
+  h_cc1f32aec57e6b 1-200
+data/harvest-net/section-放弃项目.json
+  h_cc1f32aec57e6b 1-1916
+data/harvest/section-工具箱.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-主网生态.json
+  h_cc1f32aec57e6b 1-156
+data/harvest-net/section-嘴撸.json
+  h_cc1f32aec57e6b 1-90
+data/harvest/section-流动性池子.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-行情解析.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-测试网生态.json
+  h_cc1f32aec57e6b 1-332
+data/harvest-net/section-交易类.json
+  h_cc1f32aec57e6b 1-640
+data/harvest-net/section-另类测试网.json
+  h_cc1f32aec57e6b 1-266
+data/harvest-net/section-跨链桥.json
+  h_cc1f32aec57e6b 1-90
+data/harvest-net/section-挂机.json
+  h_cc1f32aec57e6b 1-288
+data/harvest/section-预测市场.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-预测市场.json
+  h_cc1f32aec57e6b 1-288
+data/harvest-net/section-模板项目.json
+  h_cc1f32aec57e6b 1-288
+src/components/KpiStrip.tsx
+  h_cc1f32aec57e6b 38
+data/harvest-net/section-候补.json
+  h_cc1f32aec57e6b 1-574
+data/harvest/section-DeFi_协议榜.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-AI_机器人.json
+  h_cc1f32aec57e6b 1-354
+data/harvest/section-AI_资源.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-Web3_理财.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-DOGE_监控.json
+  h_cc1f32aec57e6b 1-121
+data/harvest/section-币圈市场.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-下面这些项目是跑路的_A_project_that_has_gone_bankrupt_.json
+  h_cc1f32aec57e6b 1-376
+data/harvest/section-板块异动.json
+  h_cc1f32aec57e6b 1-9
+data/harvest/section-X_流量赛道.json
+  h_cc1f32aec57e6b 1-9
+data/harvest-net/section-未分类.json
+  h_cc1f32aec57e6b 1-1740
+data/harvest/section-VC_投资方.json
+  h_cc1f32aec57e6b 1-25
+data/harvest-net/section-下面这些项目已经发币_The_project_that_has_been_TGE_.json
+  h_cc1f32aec57e6b 1-1124
+data/harvest-net/section-存款.json
+  h_cc1f32aec57e6b 1-244
+src/main.tsx
+  h_cc1f32aec57e6b 6-10
+src/hooks/useWatchlist.ts
+  h_cc1f32aec57e6b 27-28,32,37,40
+data/harvest-net/section-博彩.json
+  h_cc1f32aec57e6b 1-68
+data/harvest/section-钱包用户.json
+  h_cc1f32aec57e6b 1-9
 ---
 {
   "schema_version": "authorship/3.0.0",
