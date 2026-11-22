@@ -15,16 +15,27 @@ concurrency:
 
 jobs:
   check:
-    name: Typecheck & Build
+    name: Typecheck, Test, CJK & Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.5
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq ripgrep
       - run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
+      - name: Unit tests
+        run: bun test
+      - name: Check zero CJK in code
+        run: bash scripts/check-no-cjk.sh
+      - name: Worker deploy dry-run
+        working-directory: worker
+        run: npx wrangler deploy --dry-run
       - name: Build local bundle
         run: bun run build
         env:
@@ -34,5 +45,25 @@ jobs:
         env:
           GITHUB_ACTIONS: 'true'
           VITE_STATIC: '1'
-      - name: Verify Pages snapshot artifact
-        run: jq -e 'type == "object" and (.CARDS | type == "array" and length > 0)' dist/data/dashboard.json > /dev/null
+      - name: Verify Pages snapshot artifacts
+        run: |
+          jq -e 'type == "object" and (.cards | type == "array" and length > 0)' dist/data/airdrops.json > /dev/null
+          jq -e 'type == "object" and (.sections | type == "array" and length >= 6)' dist/data/markets.json > /dev/null
+          jq -e 'type == "object" and (.items | type == "array" and length > 0)' dist/data/feed.json > /dev/null
+          jq -e 'type == "array" and length > 0' dist/data/sources.json > /dev/null
+      - name: Check zero CJK in dist
+        run: |
+          # Full CJK coverage (Han+Hiragana+Katakana+Hangul), and `if rg …`
+          # treats ANY nonzero exit as "no match" — a ripgrep failure passed
+          # silently. Fail on anything but 0/1, matching check-no-cjk.sh.
+          set +e
+          rg --pcre2 '\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{FF01}-\x{FF9F}]' dist/
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
+            echo "ERROR: CJK found in dist/"
+            exit 1
+          elif [ "$STATUS" -ne 1 ]; then
+            echo "ERROR: ripgrep failed with exit code $STATUS"
+            exit "$STATUS"
+          fi

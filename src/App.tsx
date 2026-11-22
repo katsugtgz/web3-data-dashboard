@@ -1,131 +1,81 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { Card, Dashboard } from '../shared/types';
-import { AirdropPanel } from './components/AirdropPanel';
+import { lazy, Suspense, useCallback, useRef, useState } from 'react';
+import { FIT, TYPE_MAP } from '../shared/constants';
+import type { Card } from '../shared/types';
+import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
+import { DashboardFooter } from './components/DashboardFooter';
 import { DashboardHeader } from './components/DashboardHeader';
+import { MainPanels, TabNav } from './components/DashboardPanels';
+import { Toast } from './components/Toast';
+import { useAgentProfile } from './hooks/useAgentProfile';
 import { useAirdropFeed } from './hooks/useAirdropFeed';
 import { useAirdropFilters } from './hooks/useAirdropFilters';
-import { useDashboard } from './hooks/useDashboard';
+import { useCopyBriefController } from './hooks/useCopyBriefController';
+import { useDashboardDerived } from './hooks/useDashboardDerived';
+import { useDashboardTabs } from './hooks/useDashboardTabs';
+import { useDropsFilters } from './hooks/useDropsFilters';
+import { useFeed } from './hooks/useFeed';
+import { useMarkets } from './hooks/useMarkets';
+import { useSourcesHealth } from './hooks/useSourcesHealth';
 import { useTheme } from './hooks/useTheme';
-import { useWatchlist } from './hooks/useWatchlist';
+import { cardStorageKey, useWatchlist } from './hooks/useWatchlist';
 
-const DemoPanel = lazy(() => import('./components/DemoPanel').then(m => ({ default: m.DemoPanel })));
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
 
-function findHashTab(tabs: Dashboard['TABS']): string | null {
-  const raw = window.location.hash.replace(/^#/, '');
-  return tabs.some(t => t.id === raw) ? raw : null;
-}
-
 export default function App() {
-  const { data, error } = useDashboard();
-  if (error) {
-    return (
-      <div className="container" style={{ paddingTop: 48 }}>
-        <p className="empty" role="alert">
-          Failed to load dashboard: {error}
-        </p>
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="container" style={{ paddingTop: 48 }}>
-        <div className="loading-shell" role="status" aria-live="polite">
-          <div className="loading-bar" />
-          <p className="note">Loading Web3 Data Dashboard…</p>
-        </div>
-      </div>
-    );
-  }
-  return <DashboardView data={data} />;
-}
-
-function DashboardView({ data }: { data: Dashboard }) {
-  const { feed, loading, failed, refresh } = useAirdropFeed();
+  const drops = useFeed();
+  const airdrops = useAirdropFeed();
+  const { markets, loading: marketsLoading, failed: marketsFailed, refresh: refreshMarkets } = useMarkets();
+  const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
+  const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
 
-  const cards = feed?.cards ?? data.CARDS;
-  const tgeItems = feed ? feed.tge : data.TGE;
-  const isLive = feed !== null;
-  const filters = useAirdropFilters(cards, saved, data.TYPE_MAP);
-
-  const [tab, setTab] = useState<string>(() => findHashTab(data.TABS) ?? data.TABS[0].id);
-  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(
-    () => new Set([findHashTab(data.TABS) ?? data.TABS[0].id]),
-  );
   const [detail, setDetail] = useState<Card | null>(null);
 
-  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const searchRef = useRef<HTMLInputElement>(null);
-  const tabbarRef = useRef<HTMLDivElement>(null);
+  // Entire copy-agent-brief flow (region-scoped outcome reporting, first-copy
+  // profile gate, risk revalidation vs. the live feed) lives in this hook.
+  const copyFlow = useCopyBriefController({
+    hasConfigured,
+    profile,
+    saveProfile,
+    getVisibleItems: drops.getVisibleItems,
+  });
+  const { handleCopyBrief, copyStatus, toast, dismissToast } = copyFlow;
+
+  const dropsSearchRef = useRef<HTMLInputElement>(null);
+  const airdropSearchRef = useRef<HTMLInputElement>(null);
+
+  const { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey } = useDashboardTabs({
+    searchRefs: { drops: dropsSearchRef, airdrops: airdropSearchRef },
+    isModalOpen: () => Boolean(detail) || copyFlow.profileOpen,
+  });
+
+  const cards = airdrops.feed?.cards ?? [];
+  const tgeItems = airdrops.feed?.tge ?? [];
+  const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
+  const dropsFilters = useDropsFilters(drops.items);
+
   const mainRef = useRef<HTMLElement>(null);
 
-  const markVisited = useCallback((nextId: string) => {
-    setVisitedTabs(prev => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
-  }, []);
+  const handleRefresh = useCallback(() => {
+    drops.refresh();
+    airdrops.refresh();
+    refreshMarkets();
+    refreshSources();
+  }, [drops, airdrops, refreshMarkets, refreshSources]);
 
-  const selectTab = useCallback(
-    (nextId: string, scrollPanel = true) => {
-      setTab(nextId);
-      markVisited(nextId);
-      if (window.location.hash !== `#${nextId}`) {
-        window.history.replaceState(null, '', `#${nextId}`);
-      }
-      tabRefs.current[nextId]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      if (scrollPanel && mainRef.current && tabbarRef.current) {
-        const mainTop = mainRef.current.getBoundingClientRect().top + window.scrollY;
-        const barHeight = tabbarRef.current.offsetHeight;
-        if (window.scrollY > mainTop - barHeight) {
-          window.scrollTo({ top: Math.max(0, mainTop - barHeight - 8), behavior: 'smooth' });
-        }
-      }
-    },
-    [markVisited],
-  );
-
-  useEffect(() => {
-    const onHash = () => {
-      const next = findHashTab(data.TABS);
-      if (next) {
-        setTab(next);
-        markVisited(next);
-      }
-    };
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
-  }, [data.TABS, markVisited]);
-
-  // Global `/` shortcut to jump to search on the Airdrops tab
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || detail || tab !== 'airdrops') return;
-      const el = document.activeElement;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
-      if (searchRef.current) {
-        e.preventDefault();
-        searchRef.current.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [tab, detail]);
-
-  const onTabKey = (e: KeyboardEvent) => {
-    const ids = data.TABS.map(t => t.id);
-    let i = ids.indexOf(tab);
-    if (e.key === 'ArrowRight') i = (i + 1) % ids.length;
-    else if (e.key === 'ArrowLeft') i = (i - 1 + ids.length) % ids.length;
-    else if (e.key === 'Home') i = 0;
-    else if (e.key === 'End') i = ids.length - 1;
-    else return;
-    e.preventDefault();
-    selectTab(ids[i]);
-    tabRefs.current[ids[i]]?.focus();
-  };
-
-  const mountedDemos = data.DEMO.filter(d => visitedTabs.has(d.id));
+  const { xUnavailable, mountedMarkets, totalCount, headerFetchedAt } = useDashboardDerived({
+    sources,
+    marketSections: markets?.sections ?? null,
+    visitedTabs,
+    tab,
+    dropsCount: drops.items.length,
+    dropsGeneratedAt: drops.generatedAt,
+    airdropsFetchedAt: airdrops.feed?.fetchedAt ?? null,
+    cardsCount: cards.length,
+  });
+  const headerFeed = tab === 'drops' ? drops : airdrops;
 
   return (
     <>
@@ -134,99 +84,95 @@ function DashboardView({ data }: { data: Dashboard }) {
       </a>
 
       <DashboardHeader
-        cardCount={cards.length}
-        fetchedAt={feed?.fetchedAt ?? null}
-        loading={loading}
-        failed={failed}
+        cardCount={totalCount}
+        fetchedAt={headerFetchedAt}
+        loading={drops.loading || airdrops.loading || marketsLoading}
+        failed={headerFeed.failed}
+        isLiveApi={headerFeed.isLiveApi}
         resolvedTheme={theme.resolved}
-        onRefresh={refresh}
+        onRefresh={handleRefresh}
+        onOpenProfile={copyFlow.openProfile}
         onToggleTheme={theme.toggle}
       />
 
-      <div className="tabbar" ref={tabbarRef}>
-        <nav className="container" aria-label="Dashboard sections">
-          <div role="tablist" className="tabstrip" onKeyDown={onTabKey}>
-            {data.TABS.map(t => (
-              <button
-                key={t.id}
-                type="button"
-                id={`tab-${t.id}`}
-                role="tab"
-                className="tab"
-                aria-selected={t.id === tab}
-                tabIndex={t.id === tab ? 0 : -1}
-                ref={el => {
-                  tabRefs.current[t.id] = el;
-                }}
-                onClick={() => selectTab(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </nav>
-      </div>
+      <TabNav
+        tab={tab}
+        tabRefs={tabRefs}
+        tabbarRef={tabbarRef}
+        onSelectTab={selectTab}
+        onTabKey={onTabKey}
+      />
 
-      <main id="main" ref={mainRef} className="container" tabIndex={-1}>
-        <div hidden={tab !== 'airdrops'}>
-          <AirdropPanel
-            data={data}
-            filters={filters}
-            cardCount={cards.length}
-            tgeItems={tgeItems}
-            isLive={isLive}
-            saved={saved}
-            doneTasks={doneTasks}
-            searchRef={searchRef}
-            onToggleSaved={toggleSaved}
-            onSelectDetail={setDetail}
-          />
-        </div>
+      <MainPanels
+        tab={tab}
+        visitedTabs={visitedTabs}
+        mainRef={mainRef}
+        dropsProps={{
+          filters: dropsFilters,
+          totalCount: drops.items.length,
+          pendingCount: drops.pendingCount,
+          generatedAt: drops.generatedAt,
+          xUnavailable,
+          loading: drops.loading,
+          failed: drops.failed,
+          searchRef: dropsSearchRef,
+          onApplyPending: drops.applyPending,
+          onCopyBrief: handleCopyBrief,
+        }}
+        airdropsProps={{
+          filters: airdropFilters,
+          cardCount: cards.length,
+          tgeItems,
+          hasFeed: airdrops.feed !== null,
+          loading: airdrops.loading,
+          failed: airdrops.failed,
+          isLive: airdrops.isLiveApi,
+          saved,
+          doneTasks,
+          searchRef: airdropSearchRef,
+          onToggleSaved: toggleSaved,
+          onSelectDetail: setDetail,
+          onCopyBrief: (card: Card) => handleCopyBrief(card, 'page'),
+        }}
+        mountedMarkets={mountedMarkets}
+        marketsLoading={marketsLoading}
+        marketsFailed={marketsFailed}
+        sectors={markets?.sectors}
+      />
 
-        {mountedDemos.map(d => {
-          const label = data.TABS.find(t => t.id === d.id)?.label ?? d.id;
-          return (
-            <div key={d.id} hidden={tab !== d.id}>
-              <ChunkErrorBoundary label={label}>
-                <Suspense fallback={<p className="note" role="status">Loading {label}…</p>}>
-                  <DemoPanel section={d} label={label} />
-                </Suspense>
-              </ChunkErrorBoundary>
-            </div>
-          );
-        })}
-      </main>
+      <DashboardFooter preCount={airdropFilters.counts.pre} dropsCount={drops.items.length} sources={sources} sourcesLoading={sourcesLoading} sourcesIsLiveApi={sourcesIsLiveApi} sourcesFailed={sourcesFailed} />
 
-      <footer>
-        <div className="container footer-inner">
-          <p>
-            Data from CryptoRank · <span className="mono">{filters.counts.pre}</span> pre-token projects tracked ·
-            Original dashboard by{' '}
-            <a href="https://x.com/ASSO7878/" target="_blank" rel="noopener noreferrer">
-              @ASSO7878
-              <span className="sr"> on X (opens in a new tab)</span>
-            </a>
-            . Snapshot sections are static reference data — not financial advice.
-          </p>
-        </div>
-      </footer>
+
+      <AgentProfileDialog
+        open={copyFlow.profileOpen}
+        profile={profile}
+        onSave={copyFlow.handleSaveProfile}
+        copyStatus={copyStatus?.target === 'profile' ? copyStatus : null}
+        pendingCopyName={copyFlow.pendingCopyName}
+        onCopyPending={copyFlow.copyPendingNow}
+        onClose={copyFlow.closeProfile}
+      />
 
       {detail && (
         <ChunkErrorBoundary label="project details">
           <Suspense fallback={null}>
             <DetailDialog
               card={detail}
-              fit={data.FIT}
-              icons={data.IMGS}
-              saved={saved.has(detail.n)}
+              fit={FIT}
+              profile={profile}
+              saved={saved.has(cardStorageKey(detail))}
               doneTasks={doneTasks}
               onToggleSaved={toggleSaved}
               onToggleTask={toggleTaskDone}
+              copyStatus={copyStatus?.target === 'detail' ? copyStatus : null}
+              onCopyBrief={(card: Card) => handleCopyBrief(card, 'detail')}
               onClose={() => setDetail(null)}
             />
           </Suspense>
         </ChunkErrorBoundary>
       )}
+
+      <Toast toast={toast} onDismiss={dismissToast} />
     </>
   );
 }

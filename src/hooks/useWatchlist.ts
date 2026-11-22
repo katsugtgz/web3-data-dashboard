@@ -5,6 +5,17 @@ import { parseCost, parseMinutes } from '../lib/format';
 const SAVED_KEY = 'icq:saved-projects';
 const TASKS_KEY = 'icq:done-tasks';
 
+/**
+ * Watchlist/done-task entries key on the stable upstream project id
+ * (`card.id`), falling back to the display name — pre-id storage was
+ * name-keyed, so the fallback keeps old entries readable with no migration
+ * shim. ponytail: name fallback still collides for CJK-stripped duplicates;
+ * drop it once every surf payload carries project_id.
+ */
+export function cardStorageKey(card: Pick<Card, 'id' | 'n'>): string {
+  return card.id ?? card.n;
+}
+
 function readSet(key: string): Set<string> {
   try {
     const raw = localStorage.getItem(key);
@@ -24,20 +35,20 @@ function writeSet(key: string, values: Set<string>): void {
   }
 }
 
-export function taskStorageKey(projectName: string, taskTitle: string, taskType = '', occurrence = 0): string {
-  return JSON.stringify([projectName, taskTitle, taskType, occurrence]);
+export function taskStorageKey(projectKey: string, taskTitle: string, taskType = '', occurrence = 0): string {
+  return JSON.stringify([projectKey, taskTitle, taskType, occurrence]);
 }
 
 export function getTaskStorageKeys(
-  projectName: string,
+  projectKey: string,
   tasks: readonly { title: string; type: string }[],
 ): string[] {
   const seen = new Map<string, number>();
   return tasks.map(t => {
-    const base = JSON.stringify([projectName, t.title, t.type]);
+    const base = JSON.stringify([projectKey, t.title, t.type]);
     const occ = seen.get(base) ?? 0;
     seen.set(base, occ + 1);
-    return taskStorageKey(projectName, t.title, t.type, occ);
+    return taskStorageKey(projectKey, t.title, t.type, occ);
   });
 }
 

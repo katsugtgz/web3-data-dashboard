@@ -22,17 +22,15 @@ export interface TgeStatusInfo {
 export const TGE_STATUS_MAP: Record<string, TgeStatusInfo> = {
   REWARD_AVAILABLE: { label: 'Claimable', kind: 'claimable', claimable: true },
   VERIFICATION: { label: 'Eligibility check', kind: 'verify', claimable: false },
-  '可领取 TGE': { label: 'Claimable TGE', kind: 'claimable', claimable: true },
-  可领取: { label: 'Claimable', kind: 'claimable', claimable: true },
-  资格核验: { label: 'Eligibility check', kind: 'verify', claimable: false },
+  'Claimable TGE': { label: 'Claimable TGE', kind: 'claimable', claimable: true },
   Claimable: { label: 'Claimable', kind: 'claimable', claimable: true },
   'Eligibility check': { label: 'Eligibility check', kind: 'verify', claimable: false },
 };
 
 const NEGATED_CLAIM_RE =
-  /\b(?:unclaimable|non[- ]?claimable|not|never|cannot|closed|ended|unavailable|disabled|pending|upcoming|soon|no\s+(?:longer|claim))\b|\b\w+n't\b|不可|无法|暂不|尚未|未开放|已结束/i;
-const POSITIVE_CLAIM_RE = /\bclaim(?:able)?\b|可领取/i;
-const VERIFY_RE = /\b(?:verif(?:y|ication)|eligib(?:le|ility)|check)\b|核验|资格/i;
+  /\b(?:unclaimable|non[- ]?claimable|not|never|cannot|closed|ended|unavailable|disabled|pending|upcoming|soon|no\s+(?:longer|claim))\b|\b\w+n't\b/i;
+const POSITIVE_CLAIM_RE = /\bclaim(?:able)?\b/i;
+const VERIFY_RE = /\b(?:verif(?:y|ication)|eligib(?:le|ility)|check)\b/i;
 
 export function formatTgeStatus(raw: string): TgeStatusInfo {
   const trimmed = raw.trim();
@@ -45,48 +43,4 @@ export function formatTgeStatus(raw: string): TgeStatusInfo {
     return { label: trimmed, kind: 'verify', claimable: false };
   }
   return { label: trimmed, kind: 'other', claimable: false };
-}
-
-export const DEMO_COL_LABELS: Record<string, string> = {
-  // Stocks table (Chinese headers)
-  '代码 / 名称': 'Ticker / Name',
-  现价: 'Price',
-  市值: 'Market Cap',
-  振幅: 'Amplitude',
-  '52周区间位置': '52W Range',
-  成交量: 'Volume',
-  主力净流入: 'Net Inflow',
-  'AI 热度': 'AI Heat',
-  '日线连阳/连阴': 'Streak',
-  '24H 涨跌↓': '24h Change',
-  // DOGE monitor table (Chinese headers)
-  时间: 'Time',
-  '输入 / 输出': 'Inputs / Outputs',
-  '金额 (DOGE)': 'Amount (DOGE)',
-  手续费: 'Fee',
-  // Predictions / sheet schema (snake_case headers)
-  section: 'Section',
-  name: 'Project',
-  raise: 'Raise',
-  investors: 'Investors',
-  ecosystem: 'Ecosystem',
-  potential: 'Potential',
-  date: 'Date',
-  stars: 'Stars',
-  heat_score: 'Heat',
-  watch_level: 'Watch',
-  description: 'Summary',
-  status: 'Status',
-  interaction_steps: 'Steps',
-  reward_type: 'Reward',
-  project_status: 'Stage',
-  multi_account: 'Accounts',
-  cost: 'Cost',
-  link: 'Link',
-  invite_code: 'Invite',
-  tge_quarter: 'TGE',
-};
-
-export function translateColumn(col: string): string {
-  return Object.hasOwn(DEMO_COL_LABELS, col) ? DEMO_COL_LABELS[col] : col;
 }

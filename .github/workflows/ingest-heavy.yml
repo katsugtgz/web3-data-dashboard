@@ -1,0 +1,42 @@
+name: Heavy Market Ingest (DefiLlama)
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ingest-heavy
+  # Each run writes to remote D1; canceling mid-ingest may leave it half-done
+  # and never retried, so let an in-flight ingest finish.
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - run: bun install --frozen-lockfile
+      - name: Run heavy ingest
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            # A scheduled run writing nothing while reporting green hides the
+            # misconfiguration; only manual/dispatch runs may dry-run.
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "::error::Scheduled ingest cannot run: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not configured."
+              exit 1
+            fi
+            echo "::notice::Cloudflare secrets not configured; running --dry-run."
+            bun run ingest:heavy -- --dry-run
+            exit 0
+          fi
+          bun run ingest:heavy

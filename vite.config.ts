@@ -3,24 +3,27 @@ import react from '@vitejs/plugin-react';
 
 const BASE = process.env.VITE_BASE || (process.env.GITHUB_ACTIONS ? '/web3-data-dashboard/' : '/');
 
-function prefetchStaticDashboard(): Plugin {
+function prefetchStaticSnapshots(): Plugin {
   let isStatic = false;
   let resolvedBase = '/';
 
   return {
-    name: 'prefetch-static-dashboard',
+    name: 'prefetch-static-snapshots',
     configResolved(config) {
-      isStatic = Boolean(config.env.VITE_STATIC);
+      isStatic = Boolean(config.env.VITE_STATIC) && !(config.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
       resolvedBase = config.base;
     },
     transformIndexHtml() {
       if (!isStatic) return [];
-      const dashboardUrl = `${resolvedBase}data/dashboard.json`;
+      const feedUrl = `${resolvedBase}data/feed.json`;
+      const airdropsUrl = `${resolvedBase}data/airdrops.json`;
+      const marketsUrl = `${resolvedBase}data/markets.json`;
+      const sourcesUrl = `${resolvedBase}data/sources.json`;
       return [
         {
           tag: 'script',
           injectTo: 'head',
-          children: `window.__ICQ_DASHBOARD__=fetch('${dashboardUrl}').then(function(r){return r.ok?r.json().then(function(d){return{data:d}}):{error:'HTTP '+r.status}}).catch(function(e){return{error:e&&e.message?e.message:String(e)}});`,
+          children: `window.__RADAR_PREFETCH__={feed:fetch('${feedUrl}').then(function(r){return r.ok?r.json():null}).catch(function(){return null}),airdrops:fetch('${airdropsUrl}').then(function(r){return r.ok?r.json():null}).catch(function(){return null}),markets:fetch('${marketsUrl}').then(function(r){return r.ok?r.json():null}).catch(function(){return null}),sources:fetch('${sourcesUrl}').then(function(r){return r.ok?r.json():null}).catch(function(){return null})};`,
         },
       ];
     },
@@ -28,9 +31,7 @@ function prefetchStaticDashboard(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), prefetchStaticDashboard()],
-  // GitHub Actions (Pages) builds are published under /web3-data-dashboard/; local / Lighthouse builds override via VITE_BASE=/
+  plugins: [react(), prefetchStaticSnapshots()],
   base: BASE,
-  server: { proxy: { '/api': 'http://localhost:3000' } },
   build: { target: 'esnext', outDir: 'dist' },
 });

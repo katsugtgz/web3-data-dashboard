@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS snapshots (
+  key TEXT PRIMARY KEY,
+  body TEXT NOT NULL,
+  etag TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 1,
+  error TEXT
+);

@@ -1,3 +1,5 @@
+import type { TASK_TYPES } from './constants';
+
 export type Grade = 'S' | 'A' | 'B' | 'C';
 
 export type Badge = 'live' | 'token' | 'early' | 'zero' | 'rerun' | 'risk';
@@ -17,6 +19,8 @@ export interface CardTask {
 export interface Card {
   r: number;
   n: string;
+  /** Stable upstream project id (surf): unique storage key for watchlist/done-tasks. */
+  id?: string | null;
   chain?: string;
   chains?: string[];
   t: string | null;
@@ -59,18 +63,6 @@ export interface Tab {
   label: string;
 }
 
-export interface DemoRow {
-  cells: string[];
-  chain: string;
-}
-
-export interface DemoSection {
-  id: string;
-  blurb: string;
-  cols: string[];
-  rows: DemoRow[];
-}
-
 export interface Counts {
   active: number;
   preToken: number;
@@ -84,21 +76,113 @@ export interface AirdropFeed {
   fetchedAt: number;
 }
 
-export interface Dashboard {
-  FIT: Record<FitKey, string>;
-  CARDS: Card[];
-  BADGES: Record<Badge, string>;
-  TGE: Tge[];
-  TABS: Tab[];
-  TYPES: string[];
-  COUNTS: Counts;
-  CATEGORIES: string[];
-  TYPE_MAP: Record<string, string[]>;
-  DEMO: DemoSection[];
-  IMGS: Record<string, string>;
+export type MarketSectionId = 'crypto' | 'defi' | 'yields' | 'predictions' | 'trending' | 'github';
+
+export interface MarketRow {
+  cells: string[];
+  /** Stable row identity (source-native id, e.g. coin id, pool id, repo full name). */
+  id?: string;
+  /**
+   * Sort anchors per column, aligned with `cells` by index. Raw numeric values
+   * (exact signed percentages, USD amounts, counts, Unix-ms timestamps) let the
+   * frontend sort without guessing from display strings. `null` marks an
+   * unsortable/absent value ("—").
+   */
+  sortValues?: (string | number | null)[];
+  chain?: string;
+  href?: string;
 }
 
-export interface SectionSummary {
-  source: 'harvest' | 'harvest-net';
+export interface MarketSection {
+  id: MarketSectionId;
+  title: string;
+  blurb: string;
+  cols: string[];
+  rows: MarketRow[];
+  source: string;
+  sourceUrl: string;
+  fetchedAt: number;
+  stale: boolean;
+}
+
+export interface MarketSector {
   name: string;
+  change24h: string;
+  marketCap: string;
+}
+
+export interface MarketsResponse {
+  generatedAt: number;
+  sections: MarketSection[];
+  sectors?: MarketSector[];
+}
+
+export interface HealthSnapshotStatus {
+  fetchedAt: number;
+  ok: boolean;
+  error?: string | null;
+}
+
+export interface HealthResponse {
+  ok: boolean;
+  snapshots: Record<string, HealthSnapshotStatus>;
+}
+
+export type TaskType = (typeof TASK_TYPES)[number];
+
+export type RiskLevel = 'ok' | 'warn' | 'risk';
+
+export interface FeedSourceRef {
+  platform: 'telegram' | 'x' | 'surf';
+  handle: string;
+  postUrl: string;
+  postedAt: number;
+}
+
+export interface FeedItem {
+  id: string;
+  project: string;
+  ticker?: string;
+  domain?: string;
+  chains: string[];
+  taskTypes: TaskType[];
+  summary: string;
+  summarySource?: 'rule' | 'ai';
+  links: { url: string; known: boolean }[];
+  sources: FeedSourceRef[];
+  sourceCount: number;
+  score: number;
+  risk: { level: RiskLevel; reasons: string[] };
+  surf?: { tier?: Grade; cardRank?: number };
+  firstSeen: number;
+  lastSeen: number;
+}
+
+export interface SourceHealth {
+  id: string;
+  platform: string;
+  handle: string;
+  status: 'ok' | 'degraded' | 'down';
+  lastOkAt: number | null;
+}
+
+export interface FeedResponse {
+  generatedAt: number;
+  items: FeedItem[];
+  cursor?: string;
+}
+
+export interface AgentProfile {
+  agent: 'hermes' | 'openclaw' | 'claude-computer-use' | 'browser-use' | 'other';
+  agentNote?: string;
+  host: 'local-pc' | 'vps' | 'cloud-vm';
+  os: 'windows' | 'macos' | 'linux';
+  specs?: string;
+  browserMode: 'headless' | 'headed' | 'computer-use';
+  residentialIp: boolean;
+  wallet: 'browser-extension' | 'hardware' | 'burner-extension' | 'none';
+  walletNote?: string;
+  budgetUsd: number;
+  maxMinutes: number;
+  language: 'en';
 }

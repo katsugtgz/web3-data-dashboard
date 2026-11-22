@@ -2,13 +2,19 @@
   "name": "import-command-query",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "worker"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "build:pages": "bun scripts/build-pages.mts",
-    "start": "bun server/index.ts",
-    "typecheck": "tsc --noEmit",
-    "doctor": "bunx react-doctor@latest"
+    "typecheck": "tsc --noEmit && tsc -p worker/tsconfig.json --noEmit",
+    "test": "bun test",
+    "doctor": "bunx react-doctor@latest . --yes",
+    "snapshot": "bun scripts/snapshot.mts",
+    "ingest:heavy": "bun scripts/ingest-heavy.mts",
+    "check:cjk": "bash scripts/check-no-cjk.sh"
   },
   "type": "module",
   "dependencies": {

@@ -1,8 +1,9 @@
 export const orDash = <T,>(v: T | null | undefined): T | string => (v == null ? '—' : v);
 
 export function sortVal(s: string): number | null {
+  // Legacy display strings can include direction arrows and CJK magnitude units.
   const cleaned = s.replace(/[▲▼$,+%\s]/g, '');
-  const m = cleaned.match(/^(-?\d+(?:\.\d+)?)([KMBT万亿]?)$/);
+  const m = cleaned.match(/^(-?\d+(?:\.\d+)?)([KMBT\u4e07\u4ebf]?)$/i);
   if (!m) return null;
   const mult: Record<string, number> = {
     '': 1,
@@ -10,11 +11,13 @@ export function sortVal(s: string): number | null {
     M: 1e6,
     B: 1e9,
     T: 1e12,
-    万: 1e4,
-    亿: 1e8,
   };
-  const sign = /▼/.test(s) ? -1 : 1;
-  return parseFloat(m[1]) * mult[m[2]] * sign;
+  // Numeric checks keep the minifier from emitting literal Han object keys.
+  const suffix = m[2].toUpperCase();
+  const code = suffix.charCodeAt(0);
+  const multiplier = code === 0x4e07 ? 1e4 : code === 0x4ebf ? 1e8 : mult[suffix];
+  const value = parseFloat(m[1]) * multiplier;
+  return /▼/.test(s) ? -Math.abs(value) : value;
 }
 
 export function cmpCells(a: string, b: string): number {
@@ -83,4 +86,16 @@ export function formatRaiseShort(amount: number): string {
 
 export function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+export function formatRelativeTime(tsMs: number, nowMs = Date.now()): string {
+  if (!Number.isFinite(tsMs) || tsMs <= 0) return 'unknown';
+  const diffSec = Math.max(0, Math.floor((nowMs - tsMs) / 1000));
+  if (diffSec < 60) return 'just now';
+  const mins = Math.floor(diffSec / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }

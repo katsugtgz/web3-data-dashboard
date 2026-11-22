@@ -1,35 +1,39 @@
 import type { RefObject } from 'react';
-import type { Card, Dashboard, Tge } from '../../shared/types';
+import { CATEGORIES, FIT, TYPES } from '../../shared/constants';
+import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
+import { cardStorageKey } from '../hooks/useWatchlist';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';
 import { TgeCarousel } from './TgeCarousel';
 
 interface Props {
-  data: Dashboard;
   filters: AirdropFiltersState;
   cardCount: number;
   tgeItems: Tge[];
   isLive: boolean;
+  failed: boolean;
   saved: Set<string>;
   doneTasks: Set<string>;
   searchRef: RefObject<HTMLInputElement | null>;
-  onToggleSaved: (name: string) => void;
+  onToggleSaved: (key: string) => void;
   onSelectDetail: (card: Card) => void;
+  onCopyBrief: (card: Card) => void;
 }
 
 export function AirdropPanel({
-  data,
   filters,
   cardCount,
   tgeItems,
   isLive,
+  failed,
   saved,
   doneTasks,
   searchRef,
   onToggleSaved,
   onSelectDetail,
+  onCopyBrief,
 }: Props) {
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
@@ -42,6 +46,7 @@ export function AirdropPanel({
         counts={filters.counts}
         tgeCount={tgeItems.length}
         isLive={isLive}
+        failed={failed}
         status={filters.status}
         grade={filters.grade}
         onSelectAll={() => {
@@ -63,13 +68,13 @@ export function AirdropPanel({
         </div>
       </div>
 
-      <FilterDock filters={filters} types={data.TYPES} fit={data.FIT} searchRef={searchRef} />
+      <FilterDock filters={filters} types={TYPES} fit={FIT} searchRef={searchRef} />
 
       <div className="results-bar">
         <p className="note" role="status">
           Showing <strong className="mono">{filters.renderedCards.length}</strong>
           {filters.renderedCards.length < filters.visible.length ? ` of ${filters.visible.length} matching` : ''} (
-          {cardCount} {isLive ? 'live' : 'snapshot'} total)
+          {cardCount} {failed ? 'previously loaded' : isLive ? 'live' : 'snapshot'} total)
         </p>
         {filters.hasAnyFilter && (
           <button type="button" className="link-btn" onClick={filters.resetFilters}>
@@ -85,12 +90,12 @@ export function AirdropPanel({
               <ProjectCard
                 key={`${c.r}-${c.n}`}
                 card={c}
-                fit={data.FIT}
-                icons={data.IMGS}
-                saved={saved.has(c.n)}
+                fit={FIT}
+                saved={saved.has(cardStorageKey(c))}
                 doneTasks={doneTasks}
                 onToggleSaved={onToggleSaved}
                 onDetails={onSelectDetail}
+                onCopyBrief={onCopyBrief}
               />
             ))}
           </div>
@@ -123,7 +128,7 @@ export function AirdropPanel({
               Upcoming TGE / Claimable
             </h2>
             <p className="note">
-              {tgeItems.length} TGE and verification events tracked ({isLive ? 'live feed' : 'snapshot'}).
+              {tgeItems.length} TGE and verification events tracked ({failed ? 'last available data' : isLive ? 'live feed' : 'snapshot'}).
             </p>
           </div>
         </div>
@@ -133,7 +138,7 @@ export function AirdropPanel({
       <div className="categories-bar" role="group" aria-label="Airdrop categories">
         <span className="note">Ecosystem programs:</span>
         <div className="chipline">
-          {data.CATEGORIES.map(c => (
+          {CATEGORIES.map(c => (
             <span key={c} className="countchip">
               {c}
             </span>

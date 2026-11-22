@@ -276,6 +276,36 @@ a:hover {
   white-space: nowrap;
 }
 
+/* Visually hidden live-region pair inside dialogs (see CopyStatusBanner).
+   Not display:none: clipped 1px boxes still get live-region announcements. */
+.sr-only-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Visible copy-outcome banner inside dialogs (see CopyStatusBanner). */
+.copy-status {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.copy-status-ok {
+  border-color: var(--up);
+}
+
+.copy-status-warn {
+  border-color: var(--tier-s-fg);
+}
+
 .container {
   max-width: 1280px;
   margin: 0 auto;
@@ -1389,6 +1419,22 @@ h2.section {
   font-size: 13.5px;
 }
 
+.sector-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.sector-strip .note {
+  margin: 0;
+  white-space: nowrap;
+}
+
 .demo-controls {
   display: flex;
   flex-wrap: wrap;
@@ -1525,8 +1571,9 @@ th[aria-sort="descending"] .arr {
   color: var(--accent);
 }
 
-/* Native Modal Dialog */
-dialog#detail {
+/* Native Modal Dialogs (detail + agent profile) */
+dialog#detail,
+dialog#agent-profile-dialog {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   padding: 0;
@@ -1535,27 +1582,39 @@ dialog#detail {
   background: var(--card);
   color: var(--fg);
   box-shadow: var(--shadow-md);
-  overscroll-behavior: contain;
-  overflow: auto;
 }
 
-dialog#detail::backdrop {
-  background: rgba(8, 12, 18, 0.55);
-  backdrop-filter: blur(3px);
+/* Scroll containment: gestures over the backdrop or past the dialog's scroll
+   edge must not scroll the page underneath. ::backdrop needs overflow:hidden
+   to become a scroll container; without it overscroll-behavior is a no-op. */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog:modal::backdrop {
   overflow: hidden;
   overscroll-behavior: contain;
 }
 
+dialog#detail::backdrop,
+dialog#agent-profile-dialog::backdrop {
+  background: rgba(8, 12, 18, 0.55);
+  backdrop-filter: blur(3px);
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  dialog#detail {
+  dialog#detail,
+  dialog#agent-profile-dialog {
     transition: opacity 150ms ease, transform 150ms ease, overlay 150ms allow-discrete, display 150ms allow-discrete;
   }
-  dialog#detail[open] {
+  dialog#detail[open],
+  dialog#agent-profile-dialog[open] {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
   @starting-style {
-    dialog#detail[open] {
+    dialog#detail[open],
+    dialog#agent-profile-dialog[open] {
       opacity: 0;
       transform: translateY(8px) scale(0.98);
     }
@@ -1874,6 +1933,362 @@ footer {
 
 .footer-inner p {
   margin: 0;
+}
+
+.footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Live Drops Feed & Sources Popover */
+.new-drops-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+.new-drops-pill:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.feed-card {
+  gap: 10px;
+}
+
+.feed-card.is-risk {
+  border-color: var(--dn);
+}
+
+.feed-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.feed-title-wrap {
+  min-width: 0;
+}
+
+.feed-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.feed-summary {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.48;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.badge-warn {
+  background: var(--tier-s-bg);
+  color: var(--tier-s-fg);
+  border-color: color-mix(in srgb, var(--tier-s-fg) 25%, transparent);
+}
+
+.risk-reasons {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--dn);
+}
+
+.feed-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feed-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.feed-link.is-known {
+  border-color: color-mix(in srgb, var(--up) 40%, var(--border));
+}
+
+.feed-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.source-refs {
+  margin: 0;
+  padding: 8px 0 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-top: 1px dashed var(--border);
+}
+
+.source-refs li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.sources-health {
+  position: relative;
+}
+
+.sources-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(360px, 90vw);
+  max-height: 320px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 12px;
+  z-index: 40;
+}
+
+.sources-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.sources-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.source-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-ok {
+  background: var(--up-soft);
+  color: var(--up);
+}
+
+.status-degraded {
+  background: var(--tier-s-bg);
+  color: var(--tier-s-fg);
+}
+
+.status-down {
+  background: var(--dn-soft);
+  color: var(--dn);
+}
+
+/* Phase 3: Agent Brief, Environment Profile & Toast */
+.feed-foot-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.risk-blocked {
+  color: var(--dn);
+  font-weight: 600;
+}
+
+.card-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dlg-brief-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.brief-preview {
+  margin: 0 0 16px;
+  padding: 12px;
+  max-height: 280px;
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.privacy-banner {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field input,
+.field select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.dlg-actions-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.toast-banner {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+}
+
+.toast-ok {
+  border-color: var(--up);
+}
+
+.toast-warn {
+  border-color: var(--tier-s-fg);
+}
+
+.toast-x {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+@media (max-width: 640px) {
+  .profile-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ai-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.x-unavail {
+  font-style: italic;
 }
 
 footer a {

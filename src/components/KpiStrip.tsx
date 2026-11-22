@@ -5,6 +5,7 @@ interface Props {
   counts: { total: number; pre: number; sTier: number; savedMatch: number };
   tgeCount: number;
   isLive: boolean;
+  failed: boolean;
   status: StatusFilter;
   grade: 'All' | Grade;
   onSelectAll: () => void;
@@ -18,6 +19,7 @@ export function KpiStrip({
   counts,
   tgeCount,
   isLive,
+  failed,
   status,
   grade,
   onSelectAll,
@@ -35,7 +37,7 @@ export function KpiStrip({
       >
         <span className="kpi-label">Active Tracked</span>
         <strong className="kpi-val mono">{counts.total}</strong>
-        <span className="kpi-sub">{isLive ? 'Live API feed' : 'Snapshot'}</span>
+        <span className="kpi-sub">{failed ? 'Last available data' : isLive ? 'Live API feed' : 'Snapshot'}</span>
       </button>
       <button
         type="button"

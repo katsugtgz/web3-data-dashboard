@@ -1,54 +1,20 @@
-import { useEffect, useRef, type RefObject } from 'react';
-import type { Card, CardTask, Dashboard } from '../../shared/types';
+import { useEffect, useRef, useState } from 'react';
+import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
+import { buildBrief } from '../lib/agentBrief';
+import { downloadMarkdown } from '../lib/clipboard';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
+import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
+import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
+import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { Avatar, BadgeChip } from './ProjectCard';
-
-function useBackdropDismiss(ref: RefObject<HTMLDialogElement | null>) {
-  // Mandatory fallback for browsers without native <dialog closedby="any"> support (e.g. Safari)
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg || 'closedBy' in HTMLDialogElement.prototype) return;
-    let mouseDownOnBackdrop = false;
-    const isOnBackdrop = (event: MouseEvent): boolean => {
-      if (event.target !== dlg) return false;
-      const rect = dlg.getBoundingClientRect();
-      return !(
-        rect.top <= event.clientY &&
-        event.clientY <= rect.top + rect.height &&
-        rect.left <= event.clientX &&
-        event.clientX <= rect.left + rect.width
-      );
-    };
-    const onMouseDown = (event: MouseEvent) => {
-      mouseDownOnBackdrop = isOnBackdrop(event);
-    };
-    const onClick = (event: MouseEvent) => {
-      const shouldClose = mouseDownOnBackdrop && isOnBackdrop(event);
-      mouseDownOnBackdrop = false;
-      if (shouldClose) dlg.close();
-    };
-    dlg.addEventListener('mousedown', onMouseDown);
-    dlg.addEventListener('click', onClick);
-    return () => {
-      dlg.removeEventListener('mousedown', onMouseDown);
-      dlg.removeEventListener('click', onClick);
-    };
-  }, [ref]);
-}
-
-function resolveCardIcon(card: Card, icons: Dashboard['IMGS']): string {
-  if (card.img !== undefined) return card.img ?? '';
-  return icons[String(card.r)] ?? '';
-}
 
 function resolveCardChains(card: Card): string[] {
   if (card.chains?.length) return card.chains;
   return card.chain ? [card.chain] : [];
 }
 
-function buildDetailRows(card: Card, chains: string[], fit: Dashboard['FIT']): [string, string | number][] {
+function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, string>): [string, string | number][] {
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
@@ -154,30 +120,37 @@ function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
 
 interface BodyProps {
   card: Card;
-  fit: Dashboard['FIT'];
-  icons: Dashboard['IMGS'];
+  fit: Record<FitKey, string>;
+  profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onToggleTask: (taskKey: string) => void;
+  onCopyBrief: (card: Card) => void;
   onDismiss: () => void;
+  copyStatus: CopyStatus | null;
 }
 
 function DetailDialogBody({
   card,
   fit,
-  icons,
+  profile,
   saved,
   doneTasks,
   onToggleSaved,
   onToggleTask,
+  onCopyBrief,
   onDismiss,
+  copyStatus,
 }: BodyProps) {
-  const icon = resolveCardIcon(card, icons);
+  const [showBrief, setShowBrief] = useState(false);
+  const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
-  const taskKeys = getTaskStorageKeys(card.n, taskList);
+  const taskKeys = getTaskStorageKeys(cardStorageKey(card), taskList);
   const rows = buildDetailRows(card, chains, fit);
+  const renderedBrief = showBrief ? buildBrief(card, profile) : null;
+  const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
 
   return (
     <div className="dlg-inner">
@@ -196,7 +169,7 @@ function DetailDialogBody({
             type="button"
             className="chip"
             aria-pressed={saved}
-            onClick={() => onToggleSaved(card.n)}
+            onClick={() => onToggleSaved(cardStorageKey(card))}
           >
             <span aria-hidden="true">{saved ? '★' : '☆'}</span> Save
           </button>
@@ -212,6 +185,40 @@ function DetailDialogBody({
             <BadgeChip key={k} k={k} riskLabel={card.riskLabel} />
           ))}
         </div>
+      )}
+
+      <CopyStatusBanner status={copyStatus} />
+
+      {card.b.includes('risk') ? (
+        <p className="note risk-blocked">Brief unavailable for RISK items.</p>
+      ) : (
+        <div className="dlg-brief-bar">
+          <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
+            Copy agent brief
+          </button>
+          <button
+            type="button"
+            className="chip"
+            aria-expanded={showBrief}
+            onClick={() => setShowBrief(v => !v)}
+          >
+            {showBrief ? 'Hide preview' : 'Preview brief'}
+          </button>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              const md = buildBrief(card, profile);
+              if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
+            }}
+          >
+            Download .md
+          </button>
+        </div>
+      )}
+
+      {showBrief && renderedBrief && (
+        <pre className="brief-preview mono">{renderedBrief}</pre>
       )}
 
       <DetailScores card={card} />
@@ -248,24 +255,28 @@ function DetailDialogBody({
 
 interface Props {
   card: Card | null;
-  fit: Dashboard['FIT'];
-  icons: Dashboard['IMGS'];
+  fit: Record<FitKey, string>;
+  profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
   onToggleSaved: (name: string) => void;
   onToggleTask: (taskKey: string) => void;
+  onCopyBrief: (card: Card) => void;
   onClose: () => void;
+  copyStatus: CopyStatus | null;
 }
 
 export function DetailDialog({
   card,
   fit,
-  icons,
+  profile,
   saved,
   doneTasks,
   onToggleSaved,
   onToggleTask,
+  onCopyBrief,
   onClose,
+  copyStatus,
 }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -288,14 +299,17 @@ export function DetailDialog({
     >
       {card && (
         <DetailDialogBody
+          key={`${card.r}-${card.n}`}
           card={card}
           fit={fit}
-          icons={icons}
+          profile={profile}
           saved={saved}
           doneTasks={doneTasks}
           onToggleSaved={onToggleSaved}
           onToggleTask={onToggleTask}
+          onCopyBrief={onCopyBrief}
           onDismiss={() => ref.current?.close()}
+          copyStatus={copyStatus}
         />
       )}
     </dialog>

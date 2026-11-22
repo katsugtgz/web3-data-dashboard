@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": false,
     "types": ["bun", "vite/client"]
   },
-  "include": ["src", "server", "shared", "vite.config.ts"]
+  "include": ["src", "shared", "vite.config.ts"]
 }

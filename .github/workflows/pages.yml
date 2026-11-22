@@ -27,6 +27,7 @@ jobs:
         env:
           GITHUB_ACTIONS: 'true'
           VITE_STATIC: '1'
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

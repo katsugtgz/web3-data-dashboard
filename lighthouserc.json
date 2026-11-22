@@ -1,9 +1,7 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "PORT=4173 bun server/index.ts",
-      "startServerReadyPattern": "API \\+ dist on http://localhost:",
-      "url": ["http://localhost:4173/"],
+      "staticDistDir": "./dist",
       "numberOfRuns": 3,
       "settings": {
         "chromeFlags": "--headless=new --no-sandbox --disable-gpu"

@@ -1,63 +1,56 @@
-# Web3 Data Dashboard
+# Web3 Radar
 
-An English, accessible clone of an 18-section Web3 data dashboard — live airdrop radar, upcoming TGEs, crypto & stock markets, DeFi rankings, VC investors, X traffic, on-chain stocks, AI resources, and more. Original by [@ASSO7878](https://x.com/ASSO7878/).
+Realtime, keyless, 100% English Web3 airdrop aggregator and live market tracker running on **$0 infrastructure** (Cloudflare Workers free tier + D1 + Workers AI + GitHub Pages).
 
-**Live demo:** https://katsugtgz.github.io/web3-data-dashboard/
+**Live site:** https://katsugtgz.github.io/web3-data-dashboard/
 
 ## Features
 
-- **Live Airdrop Radar** — polls `https://import-command-query-8ca052.surf.computer/api/airdrops` (`src/lib/airdrops.ts`) every 60s (pauses in background tabs), with manual refresh and graceful snapshot fallback
-- **Multi-facet filtering & sorting** — filter by token status (`All`, `Pre-token`, `Token live`, `Saved`), project type (including US stock tokens), tier (`S`/`A`/`B`/`C`), multi-chain, `$0 Free`, best-for profile, and instant search (`/` shortcut); sort by Rank/Score, Funding, Heat (X score), Recency, or Cost
-- **Local watchlist & task checklist** — bookmark projects (`★`) and check off individual tasks inside the project detail modal (`localStorage` persisted, synced across tabs)
-- **Upcoming TGE / Claimable rail** — filterable horizontal card rail with normalized English statuses (`Claimable` / `Eligibility check`)
-- **17 snapshot data sections** — searchable, sortable, sticky-header tables with English column labels, auto-linked URLs, and semantic gain/loss indicators
-- **Dual Light / Dark theme** — follows OS `prefers-color-scheme` by default with `<meta name="color-scheme">` FOUC prevention and header toggle
-- **URL hash navigation** — deep-link directly to any section (`#airdrops`, `#predictions`, `#defi`, etc.)
-- **Local Bun API server** — serves the dashboard snapshot, per-section JSON, and `/api/health`
+- **Live Drops Feed (`#drops`)** — Scrapes 51+ public Telegram channels (`t.me/s/<handle>`) via `HTMLRewriter` plus best-effort X timelines (`OlimpioCrypto`, `DefiIgnas`, `CryptoRank_io`, `DropsTab_com`, `airdrops_io`, `cc2ventures`, `DeFi_Dad`, `atoms_res`, `MingoAirdrop`, `layerggofficial`), deduplicates across channels, flags lookalike/punycode/drainer risks, scores by trust + independent source count + recency, and optionally summarizes new/non-English clusters with Workers AI (`@cf/meta/llama-3.1-8b-instruct`).
+- **Curated Airdrop Radar (`#airdrops`)** — English-normalized feed proxied from `surf.computer` with multi-facet filters, watchlist, task checklists, and filterable TGE rail.
+- **Copy Agent Brief (`Agent profile`)** — Per-card markdown prompt generator for Hermes, OpenClaw, Claude computer-use, and browser-use with a locally persisted environment profile (`radar.agentProfile.v1`), `⛔ HUMAN-REQUIRED` checkpoints (CAPTCHA/Turnstile/wallet-sign/KYC/OAuth), unverified-link isolation, and preview/download support (blocked on RISK items).
+- **Live Market Widgets** — Keyless tabs for Crypto Market (`CoinGecko` / `Binance Vision`), DeFi TVL (`DefiLlama`), Yields (`DefiLlama Yields`), Prediction Markets (`Polymarket`), Trending Tokens (`DexScreener`), and GitHub Radar (`GitHub Search`).
+- **Weekly Source Auto-Discovery** — Collects `forwarded_from` handles and `t.me/<handle>` links into `source_candidates` (`GET /sources/candidates.json`) and updates a weekly GitHub issue via `.github/workflows/discover-sources.yml` without auto-enabling untrusted channels.
 
-## Tech stack
+## Architecture
 
-- [Bun](https://bun.sh) — package manager, runtime, `Bun.serve` API + static server
-- React 19 + TypeScript
-- Vite 8 — frontend bundler
+- **Frontend (`src/`)**: Vite 8 + React 19 + TypeScript 7 deployed to GitHub Pages. Polls Worker edge-cached JSON endpoints (`/feed.json`, `/airdrops.json`, `/markets.json`, `/sources.json`) with `ETag` (`If-None-Match` → `304`), falling back to committed snapshots in `data/snapshot/` when `VITE_API_BASE` is unset or unreachable.
+- **Cloudflare Worker (`worker/`)**:
+  - `1-min cron`: Polls rotating Telegram batches (`TG_BATCH_SIZE=4`), clusters, scores, records candidate channels, and summarizes eligible clusters via Workers AI (capped at `AI_DAILY_MAX=300`/day).
+  - `5-min cron`: Polls surf.computer, CoinGecko, Polymarket, DexScreener, GitHub (every 30 min), best-effort X batch (`X_BATCH_SIZE=3`), seeds `known_domains`, prunes >30d posts, and decays cluster scores.
+  - Endpoints: `GET /feed.json`, `GET /airdrops.json`, `GET /markets.json`, `GET /sources.json`, `GET /sources/candidates.json`, `GET /health`.
+- **Heavy Ingest (`scripts/ingest-heavy.mts`)**: GitHub Actions cron (`*/30 * * * *`) processes large DefiLlama payloads (~10 MB) outside the Worker's 10 ms CPU free-tier budget and writes trimmed sections + `known_domains` to D1.
 
-## Quick start
+## Local Development
 
 ```bash
 bun install
-bun dev                # dev server with API proxy
-bun run build          # production build to dist/
-bun start              # serve dist/ + API on http://localhost:3000
-bun run typecheck
-bun run doctor
+
+# Terminal 1: run Worker locally with D1 & scheduled cron testing
+cd worker
+npx wrangler d1 migrations apply DB --local
+npx wrangler dev --test-scheduled --port 8787
+# Trigger crons manually:
+curl -s "http://localhost:8787/__scheduled?cron=*+*+*+*+*"
+curl -s "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
+
+# Terminal 2: run Vite frontend against local Worker
+VITE_API_BASE=http://localhost:8787 bun dev
 ```
 
-Requires [Bun](https://bun.sh) 1.4.0 or newer.
+## Checks & Gates
 
-## Project structure
-
-```
-├── data/            # dashboard.json snapshot + harvest/ and harvest-net/ section scrapes
-├── server/          # Bun.serve backend: API routes + static file serving from dist/
-├── shared/          # shared TypeScript types
-├── src/             # React app (components, hooks, lib, styles)
-└── scripts/         # Pages build helper
+```bash
+bun run typecheck       # tsc across root + worker
+bun test                # unit tests (normalizers, parser, safety, clustering, brief, X, AI, discovery)
+bash scripts/check-no-cjk.sh
+bun run build:pages     # builds dist/ + copies data/snapshot/*.json
+bun run doctor          # React Doctor (100/100 target)
 ```
 
-## API endpoints
+## Deploy (Cloudflare + GitHub Pages)
 
-| Endpoint | Description |
-| --- | --- |
-| `GET /api/health` | Service health check with card & section counts |
-| `GET /api/dashboard` | Full dashboard snapshot (`data/dashboard.json`) |
-| `GET /api/cards` | Card list (`dashboard.CARDS`) |
-| `GET /api/sections` | Section summaries (source + name) |
-| `GET /api/sections/:source/:name` | One section JSON (`harvest` / `harvest-net`) |
-
-## GitHub Pages
-
-The deployed site at the live demo URL is a **static build with no API server**. The dashboard snapshot is copied into the bundle at build time and fetched directly. The airdrop feed still polls its upstream endpoint; the `bun start` server and `/api/*` routes remain unchanged for local use.
-
-## Data disclaimer
-
-All snapshot sections are scraped from a third-party dashboard and bundled at build time. They are not live, may be stale, and are **not financial advice**.
+1. Create a Cloudflare D1 database named `web3-radar` and update `database_id` in `worker/wrangler.toml`.
+2. Add GitHub repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+3. Set GitHub repository variable `VITE_API_BASE` to your deployed Worker URL.
+4. Free-tier notes: 100k Worker req/day, 10 ms CPU/invocation, 5M D1 reads + 100k D1 writes/day, ~10k Workers AI neurons/day.

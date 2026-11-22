@@ -1,16 +1,16 @@
 import { useState, type RefObject } from 'react';
-import type { Dashboard, FitKey } from '../../shared/types';
+import type { FitKey } from '../../shared/types';
 import type { AirdropFiltersState, SortKey } from '../hooks/useAirdropFilters';
 import { GRADE_ORDER } from '../lib/labels';
 
 interface Props {
   filters: AirdropFiltersState;
   types: string[];
-  fit: Dashboard['FIT'];
+  fit: Record<FitKey, string>;
   searchRef: RefObject<HTMLInputElement | null>;
 }
 
-function AdvancedFilters({ filters, fit }: { filters: AirdropFiltersState; fit: Dashboard['FIT'] }) {
+function AdvancedFilters({ filters, fit }: { filters: AirdropFiltersState; fit: Record<FitKey, string> }) {
   const fitEntries = Object.entries(fit) as [FitKey, string][];
 
   return (
@@ -150,7 +150,7 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
             />
           </div>
 
-          <label className="sort-wrap">
+          <label className="sort-wrap" htmlFor="proj-sort">
             <span className="sr">Sort projects by</span>
             <select
               id="proj-sort"
