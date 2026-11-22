@@ -50,7 +50,10 @@ export function parseNextDataTimeline(html: string, handle: string): ParsedXPost
       if (!idStr) continue;
       const text = (tweet.full_text ?? tweet.text ?? '').trim();
       if (!text) continue;
+      // Undated/invalid timestamps must be REJECTED, not stamped as now: the
+      // 14-day cutoff would otherwise admit stale undated tweets forever.
       const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
+      if (!Number.isFinite(parsedTime)) continue;
       const urls = (tweet.entities?.urls ?? [])
         .map(u => u.expanded_url || u.url)
         .filter((u): u is string => Boolean(u && /^https?:\/\//i.test(u)));
@@ -62,7 +65,7 @@ export function parseNextDataTimeline(html: string, handle: string): ParsedXPost
       out.push({
         idStr,
         postUrl,
-        postedAt: Number.isFinite(parsedTime) ? parsedTime : Date.now(),
+        postedAt: parsedTime,
         text,
         urls,
       });
@@ -85,14 +88,16 @@ export function parseCdnSyndication(body: string, handle: string): ParsedXPost[]
           const idStr = String(tweet.id_str ?? tweet.id ?? '');
           const text = (tweet.full_text ?? tweet.text ?? '').trim();
           if (!idStr || !text) return null;
+          // Same rejection as the __NEXT_DATA__ path: no valid timestamp, no post.
           const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
+          if (!Number.isFinite(parsedTime)) return null;
           const urls = (tweet.entities?.urls ?? [])
             .map(u => u.expanded_url || u.url)
             .filter((u): u is string => Boolean(u && /^https?:\/\//i.test(u)));
           return {
             idStr,
             postUrl: `https://x.com/${handle}/status/${idStr}`,
-            postedAt: Number.isFinite(parsedTime) ? parsedTime : Date.now(),
+            postedAt: parsedTime,
             text,
             urls,
           };
@@ -280,7 +285,23 @@ export async function pollXBatch(
     return { polled: 0, insertedPosts: 0, degraded: 0, ingestedResults: [] };
   }
 
-  const { projectDomains, platformDomains } = await loadKnownDomains(db);
+  // Setup failure (e.g. transient D1 error in loadKnownDomains) must degrade
+  // the batch, not reject: a rejection here aborts the whole five-minute cron
+  // before domain seeding, pruning, and score decay can run.
+  let projectDomains: Map<string, string>;
+  let platformDomains: Set<string> | undefined;
+  try {
+    ({ projectDomains, platformDomains } = await loadKnownDomains(db));
+  } catch (err) {
+    console.error('x-poll-error:loadKnownDomains', err);
+    for (const src of sources) {
+      await db
+        .prepare(`UPDATE sources SET last_polled_at = ?2, status = 'degraded' WHERE id = ?1`)
+        .bind(src.id, nowMs)
+        .run();
+    }
+    return { polled: sources.length, insertedPosts: 0, degraded: sources.length, ingestedResults: [] };
+  }
   const surfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 

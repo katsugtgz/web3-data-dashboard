@@ -10,7 +10,7 @@ export { URL_SHORTENERS };
 // wallet word is capped so 'Claim your rewards to your wallet' style ordinary
 // announcements with later 'wallet' mentions don't trip it.
 export const DRAINER_RE =
-  /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}claim/i;
+  /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}(?:connect (?:your )?wallet|verify (?:your )?wallet|claim[^.!?]{0,30}connect (?:your )?wallet)/i;
 
 export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['galxe.com', 'Galxe'],
@@ -115,6 +115,11 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
 
   for (const u of input.urls) {
     try {
+      // Plain http:// is an insecure transport (MITM can rewrite airdrop
+      // instructions/links). Flag only — no auto-upgrade to https.
+      if (/^http:\/\//i.test(u)) {
+        bump('warn', `Insecure transport (plain http): ${u}`);
+      }
       const host = new URL(u).hostname.toLowerCase();
       if (isPunycodeOrMixedScript(host)) {
         bump('risk', `Punycode or mixed-script domain: ${host}`);
@@ -146,7 +151,13 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
       const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
       if (similar) {
         bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
-      } else if (!input.knownProjectDomains.has(input.domain.toLowerCase())) {
+      // ponytail: feed-derived (surf/defi) domains are attacker-influenced, so
+      // they are NOT trusted as verified registry identity — every project domain
+      // outside KNOWN_QUEST_PLATFORMS gets the 'not in verified registry' warning
+      // and serves only as a lookalike baseline. Upgrade path: a curated registry
+      // table with a verified flag, loaded here instead.
+      }
+      if (!input.knownProjectDomains.has(input.domain.toLowerCase())) {
         bump('warn', `Domain not in verified registry: ${input.domain}`);
       }
     }

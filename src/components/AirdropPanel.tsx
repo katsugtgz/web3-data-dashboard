@@ -2,6 +2,7 @@ import type { RefObject } from 'react';
 import { CATEGORIES, FIT, TYPES } from '../../shared/constants';
 import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
+import { cardStorageKey } from '../hooks/useWatchlist';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';

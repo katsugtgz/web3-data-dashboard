@@ -103,7 +103,9 @@ export async function getTopCandidates(db: D1Database, limit = 50): Promise<Cand
       `SELECT handle, mentions, first_seen, last_seen, from_sources
        FROM source_candidates
        WHERE json_array_length(from_sources) >= 2
-       ORDER BY mentions DESC, last_seen DESC
+       -- handle ASC: same-tick ties must resolve deterministically so two
+       -- cache-miss builds of /sources/candidates.json agree on body + ETag.
+       ORDER BY mentions DESC, last_seen DESC, handle ASC
        LIMIT ?1`,
     )
     .bind(limit)

@@ -40,9 +40,11 @@ export async function markSnapshotError(db: D1Database, key: string, error: unkn
   const etag = `"${await sha1Hex(body)}"`;
   // Single atomic upsert: the old read-then-branch could hit a UNIQUE
   // violation against a concurrent upsertSnapshot and abort the cron.
-  // Error marks only advance forward in time; an existing good body/etag is
-  // preserved (only ok/error/fetched_at move), so health stays accurate
-  // while the last good payload keeps serving.
+  // Errors use the same fetched_at timestamp guard as upserts: a delayed
+  // failed cron must never flip a NEWER successful snapshot back to ok=0
+  // ("error marks only advance forward"). Body/etag of the last good
+  // payload are left untouched, so health stays accurate while the last
+  // good payload keeps serving; fetchedAt = last successful fetch.
   await db
     .prepare(
       `INSERT INTO snapshots (key, body, etag, fetched_at, ok, error)
@@ -50,8 +52,7 @@ export async function markSnapshotError(db: D1Database, key: string, error: unkn
        ON CONFLICT(key) DO UPDATE SET
          ok = 0,
          error = excluded.error
-       WHERE snapshots.ok = 1
-          OR excluded.fetched_at >= snapshots.fetched_at`,
+       WHERE excluded.fetched_at >= snapshots.fetched_at`,
     )
     .bind(key, body, etag, nowMs, msg)
     .run();

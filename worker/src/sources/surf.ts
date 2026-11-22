@@ -29,6 +29,7 @@ export interface UpstreamTask {
 }
 
 export interface UpstreamProject {
+  project_id?: string;
   project_name: string;
   chains?: { name: string }[];
   coin_symbol?: string | null;
@@ -181,10 +182,15 @@ function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
   const bestTitle = stripOrTranslateCjk(bt.title ?? '') || '—';
   const name = stripOrTranslateCjk(p.project_name) || 'Unknown project';
   const symbol = p.coin_symbol ? stripOrTranslateCjk(p.coin_symbol) || null : null;
+  // Stable upstream identity: `n` doubles as watchlist/done-task key but CJK
+  // stripping makes it non-unique (distinct projects collide; all-CJK names
+  // collapse to 'Unknown project'). Expose project_id as the stable `id`.
+  const id = typeof p.project_id === 'string' && p.project_id ? p.project_id : null;
 
   return {
     r: rank,
     n: name,
+    id,
     chain: chains[0],
     chains: chains.length > 0 ? chains : undefined,
     t: symbol,

@@ -40,6 +40,7 @@ export interface Env {
   TG_BATCH_SIZE?: string;
   X_BATCH_SIZE?: string;
   AI_DAILY_MAX?: string;
+  AI_SUMMARY_CHUNK?: string;
   SURF_AIRDROPS_URL?: string;
   POLYMARKET_URL?: string;
   COINGECKO_MARKETS_URL?: string;
@@ -160,47 +161,107 @@ async function loadCachedSurfAndDefi(db: D1Database): Promise<{
   return { surf, defi };
 }
 
-async function postProcessIngest(env: Env, ingested: IngestPostResult[], nowMs: number): Promise<void> {
-  if (ingested.length === 0) return;
-
+/** Exported for behavior tests: the AI-summary chunk/backlog seam. */
+export async function postProcessIngest(env: Env, ingested: IngestPostResult[], nowMs: number): Promise<void> {
   // 1. Source auto-discovery from forwards + t.me/<handle> links
-  const candidateJobs: Promise<void>[] = [];
-  for (const res of ingested) {
-    const selfHandle = res.sourceId.split(':')[1] ?? '';
-    const handles = extractCandidateHandles(res.forwardedFrom, res.parsed.urls, selfHandle, REGISTERED_TG_HANDLES);
-    if (handles.length > 0) {
-      candidateJobs.push(recordCandidates(env.DB, handles, res.sourceId, nowMs));
+  if (ingested.length > 0) {
+    const candidateJobs: Promise<void>[] = [];
+    for (const res of ingested) {
+      const selfHandle = res.sourceId.split(':')[1] ?? '';
+      const handles = extractCandidateHandles(res.forwardedFrom, res.parsed.urls, selfHandle, REGISTERED_TG_HANDLES);
+      if (handles.length > 0) {
+        candidateJobs.push(recordCandidates(env.DB, handles, res.sourceId, nowMs));
+      }
     }
+    await Promise.all(candidateJobs);
   }
-  await Promise.all(candidateJobs);
 
-  // 2. Workers AI summaries for eligible new / non-English non-RISK clusters.
+  // 2. Workers AI summaries for eligible non-RISK clusters.
   // Group by cluster first: several posts of one cluster in the same tick must
   // produce ONE summary call (one quota slot, no concurrent writes racing on
   // the same cluster row), not one call per post.
+  //
+  // Deferred clusters: the clusters table itself is the queue — a cluster
+  // still on its rule summary (summary_source = 'rule', non-risk, has posts)
+  // is pending, so beyond this tick's AI_SUMMARY_CHUNK bound the remainder
+  // stays queued and the next tick drains the oldest first (FIFO by
+  // first_seen). New clusters are therefore always reconsidered later (the
+  // one-off isNewCluster flag no longer gates them out), with no extra queue
+  // table or migration.
   const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
-  const eligible = ingested.filter(r => r.riskLevel !== 'risk' && (r.isNewCluster || r.isNonLatinSource));
+  const chunk = Math.max(1, Number.parseInt(env.AI_SUMMARY_CHUNK ?? '6', 10) || 6);
   const byCluster = new Map<string, IngestPostResult[]>();
-  for (const r of eligible) {
+  for (const r of ingested) {
+    if (r.riskLevel === 'risk') continue;
     const group = byCluster.get(r.clusterId);
     if (group) group.push(r);
     else byCluster.set(r.clusterId, [r]);
   }
 
+  // Backlog first (oldest rule-only clusters), then this tick's new groups;
+  // only the first `chunk` jobs run, the rest persist as pending.
+  const backlog = await env.DB.prepare(
+    `SELECT c.id, c.project, c.risk_level FROM clusters c
+     WHERE c.summary_source = 'rule' AND c.risk_level != 'risk'
+       AND EXISTS (SELECT 1 FROM posts p WHERE p.cluster_id = c.id)
+     ORDER BY c.first_seen ASC
+     LIMIT ?1`,
+  )
+    .bind(chunk)
+    .all<{ id: string; project: string; risk_level: 'ok' | 'warn' | 'risk' }>();
+
+  const jobs: {
+    clusterId: string;
+    project: string;
+    riskLevel: 'ok' | 'warn' | 'risk';
+    rawTexts: string[];
+    isNewCluster: boolean;
+    isNonLatinSource: boolean;
+  }[] = [];
+  const claimed = new Set<string>();
+  for (const row of backlog.results ?? []) {
+    claimed.add(row.id);
+    const texts = await env.DB
+      .prepare('SELECT text FROM posts WHERE cluster_id = ?1 ORDER BY posted_at DESC LIMIT 3')
+      .bind(row.id)
+      .all<{ text: string }>();
+    jobs.push({
+      clusterId: row.id,
+      project: row.project,
+      riskLevel: row.risk_level,
+      rawTexts: (texts.results ?? []).map(t => t.text),
+      // Eligibility was already decided by the summary_source = 'rule' filter;
+      // these flags only open the quota gate inside summarizeClusterWithAi.
+      isNewCluster: true,
+      isNonLatinSource: true,
+    });
+  }
+  for (const [clusterId, group] of byCluster) {
+    if (claimed.has(clusterId)) continue;
+    claimed.add(clusterId);
+    jobs.push({
+      clusterId,
+      project: group[0].parsed.project,
+      riskLevel: group[0].riskLevel,
+      rawTexts: group.map(g => g.rawText),
+      isNewCluster: group[0].isNewCluster,
+      isNonLatinSource: group[0].isNonLatinSource,
+    });
+  }
+
   await Promise.all(
-    [...byCluster.values()].slice(0, 6).map(group => {
-      const head = group[0];
-      return summarizeClusterWithAi(env.AI, env.DB, {
-        clusterId: head.clusterId,
-        project: head.parsed.project,
-        rawTexts: group.map(g => g.rawText),
-        isNewCluster: head.isNewCluster,
-        isNonLatinSource: head.isNonLatinSource,
-        riskLevel: head.riskLevel,
+    jobs.slice(0, chunk).map(job =>
+      summarizeClusterWithAi(env.AI, env.DB, {
+        clusterId: job.clusterId,
+        project: job.project,
+        rawTexts: job.rawTexts,
+        isNewCluster: job.isNewCluster,
+        isNonLatinSource: job.isNonLatinSource,
+        riskLevel: job.riskLevel,
         dailyMax,
         nowMs,
-      });
-    }),
+      }),
+    ),
   );
 }
 
@@ -227,7 +288,15 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
     runIsolated(env.DB, 'markets:predictions', nowMs, () => fetchPredictionsSection(nowMs, urls)),
     runIsolated(env.DB, 'markets:trending', nowMs, () => fetchTrendingSection(nowMs, urls)),
     (async () => {
-      const prev = await readSnapshot(env.DB, 'markets:github');
+      // Transient D1 read failure must not abort the cron (domain seeding, X
+      // polling, pruning, decay all follow). On failure, fall through and
+      // refresh github this tick.
+      let prev: SnapshotRow | null = null;
+      try {
+        prev = await readSnapshot(env.DB, 'markets:github');
+      } catch (err) {
+        console.error('cron-error:readSnapshot:markets:github', err);
+      }
       if (prev && prev.ok === 1 && nowMs - prev.fetched_at < THIRTY_MIN_MS) return;
       await runIsolated(env.DB, 'markets:github', nowMs, () => fetchGithubSection(nowMs, urls));
     })(),

@@ -4,7 +4,7 @@ import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
 import { orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
+import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { Avatar, BadgeChip } from './ProjectCard';

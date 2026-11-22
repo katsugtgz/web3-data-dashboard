@@ -24,20 +24,20 @@ function writeSet(key: string, values: Set<string>): void {
   }
 }
 
-export function taskStorageKey(projectName: string, taskTitle: string, taskType = '', occurrence = 0): string {
-  return JSON.stringify([projectName, taskTitle, taskType, occurrence]);
+export function taskStorageKey(projectKey: string, taskTitle: string, taskType = '', occurrence = 0): string {
+  return JSON.stringify([projectKey, taskTitle, taskType, occurrence]);
 }
 
 export function getTaskStorageKeys(
-  projectName: string,
+  projectKey: string,
   tasks: readonly { title: string; type: string }[],
 ): string[] {
   const seen = new Map<string, number>();
   return tasks.map(t => {
-    const base = JSON.stringify([projectName, t.title, t.type]);
+    const base = JSON.stringify([projectKey, t.title, t.type]);
     const occ = seen.get(base) ?? 0;
     seen.set(base, occ + 1);
-    return taskStorageKey(projectName, t.title, t.type, occ);
+    return taskStorageKey(projectKey, t.title, t.type, occ);
   });
 }
 

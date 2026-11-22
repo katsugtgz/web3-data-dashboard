@@ -6,6 +6,7 @@ compatibility_date = "2026-11-21"
 TG_BATCH_SIZE = "4"
 X_BATCH_SIZE = "3"
 AI_DAILY_MAX = "300"
+AI_SUMMARY_CHUNK = "6"
 
 [ai]
 binding = "AI"

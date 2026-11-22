@@ -79,7 +79,7 @@ describe('source auto-discovery', () => {
     expect(md).toContain('"trust": 0.4');
   });
 
-  test('merges from_sources inside the upsert, so interleaved writers never lose a source', async () => {
+  test('recordCandidates upserts merge against the stored from_sources row, not a pre-read copy', async () => {
     const db = createSqliteD1();
     const now = 1_795_240_000_000;
     // Both writers target the same handle concurrently: each statement must
@@ -121,5 +121,19 @@ describe('source auto-discovery', () => {
       .first<{ mentions: number; from_sources: string }>();
     expect(rows?.mentions).toBe(2);
     expect(JSON.parse(rows?.from_sources ?? '[]').sort()).toEqual(['telegram:chA', 'telegram:chB']);
+  });
+
+  test('getTopCandidates breaks same-tick ties deterministically by handle ASC', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_240_000_000;
+    // Same mentions, same last_seen: body (and ETag) must not depend on row
+    // return order.
+    await recordCandidates(db, ['zeta_cand'], 'telegram:ch1', now);
+    await recordCandidates(db, ['zeta_cand'], 'telegram:ch2', now);
+    await recordCandidates(db, ['alpha_cand'], 'telegram:ch1', now);
+    await recordCandidates(db, ['alpha_cand'], 'telegram:ch2', now);
+
+    const top = await getTopCandidates(db, 50);
+    expect(top.map(c => c.handle)).toEqual(['alpha_cand', 'zeta_cand']);
   });
 });

@@ -157,11 +157,14 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
     seenIds.add(p.msgId);
     const decoded = decodeHtmlEntities(p.textParts.join('')).replace(/\u00a0/g, ' ').trim();
     if (!decoded && p.urls.length === 0) continue;
+    // Keep missing/invalid <time> invalid so poll filters drop the post:
+    // stamping Date.now() would defeat the 14-day cutoff for undated pages.
+    if (!p.postedAt || !Number.isFinite(p.postedAt)) continue;
     out.push({
       msgId: p.msgId,
       msgNum: p.msgNum,
       postUrl: `https://t.me/${handle}/${p.msgId}`,
-      postedAt: p.postedAt || Date.now(),
+      postedAt: p.postedAt,
       text: decoded,
       urls: [...new Set(p.urls)],
       forwardedFrom: p.forwardedFrom,

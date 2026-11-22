@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
+import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
 
 const BADGE_CLASS: Partial<Record<Badge, string>> = {
   live: 'badge badge-live',

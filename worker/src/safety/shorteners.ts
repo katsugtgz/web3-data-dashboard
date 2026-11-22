@@ -18,4 +18,14 @@ export const URL_SHORTENERS: Record<string, true> = {
   'bl.ink': true,
   'short.io': true,
   'adf.ly': true,
+  // Crypto/spam-heavy shorteners seen in airdrop posts.
+  't.ly': true,
+  'shrtco.de': true,
+  'gg.gg': true,
+  's.id': true,
+  'clks.pro': true,
+  'ln.run': true,
+  'urlz.fr': true,
+  'bit.do': true,
+  't2m.io': true,
 };

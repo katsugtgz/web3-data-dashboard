@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HAN_RE } from '../src/normalize/i18n';
+import { FORBIDDEN_CJK_RE } from './helpers';
 import { parseDropPost } from '../src/normalize/parse';
 import { parseTelegramHtml } from '../src/sources/telegram';
 
@@ -22,11 +22,12 @@ describe('Telegram HTMLRewriter parser across >=15 real channel fixtures', () =>
 
       for (const p of posts) {
         expect(p.postUrl).toBe(`https://t.me/${handle}/${p.msgId}`);
-        // Falls back to Date.now() when the page omits <time>, so only assert
-        // parseability here; the exact timestamp is checked in the known-datetime test.
+        // Undated messages are dropped (never stamped Date.now()), so every
+        // surviving post must carry a parseable timestamp; the exact value is
+        // checked in the known-datetime test.
         expect(Number.isFinite(p.postedAt) && p.postedAt > 0).toBe(true);
         const parsed = parseDropPost(p.text, p.urls);
-        expect(HAN_RE.test(parsed.summary)).toBe(false);
+        expect(FORBIDDEN_CJK_RE.test(parsed.summary)).toBe(false);
         expect(parsed.taskTypes.length).toBeGreaterThan(0);
       }
     }
@@ -56,5 +57,23 @@ describe('Telegram HTMLRewriter parser across >=15 real channel fixtures', () =>
     expect(posts[0].text).toContain('$HNVA on Arbitrum');
     expect(posts[0].text).toContain('faucet & bridge');
     expect(posts[0].urls).toContain('https://hypernova.xyz/faucet?utm_source=tg');
+  });
+
+  test('drops messages with missing or invalid <time> instead of stamping now', async () => {
+    const html = `
+<div class="tgme_widget_message" data-post="alpha_feed/501">
+  <div class="tgme_widget_message_text">No time element anywhere in this message</div>
+</div>
+<div class="tgme_widget_message" data-post="alpha_feed/502">
+  <a class="tgme_widget_message_date"><time datetime="not-a-date">??</time></a>
+  <div class="tgme_widget_message_text">Invalid datetime attribute value</div>
+</div>
+<div class="tgme_widget_message" data-post="alpha_feed/503">
+  <a class="tgme_widget_message_date"><time datetime="2026-11-20T12:00:00+00:00">12:00</time></a>
+  <div class="tgme_widget_message_text">Dated control message</div>
+</div>`;
+    const posts = await parseTelegramHtml(html, 'alpha_feed');
+    expect(posts.map(p => p.msgId)).toEqual(['503']);
+    expect(posts[0].postedAt).toBe(Date.parse('2026-11-20T12:00:00+00:00'));
   });
 });

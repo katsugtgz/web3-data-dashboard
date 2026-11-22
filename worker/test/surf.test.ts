@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { HAN_RE, stripOrTranslateCjk, translateRiskItem, translateTagLabel, translateTgeStatus } from '../src/normalize/i18n';
+import { stripOrTranslateCjk, translateRiskItem, translateTagLabel, translateTgeStatus } from '../src/normalize/i18n';
 import { normalizeSurf } from '../src/sources/surf';
+import { FORBIDDEN_CJK_RE } from './helpers';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/surf-airdrops.json', import.meta.url), 'utf8'));
 
@@ -41,8 +42,18 @@ describe('surf normalizer + i18n', () => {
     expect(feed.counts.active).toBe(fixture.counts.active_total);
 
     const serialized = JSON.stringify(feed);
-    expect(HAN_RE.test(serialized)).toBe(false);
+    // Full CI gate (scripts/check-no-cjk.sh), not just Han: Kana, Hangul,
+    // Bopomofo, CJK punctuation and fullwidth forms must all be rejected.
+    expect(FORBIDDEN_CJK_RE.test(serialized)).toBe(false);
     expect(serialized).not.toContain('surf.computer');
+
+    // Stable identity: each card carries its upstream project_id so storage
+    // keys stay unique even when CJK stripping collapses distinct names.
+    const withId = feed.cards.filter(c => c.id);
+    expect(withId.length).toBeGreaterThan(0);
+    expect(new Set(withId.map(c => c.id)).size).toBe(withId.length);
+    const first = fixture.active[0];
+    expect(feed.cards[0].id).toBe(first.project_id);
   });
 
   test('translates closed risk/tag/TGE vocab and strips unknown CJK', () => {

@@ -24,6 +24,9 @@ export function fmtPrice(price: number): string {
   if (price >= 1000) return `$${price.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
   if (price >= 1) return `$${price.toFixed(2)}`;
   if (price >= 0.001) return `$${price.toFixed(4)}`;
+  // Same floor as fmtUsd: below 5e-13 the 12-decimal cap leaves no
+  // significant digits — collapse to the em dash rather than a false zero.
+  if (price < 5e-13) return '—';
   return `$${price.toFixed(Math.min(12, 2 + Math.ceil(-Math.log10(price))))}`;
 }
 

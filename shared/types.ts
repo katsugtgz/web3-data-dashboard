@@ -19,6 +19,8 @@ export interface CardTask {
 export interface Card {
   r: number;
   n: string;
+  /** Stable upstream project id (surf): unique storage key for watchlist/done-tasks. */
+  id?: string | null;
   chain?: string;
   chains?: string[];
   t: string | null;
