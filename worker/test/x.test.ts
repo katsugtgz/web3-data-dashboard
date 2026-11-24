@@ -1,44 +1,9 @@
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { createTestD1 } from './helpers';
 import { computeXBackoff, parseCdnSyndication, parseNextDataTimeline, pollXBatch } from '../src/sources/x';
 
 function createSqliteD1(): D1Database {
-  const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
-    sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
-  }
-  const makeStmt = (sql: string, params: unknown[] = []) => ({
-    bind(...args: unknown[]) {
-      return makeStmt(sql, args);
-    },
-    async first<T = unknown>(): Promise<T | null> {
-      const row = sqlite.query(sql).get(...(params as [])) as T | undefined;
-      return row ?? null;
-    },
-    async all<T = unknown>() {
-      const results = sqlite.query(sql).all(...(params as [])) as T[];
-      return { results, success: true, meta: { changes: 0 } };
-    },
-    async run() {
-      const info = sqlite.query(sql).run(...(params as []));
-      return { success: true, meta: { changes: info.changes } };
-    },
-  });
-  return {
-    prepare(sql: string) {
-      return makeStmt(sql);
-    },
-    async batch(stmts: ReturnType<typeof makeStmt>[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql: string) {
-      sqlite.exec(sql);
-      return { count: 1, duration: 0 };
-    },
-  } as unknown as D1Database;
+  return createTestD1().db;
 }
 
 describe('X best-effort syndication parser & backoff', () => {

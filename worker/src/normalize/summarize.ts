@@ -27,8 +27,9 @@ export function extractAiTextResponse(raw: unknown): string | null {
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>;
     if (typeof obj.response === 'string') return obj.response;
-    const choices = obj.choices as { message?: { content?: string } }[] | undefined;
-    if (choices?.[0]?.message?.content) return choices[0].message.content;
+    const choices = obj.choices as { message?: { content?: unknown } }[] | undefined;
+    const content = choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content) return content;
   }
   return null;
 }
@@ -90,6 +91,42 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
   }
 }
 
+export const AI_MAX_ATTEMPTS = 3;
+
+function utcDayKey(nowMs: number): string {
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+const AI_RETRY_FIRST_MS = 6 * 3_600_000;
+const AI_RETRY_NEXT_MS = 24 * 3_600_000;
+
+async function recordAiAttemptFailure(db: D1Database, clusterId: string, nowMs: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE clusters
+       SET ai_attempts = ai_attempts + 1,
+           ai_retry_after = CASE WHEN ai_attempts = 0 THEN ?2 ELSE ?3 END
+       WHERE id = ?1 AND summary_source = 'rule'`,
+    )
+    .bind(clusterId, nowMs + AI_RETRY_FIRST_MS, nowMs + AI_RETRY_NEXT_MS)
+    .run();
+}
+
+/** Pre-check whether today's AI call quota remains before querying backlog payloads. */
+export async function hasAiQuotaRemaining(
+  db: D1Database,
+  dailyMax: number,
+  nowMs = Date.now(),
+): Promise<boolean> {
+  if (!(dailyMax > 0)) return false;
+  const day = utcDayKey(nowMs);
+  const row = await db
+    .prepare('SELECT calls FROM ai_usage WHERE day = ?1')
+    .bind(day)
+    .first<{ calls: number }>();
+  return (row?.calls ?? 0) < dailyMax;
+}
+
 export async function summarizeClusterWithAi(
   ai: AiBindingLike | undefined,
   db: D1Database,
@@ -109,7 +146,7 @@ export async function summarizeClusterWithAi(
   if (!opts.isNewCluster && !opts.isNonLatinSource) return null;
 
   const nowMs = opts.nowMs ?? Date.now();
-  const day = new Date(nowMs).toISOString().slice(0, 10);
+  const day = utcDayKey(nowMs);
   const dailyMax = opts.dailyMax ?? 300;
 
   if (dailyMax <= 0) return null;
@@ -152,13 +189,15 @@ export async function summarizeClusterWithAi(
       max_tokens: 180,
     });
   } catch {
-    return null;
+    rawOut = null;
   }
 
   const text = extractAiTextResponse(rawOut);
-  if (!text) return null;
-  const validated = parseAndValidateAiJson(text);
-  if (!validated) return null;
+  const validated = text ? parseAndValidateAiJson(text) : null;
+  if (!validated) {
+    await recordAiAttemptFailure(db, opts.clusterId, nowMs);
+    return null;
+  }
 
   const existing = await db
     .prepare('SELECT chains, task_types FROM clusters WHERE id = ?1')
@@ -178,6 +217,8 @@ export async function summarizeClusterWithAi(
       `UPDATE clusters
        SET summary = ?2,
            summary_source = 'ai',
+           ai_attempts = 0,
+           ai_retry_after = 0,
            chains = (
              SELECT json_group_array(value)
              FROM (

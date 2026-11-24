@@ -1,56 +1,23 @@
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import type { Grade, MarketSection, RiskLevel } from '../../shared/types';
+import { createTestD1 } from './helpers';
 import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import { HAN_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
 import { cleanUrl, extractUrls, getRegistrableDomain, parseDropPost } from '../src/normalize/parse';
 import { computeScore, decayClusterScores } from '../src/normalize/score';
-import { evaluateSafety, findLookalikeDomain, isPunycodeOrMixedScript, levenshtein } from '../src/safety';
+import {
+  evaluateSafety,
+  findLookalikeDomain,
+  isPunycodeOrMixedScript,
+  levenshtein,
+  loadKnownDomains,
+  seedKnownDomains,
+} from '../src/safety';
+import { pollTelegramBatch, pruneOldPosts } from '../src/sources/telegram';
 
 /** Minimal synchronous D1Database shim backed by bun:sqlite for fast worker DB unit tests. */
 function createSqliteD1(): D1Database {
-  const sqlite = new Database(':memory:');
-  const m1 = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8');
-  const m2 = readFileSync(new URL('../migrations/0002_feed.sql', import.meta.url), 'utf8');
-  const m3 = readFileSync(new URL('../migrations/0003_p4.sql', import.meta.url), 'utf8');
-  const m4 = readFileSync(new URL('../migrations/0004_tags.sql', import.meta.url), 'utf8');
-  sqlite.exec(m1);
-  sqlite.exec(m2);
-  sqlite.exec(m3);
-  sqlite.exec(m4);
-
-  const makeStmt = (sql: string, params: unknown[] = []) => ({
-    bind(...args: unknown[]) {
-      return makeStmt(sql, args);
-    },
-    async first<T = unknown>(): Promise<T | null> {
-      const row = sqlite.query(sql).get(...(params as [])) as T | undefined;
-      return row ?? null;
-    },
-    async all<T = unknown>() {
-      const results = sqlite.query(sql).all(...(params as [])) as T[];
-      return { results, success: true, meta: { changes: 0 } };
-    },
-    async run() {
-      const info = sqlite.query(sql).run(...(params as []));
-      return { success: true, meta: { changes: info.changes } };
-    },
-  });
-
-  return {
-    prepare(sql: string) {
-      return makeStmt(sql);
-    },
-    async batch(stmts: ReturnType<typeof makeStmt>[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql: string) {
-      sqlite.exec(sql);
-      return { count: 1, duration: 0 };
-    },
-  } as unknown as D1Database;
+  return createTestD1().db;
 }
 
 describe('parser, clustering, safety, and scoring pipeline', () => {
@@ -552,5 +519,613 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     const okScore = computeScore({ trustMax: 0.8, sourceCount: 3, lastSeen: now, nowMs: now, surfTier: 'S', riskLevel: 'ok' });
     const riskScore = computeScore({ trustMax: 0.8, sourceCount: 3, lastSeen: now, nowMs: now, surfTier: 'S', riskLevel: 'risk' });
     expect(okScore).toBeCloseTo(riskScore * 5, 3);
+  });
+
+  test('persists clusters.trust_max on insert and keeps it monotonically non-decreasing', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_200_000_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:s1', 'telegram', 's1', 'en', 0.6, 1),
+                ('telegram:s2', 'telegram', 's2', 'en', 0.9, 1),
+                ('telegram:s3', 'telegram', 's3', 'en', 0.3, 1),
+                ('telegram:s4', 'telegram', 's4', 'en', 0.4, 1)`,
+      )
+      .run();
+
+    const known = new Map([['trustproto.xyz', 'TrustProto']]);
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const r1 = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:s1:1',
+        sourceId: 'telegram:s1',
+        sourceTrust: 0.6,
+        postUrl: 'https://t.me/s1/1',
+        postedAt: now - 4000,
+        text: 'TrustProto testnet live https://trustproto.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const c1 = await db.prepare('SELECT trust_max FROM clusters WHERE id = ?1').bind(r1.clusterId).first<{ trust_max: number }>();
+    expect(c1?.trust_max).toBe(0.6);
+
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:s2:2',
+        sourceId: 'telegram:s2',
+        sourceTrust: 0.9,
+        postUrl: 'https://t.me/s2/2',
+        postedAt: now - 3000,
+        text: 'TrustProto bridge live https://trustproto.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const c2 = await db.prepare('SELECT trust_max FROM clusters WHERE id = ?1').bind(r1.clusterId).first<{ trust_max: number }>();
+    expect(c2?.trust_max).toBe(0.9);
+
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:s3:3',
+        sourceId: 'telegram:s3',
+        sourceTrust: 0.3,
+        postUrl: 'https://t.me/s3/3',
+        postedAt: now - 2000,
+        text: 'TrustProto faucet live https://trustproto.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const c3 = await db.prepare('SELECT trust_max FROM clusters WHERE id = ?1').bind(r1.clusterId).first<{ trust_max: number }>();
+    expect(c3?.trust_max).toBe(0.9);
+
+    // Simulate a higher trust_max already stored in DB that is not in prevAgg.
+    await db.prepare('UPDATE clusters SET trust_max = 0.95 WHERE id = ?1').bind(r1.clusterId).run();
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:s4:4',
+        sourceId: 'telegram:s4',
+        sourceTrust: 0.4,
+        postUrl: 'https://t.me/s4/4',
+        postedAt: now - 1000,
+        text: 'TrustProto quest live https://trustproto.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const c4 = await db.prepare('SELECT trust_max FROM clusters WHERE id = ?1').bind(r1.clusterId).first<{ trust_max: number }>();
+    expect(c4?.trust_max).toBe(0.95);
+  });
+
+  test('decayClusterScores reads trust_max from clusters without joining posts or sources', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = 1_795_200_000_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:hi', 'telegram', 'hi', 'en', 0.9, 1),
+                ('telegram:lo', 'telegram', 'lo', 'en', 0.4, 1)`,
+      )
+      .run();
+
+    const known = new Map([
+      ['hi.example', 'HiProto'],
+      ['lo.example', 'LoProto'],
+    ]);
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const hi = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:hi:1',
+        sourceId: 'telegram:hi',
+        sourceTrust: 0.9,
+        postUrl: 'https://t.me/hi/1',
+        postedAt: t0,
+        text: 'HiProto testnet live https://hi.example',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      t0,
+    );
+    const lo = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:lo:1',
+        sourceId: 'telegram:lo',
+        sourceTrust: 0.4,
+        postUrl: 'https://t.me/lo/1',
+        postedAt: t0,
+        text: 'LoProto testnet live https://lo.example',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      t0,
+    );
+
+    const initHi = await db.prepare('SELECT score FROM clusters WHERE id = ?1').bind(hi.clusterId).first<{ score: number }>();
+    const initLo = await db.prepare('SELECT score FROM clusters WHERE id = ?1').bind(lo.clusterId).first<{ score: number }>();
+    expect(initHi?.score).toBeGreaterThan(0);
+    expect(initLo?.score).toBeGreaterThan(0);
+
+    const t1 = t0 + 24 * 3_600_000;
+    const before = queries.length;
+    await decayClusterScores(db, t1);
+    const decayQueries = queries.slice(before);
+
+    expect(decayQueries.length).toBeGreaterThan(0);
+    expect(decayQueries.some(q => /\b(posts|sources)\b/i.test(q))).toBe(false);
+
+    for (const [cid, initScore] of [
+      [hi.clusterId, initHi!.score],
+      [lo.clusterId, initLo!.score],
+    ] as const) {
+      const row = await db
+        .prepare('SELECT score, source_count, last_seen, surf_tier, risk_level, trust_max FROM clusters WHERE id = ?1')
+        .bind(cid)
+        .first<{
+          score: number;
+          source_count: number;
+          last_seen: number;
+          surf_tier: Grade | null;
+          risk_level: RiskLevel;
+          trust_max: number;
+        }>();
+      expect(row).not.toBeNull();
+      const expected = computeScore({
+        trustMax: row!.trust_max,
+        sourceCount: row!.source_count,
+        lastSeen: row!.last_seen,
+        nowMs: t1,
+        surfTier: row!.surf_tier,
+        riskLevel: row!.risk_level,
+      });
+      expect(row!.score).toBe(expected);
+      expect(row!.score).toBeLessThan(initScore);
+    }
+  });
+
+  test('pruneOldPosts skips orphan cluster scan when no posts expire and prunes orphans otherwise', async () => {
+    const { db, queries } = createTestD1();
+    const now = 1_795_200_000_000;
+    const DAY = 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-fresh', 'FreshProto', '[]', '["quest"]', 'Fresh', 'rule', 'ok', '[]', 1.0, 1, ?1, ?1)`,
+      )
+      .bind(now - 5 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-fresh', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'fresh post', '[]', 'c-fresh', ?1)`,
+      )
+      .bind(now - 5 * DAY)
+      .run();
+
+    const before0 = queries.length;
+    const res0 = await pruneOldPosts(db, now);
+    expect(res0).toEqual({ deletedPosts: 0, deletedClusters: 0 });
+    expect(queries.slice(before0).some(q => /DELETE\s+FROM\s+clusters/i.test(q))).toBe(false);
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-orphan', 'OrphanProto', '[]', '["quest"]', 'Orphan', 'rule', 'ok', '[]', 0.5, 1, ?1, ?1),
+                ('c-mixed', 'MixedProto', '[]', '["quest"]', 'Mixed', 'rule', 'ok', '[]', 0.8, 1, ?1, ?2)`,
+      )
+      .bind(now - 31 * DAY, now - 2 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-old-orphan', 'telegram:ch1', 'https://t.me/ch1/2', ?1, 'old orphan', '[]', 'c-orphan', ?1),
+                ('p-old-mixed', 'telegram:ch1', 'https://t.me/ch1/3', ?1, 'old mixed', '[]', 'c-mixed', ?1),
+                ('p-new-mixed', 'telegram:ch1', 'https://t.me/ch1/4', ?2, 'new mixed', '[]', 'c-mixed', ?2)`,
+      )
+      .bind(now - 31 * DAY, now - 2 * DAY)
+      .run();
+
+    const before1 = queries.length;
+    const res1 = await pruneOldPosts(db, now);
+    expect(res1).toEqual({ deletedPosts: 2, deletedClusters: 1 });
+    expect(queries.slice(before1).some(q => /DELETE\s+FROM\s+clusters/i.test(q))).toBe(true);
+
+    const remainingClusters = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
+    expect(remainingClusters.results.map(r => r.id)).toEqual(['c-fresh', 'c-mixed']);
+    const remainingPosts = await db.prepare('SELECT COUNT(*) AS n FROM posts').first<{ n: number }>();
+    expect(remainingPosts?.n).toBe(2);
+  });
+
+  test('pollTelegramBatch defers loadKnownDomains until a channel has new posts', async () => {
+    const makeTelegramHtml = (handle: string, msgId: number, isoDate: string, text: string) =>
+      `<div class="tgme_widget_message" data-post="${handle}/${msgId}"><div class="tgme_widget_message_text">${text}</div><a class="tgme_widget_message_date"><time datetime="${isoDate}">12:00</time></a></div>`;
+
+    const { db, queries } = createTestD1();
+    const now = Date.parse('2026-11-24T10:00:00Z');
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled, last_seen_id)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1, '100'),
+                ('telegram:ch2', 'telegram', 'ch2', 'en', 0.7, 1, '200'),
+                ('telegram:ch3', 'telegram', 'ch3', 'en', 0.6, 1, '300')`,
+      )
+      .run();
+    await db
+      .prepare(`INSERT INTO known_domains (domain, project, origin) VALUES ('novaprotocol.xyz', 'Nova Protocol', 'surf')`)
+      .run();
+
+    // Tick 1: ch1/ch2 return already-seen IDs, ch3 fails -> loadKnownDomains must NOT run.
+    const before0 = queries.length;
+    const s0 = await pollTelegramBatch(db, 4, now, null, async handle => {
+      if (handle === 'ch1') return makeTelegramHtml('ch1', 100, '2026-11-24T09:00:00Z', 'Already seen ch1');
+      if (handle === 'ch2') return makeTelegramHtml('ch2', 200, '2026-11-24T09:00:00Z', 'Already seen ch2');
+      throw new Error('upstream 502');
+    });
+    expect(s0.polled).toBe(3);
+    expect(s0.insertedPosts).toBe(0);
+    expect(s0.errors).toBe(1);
+    expect(queries.slice(before0).some(q => /FROM\s+known_domains/i.test(q))).toBe(false);
+
+    const srcRows0 = await db
+      .prepare(`SELECT id, last_polled_at, last_ok_at, status, fail_count FROM sources ORDER BY id ASC`)
+      .all<{ id: string; last_polled_at: number; last_ok_at: number | null; status: string; fail_count: number }>();
+    expect(srcRows0.results).toEqual([
+      { id: 'telegram:ch1', last_polled_at: now, last_ok_at: now, status: 'ok', fail_count: 0 },
+      { id: 'telegram:ch2', last_polled_at: now, last_ok_at: now, status: 'ok', fail_count: 0 },
+      { id: 'telegram:ch3', last_polled_at: now, last_ok_at: null, status: 'ok', fail_count: 1 },
+    ]);
+
+    // Tick 2: ch1 has 1 new post, ch2/ch3 have no new posts -> loadKnownDomains runs once and ch1 ingests.
+    const t1 = now + 60_000;
+    const before1 = queries.length;
+    const s1 = await pollTelegramBatch(db, 4, t1, null, async handle => {
+      if (handle === 'ch1') {
+        return makeTelegramHtml('ch1', 101, '2026-11-24T09:59:00Z', 'Nova Protocol testnet live https://novaprotocol.xyz');
+      }
+      if (handle === 'ch2') return makeTelegramHtml('ch2', 200, '2026-11-24T09:00:00Z', 'Already seen ch2');
+      return makeTelegramHtml('ch3', 300, '2026-11-24T09:00:00Z', 'Already seen ch3');
+    });
+    expect(s1.polled).toBe(3);
+    expect(s1.insertedPosts).toBe(1);
+    expect(s1.errors).toBe(0);
+    expect(s1.ingestedResults.length).toBe(1);
+    expect(queries.slice(before1).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+
+    const postRow = await db.prepare(`SELECT id FROM posts WHERE id = 'telegram:ch1:101'`).first<{ id: string }>();
+    expect(postRow?.id).toBe('telegram:ch1:101');
+    const srcRows1 = await db
+      .prepare(`SELECT id, last_seen_id, last_polled_at, fail_count FROM sources ORDER BY id ASC`)
+      .all<{ id: string; last_seen_id: string; last_polled_at: number; fail_count: number }>();
+    expect(srcRows1.results).toEqual([
+      { id: 'telegram:ch1', last_seen_id: '101', last_polled_at: t1, fail_count: 0 },
+      { id: 'telegram:ch2', last_seen_id: '200', last_polled_at: t1, fail_count: 0 },
+      { id: 'telegram:ch3', last_seen_id: '300', last_polled_at: t1, fail_count: 0 },
+    ]);
+  });
+
+  test('loadKnownDomains caches per DB with 5m TTL, invalidates on seedKnownDomains, and never caches failures', async () => {
+    const makeDefi = (entries: [string, string][], fetchedAt: number): MarketSection => ({
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: entries.map(([name, href]) => ({ cells: [name], href })),
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt,
+      stale: false,
+    });
+
+    const { db, queries } = createTestD1();
+    const t0 = 1_795_200_000_000;
+    const TTL = 5 * 60_000;
+
+    await seedKnownDomains(db, null, makeDefi([['Alpha', 'https://alpha.xyz']], t0));
+    const before1 = queries.length;
+    const r1 = await loadKnownDomains(db, t0);
+    const r2 = await loadKnownDomains(db, t0 + 60_000);
+    expect(queries.slice(before1).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+    expect(r1.projectDomains.get('alpha.xyz')).toBe('Alpha');
+    expect(r2).toBe(r1);
+
+    await seedKnownDomains(
+      db,
+      null,
+      makeDefi(
+        [
+          ['Alpha', 'https://alpha.xyz'],
+          ['Beta', 'https://beta.xyz'],
+        ],
+        t0 + 60_000,
+      ),
+    );
+    const before2 = queries.length;
+    const r3 = await loadKnownDomains(db, t0 + 60_000);
+    expect(queries.slice(before2).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+    expect(r3.projectDomains.get('beta.xyz')).toBe('Beta');
+
+    await db
+      .prepare(`INSERT INTO known_domains (domain, project, origin) VALUES ('gamma.xyz', 'Gamma', 'surf')`)
+      .run();
+    const before3 = queries.length;
+    const r4 = await loadKnownDomains(db, t0 + 60_000 + TTL - 1);
+    expect(queries.slice(before3).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(0);
+    expect(r4.projectDomains.has('gamma.xyz')).toBe(false);
+
+    const before4 = queries.length;
+    const r5 = await loadKnownDomains(db, t0 + 60_000 + TTL);
+    expect(queries.slice(before4).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+    expect(r5.projectDomains.get('gamma.xyz')).toBe('Gamma');
+
+    const { db: badDb } = createTestD1();
+    await badDb.exec('DROP TABLE known_domains');
+    await expect(loadKnownDomains(badDb, t0)).rejects.toThrow();
+    await expect(loadKnownDomains(badDb, t0)).rejects.toThrow();
+
+    // Concurrent seedKnownDomains finishing mid-SELECT must prevent caching stale rows.
+    const { db: raceBaseDb, queries: raceQueries } = createTestD1();
+    let interceptNextLoad = false;
+    let notifySelectStarted!: () => void;
+    let releaseSelect!: () => void;
+    const selectStarted = new Promise<void>(resolve => {
+      notifySelectStarted = resolve;
+    });
+    const selectGate = new Promise<void>(resolve => {
+      releaseSelect = resolve;
+    });
+    const raceDb = {
+      ...raceBaseDb,
+      prepare(sql: string) {
+        const stmt = raceBaseDb.prepare(sql);
+        if (interceptNextLoad && /SELECT\s+domain,\s+project,\s+origin\s+FROM\s+known_domains/i.test(sql)) {
+          interceptNextLoad = false;
+          return {
+            async all<T>() {
+              const res = await stmt.all<T>();
+              notifySelectStarted();
+              await selectGate;
+              return res;
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await seedKnownDomains(raceDb, null, makeDefi([['Alpha', 'https://alpha.xyz']], t0));
+    interceptNextLoad = true;
+    const inflightLoad = loadKnownDomains(raceDb, t0);
+    await selectStarted;
+
+    await seedKnownDomains(
+      raceDb,
+      null,
+      makeDefi(
+        [
+          ['Alpha', 'https://alpha.xyz'],
+          ['Beta', 'https://beta.xyz'],
+        ],
+        t0 + 1_000,
+      ),
+    );
+    releaseSelect();
+    const staleResult = await inflightLoad;
+    expect(staleResult.projectDomains.has('beta.xyz')).toBe(false);
+
+    const beforeFresh = raceQueries.length;
+    const freshResult = await loadKnownDomains(raceDb, t0 + 2_000);
+    expect(raceQueries.slice(beforeFresh).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+    expect(freshResult.projectDomains.get('beta.xyz')).toBe('Beta');
+
+    const beforeCached = raceQueries.length;
+    const cachedResult = await loadKnownDomains(raceDb, t0 + 3_000);
+    expect(raceQueries.slice(beforeCached).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(0);
+    expect(cachedResult).toBe(freshResult);
+  });
+
+  test('pruneOldPosts retries pending orphan-cluster cleanup when zero posts expire after a failed cluster delete', async () => {
+    const { db, queries } = createTestD1();
+    const now = 1_795_200_000_000;
+    const DAY = 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-fresh', 'FreshProto', '[]', '["quest"]', 'Fresh', 'rule', 'ok', '[]', 1.0, 1, ?1, ?1),
+                ('c-orphan', 'OrphanProto', '[]', '["quest"]', 'Orphan', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-fresh', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'fresh post', '[]', 'c-fresh', ?1),
+                ('p-old', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c-orphan', ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+
+    let failClusterDelete = true;
+    const flakyDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (failClusterDelete && /DELETE\s+FROM\s+clusters/i.test(sql)) {
+          return {
+            async run() {
+              failClusterDelete = false;
+              throw new Error('D1 clusters delete error');
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyDb, now)).rejects.toThrow('D1 clusters delete error');
+
+    const oldPost = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old'`).first<{ id: string }>();
+    expect(oldPost).toBeNull();
+    const orphanStillThere = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan'`).first<{ id: string }>();
+    expect(orphanStillThere?.id).toBe('c-orphan');
+    const pendingMarker = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(pendingMarker?.key).toBe('prune:orphans');
+
+    // Next call deletes 0 expired posts, yet sees pending marker and removes the orphan cluster.
+    const retryRes = await pruneOldPosts(db, now + 60_000);
+    expect(retryRes).toEqual({ deletedPosts: 0, deletedClusters: 1 });
+    const remaining = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
+    expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
+    const clearedMarker = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(clearedMarker).toBeNull();
+
+    // Subsequent call with 0 expired posts restores the short-circuit (no cluster DELETE).
+    const beforeSteady = queries.length;
+    const steadyRes = await pruneOldPosts(db, now + 120_000);
+    expect(steadyRes).toEqual({ deletedPosts: 0, deletedClusters: 0 });
+    expect(queries.slice(beforeSteady).some(q => /DELETE\s+FROM\s+clusters/i.test(q))).toBe(false);
+  });
+
+  test('pruneOldPosts persists orphan marker atomically with posts delete so failed marker or posts writes leave no leaked orphans', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_200_000_000;
+    const DAY = 86_400_000;
+
+    // Scenario A: marker write fails alongside failing clusters delete -> posts DELETE must roll back.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-fresh', 'FreshProto', '[]', '["quest"]', 'Fresh', 'rule', 'ok', '[]', 1.0, 1, ?1, ?1),
+                ('c-orphan', 'OrphanProto', '[]', '["quest"]', 'Orphan', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-fresh', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'fresh post', '[]', 'c-fresh', ?1),
+                ('p-old', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c-orphan', ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+
+    const flakyMarkerDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/INSERT\s+INTO\s+cron_state/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async run() {
+                  throw new Error('D1 marker write error');
+                },
+              };
+            },
+          };
+        }
+        if (/DELETE\s+FROM\s+clusters/i.test(sql)) {
+          return {
+            async run() {
+              throw new Error('D1 clusters delete error');
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyMarkerDb, now)).rejects.toThrow();
+
+    const oldPostAfterMarkerFail = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old'`).first<{ id: string }>();
+    expect(oldPostAfterMarkerFail?.id).toBe('p-old');
+    const orphanAfterMarkerFail = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan'`).first<{ id: string }>();
+    expect(orphanAfterMarkerFail?.id).toBe('c-orphan');
+    const markerAfterMarkerFail = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(markerAfterMarkerFail).toBeNull();
+
+    expect(await pruneOldPosts(db, now + 60_000)).toEqual({ deletedPosts: 1, deletedClusters: 1 });
+
+    // Scenario B: posts DELETE fails after marker statement in the same batch -> marker rolls back cleanly.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-orphan2', 'OrphanProto2', '[]', '["quest"]', 'Orphan2', 'rule', 'ok', '[]', 0.5, 1, ?1, ?1)`,
+      )
+      .bind(now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-old2', 'telegram:ch1', 'https://t.me/ch1/3', ?1, 'old post 2', '[]', 'c-orphan2', ?1)`,
+      )
+      .bind(now - 31 * DAY)
+      .run();
+
+    const flakyPostsDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/DELETE\s+FROM\s+posts/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async run() {
+                  throw new Error('D1 posts delete error');
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyPostsDb, now)).rejects.toThrow('D1 posts delete error');
+
+    const markerAfterPostsFail = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(markerAfterPostsFail).toBeNull();
+    const oldPost2AfterFail = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old2'`).first<{ id: string }>();
+    expect(oldPost2AfterFail?.id).toBe('p-old2');
+    const orphan2AfterFail = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan2'`).first<{ id: string }>();
+    expect(orphan2AfterFail?.id).toBe('c-orphan2');
+
+    expect(await pruneOldPosts(db, now + 60_000)).toEqual({ deletedPosts: 1, deletedClusters: 1 });
+    const remaining = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
+    expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
   });
 });

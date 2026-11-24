@@ -3,7 +3,7 @@ import type { AirdropFeed } from '../../shared/types';
 import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
-export const POLL_MS = 60_000;
+export const POLL_MS = 120_000;
 
 export interface AirdropFeedState {
   feed: AirdropFeed | null;

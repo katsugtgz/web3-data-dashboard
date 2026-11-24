@@ -1,52 +1,49 @@
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { createTestD1 } from './helpers';
 import { HAN_RE } from '../src/normalize/i18n';
-import { summarizeClusterWithAi, unsafeContentRe, type AiBindingLike } from '../src/normalize/summarize';
+import {
+  AI_MAX_ATTEMPTS,
+  hasAiQuotaRemaining,
+  summarizeClusterWithAi,
+  unsafeContentRe,
+  type AiBindingLike,
+} from '../src/normalize/summarize';
 
 function createSqliteD1(): D1Database {
-  const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
-    sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
-  }
+  const { db, sqlite } = createTestD1();
   sqlite.exec(
     `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
      VALUES ('c1', 'KiteAI', 'KITE', 'kite.ai', '[]', '["other"]', 'KiteAI: other', 'rule', 'ok', '[]', 0.5, 1, 1000, 1000)`,
   );
-  const makeStmt = (sql: string, params: unknown[] = []) => ({
-    bind(...args: unknown[]) {
-      return makeStmt(sql, args);
-    },
-    async first<T = unknown>(): Promise<T | null> {
-      const row = sqlite.query(sql).get(...(params as [])) as T | undefined;
-      return row ?? null;
-    },
-    async all<T = unknown>() {
-      const results = sqlite.query(sql).all(...(params as [])) as T[];
-      return { results, success: true, meta: { changes: 0 } };
-    },
-    async run() {
-      const info = sqlite.query(sql).run(...(params as []));
-      return { success: true, meta: { changes: info.changes } };
-    },
-  });
-  return {
-    prepare(sql: string) {
-      return makeStmt(sql);
-    },
-    async batch(stmts: ReturnType<typeof makeStmt>[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql: string) {
-      sqlite.exec(sql);
-      return { count: 1, duration: 0 };
-    },
-  } as unknown as D1Database;
+  return db;
 }
 
 describe('Workers AI summary normalization & budget guard', () => {
+  test('hasAiQuotaRemaining checks daily cap with 0 reads when disabled and 1 PK lookup otherwise', async () => {
+    expect(AI_MAX_ATTEMPTS).toBe(3);
+
+    const { db, queries } = createTestD1();
+    const now = 1_795_240_000_000;
+    const day = new Date(now).toISOString().slice(0, 10);
+
+    expect(await hasAiQuotaRemaining(db, 0, now)).toBe(false);
+    expect(await hasAiQuotaRemaining(db, -5, now)).toBe(false);
+    expect(queries.length).toBe(0);
+
+    expect(await hasAiQuotaRemaining(db, 5, now)).toBe(true);
+    expect(queries.length).toBe(1);
+
+    await db.prepare('INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)').bind(day, 4).run();
+    expect(await hasAiQuotaRemaining(db, 5, now)).toBe(true);
+
+    await db.prepare('UPDATE ai_usage SET calls = ?2 WHERE day = ?1').bind(day, 5).run();
+    expect(await hasAiQuotaRemaining(db, 5, now)).toBe(false);
+
+    await db.prepare('UPDATE ai_usage SET calls = ?2 WHERE day = ?1').bind(day, 7).run();
+    expect(await hasAiQuotaRemaining(db, 5, now)).toBe(false);
+
+    expect(await hasAiQuotaRemaining(db, 5, now + 86_400_000)).toBe(true);
+  });
 
   test('unsafeContentRe strips defanged hosts and catches base58 addresses', () => {
     // Plain content passes.
@@ -288,5 +285,358 @@ describe('Workers AI summary normalization & budget guard', () => {
 
     const row = await db.prepare(`SELECT calls FROM ai_usage WHERE day = ?1`).bind(day).first<{ calls: number }>();
     expect(Number(row?.calls)).toBe(cap);
+  });
+
+  function seedCluster(
+    sqlite: ReturnType<typeof createTestD1>['sqlite'],
+    id: string,
+    summarySource: 'rule' | 'ai' = 'rule',
+  ): void {
+    sqlite
+      .query(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES (?1, 'KiteAI', 'KITE', 'kite.ai', '[]', '["other"]', 'KiteAI: other', ?2, 'ok', '[]', 0.5, 1, 1000, 1000)`,
+      )
+      .run(id, summarySource);
+  }
+
+  function readAttemptState(
+    sqlite: ReturnType<typeof createTestD1>['sqlite'],
+    id: string,
+  ): { summary_source: string; ai_attempts: number; ai_retry_after: number } {
+    return sqlite
+      .query('SELECT summary_source, ai_attempts, ai_retry_after FROM clusters WHERE id = ?1')
+      .get(id) as { summary_source: string; ai_attempts: number; ai_retry_after: number };
+  }
+
+  test('AI failures apply 6h then 24h backoff with zero extra reads, and valid AI summary resets attempts', async () => {
+    const { db, sqlite, queries } = createTestD1();
+    seedCluster(sqlite, 'c1', 'rule');
+
+    const t1 = 1_795_240_000_000;
+    const t2 = t1 + 10_000;
+    const t3 = t2 + 10_000;
+    const t4 = t3 + 10_000;
+    const sixHours = 6 * 3_600_000;
+    const oneDay = 24 * 3_600_000;
+
+    // 1st failure: ai.run throws -> ai_attempts = 1, +6h backoff, 2 queries total (reserve + update, 0 extra reads)
+    const throwingAi: AiBindingLike = {
+      async run() {
+        throw new Error('AI timeout');
+      },
+    };
+    const r1 = await summarizeClusterWithAi(throwingAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: t1,
+    });
+    expect(r1).toBeNull();
+    expect(queries.length).toBe(2);
+    expect(readAttemptState(sqlite, 'c1')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: t1 + sixHours,
+    });
+
+    // 2nd failure: empty response -> ai_attempts = 2, +24h backoff
+    const emptyAi: AiBindingLike = {
+      async run() {
+        return { response: '' };
+      },
+    };
+    const r2 = await summarizeClusterWithAi(emptyAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: t2,
+    });
+    expect(r2).toBeNull();
+    expect(readAttemptState(sqlite, 'c1')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 2,
+      ai_retry_after: t2 + oneDay,
+    });
+
+    // 3rd failure: CJK summary -> ai_attempts = 3, +24h backoff
+    const cjkAi: AiBindingLike = {
+      async run() {
+        return { response: JSON.stringify({ summary: '\u4e2d\u6587\u6458\u8981', taskTypes: [], chains: [] }) };
+      },
+    };
+    const r3 = await summarizeClusterWithAi(cjkAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: t3,
+    });
+    expect(r3).toBeNull();
+    expect(readAttemptState(sqlite, 'c1')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 3,
+      ai_retry_after: t3 + oneDay,
+    });
+
+    // Subsequent valid AI summary resets ai_attempts = 0 and ai_retry_after = 0
+    const okAi: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI daily quests on Base.',
+            taskTypes: ['quest'],
+            chains: ['Base'],
+          }),
+        };
+      },
+    };
+    const r4 = await summarizeClusterWithAi(okAi, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: t4,
+    });
+    expect(r4).not.toBeNull();
+    expect(readAttemptState(sqlite, 'c1')).toEqual({
+      summary_source: 'ai',
+      ai_attempts: 0,
+      ai_retry_after: 0,
+    });
+  });
+
+  test('invalid JSON and null raw output each trigger 6h then 24h backoff on fresh rule clusters', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_json', 'rule');
+    seedCluster(sqlite, 'c_null', 'rule');
+
+    const now = 1_795_240_000_000;
+    const sixHours = 6 * 3_600_000;
+    const oneDay = 24 * 3_600_000;
+
+    const badJsonAi: AiBindingLike = {
+      async run() {
+        return { response: 'not json' };
+      },
+    };
+    expect(
+      await summarizeClusterWithAi(badJsonAi, db, {
+        clusterId: 'c_json',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: now,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_json')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: now + sixHours,
+    });
+
+    expect(
+      await summarizeClusterWithAi(badJsonAi, db, {
+        clusterId: 'c_json',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: now + 5_000,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_json')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 2,
+      ai_retry_after: now + 5_000 + oneDay,
+    });
+
+    const nullOutAi: AiBindingLike = {
+      async run() {
+        return null;
+      },
+    };
+    expect(
+      await summarizeClusterWithAi(nullOutAi, db, {
+        clusterId: 'c_null',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: now,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_null')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: now + sixHours,
+    });
+
+    expect(
+      await summarizeClusterWithAi(nullOutAi, db, {
+        clusterId: 'c_null',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: now + 5_000,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_null')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 2,
+      ai_retry_after: now + 5_000 + oneDay,
+    });
+  });
+
+  test('backoff does not update clusters when quota is exhausted or cluster is already AI-summarized', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_quota', 'rule');
+    seedCluster(sqlite, 'c_ai', 'ai');
+
+    const now = 1_795_240_000_000;
+    const day = new Date(now).toISOString().slice(0, 10);
+    sqlite.query('INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)').run(day, 10);
+
+    const throwingAi: AiBindingLike = {
+      async run() {
+        throw new Error('AI failure');
+      },
+    };
+
+    expect(
+      await summarizeClusterWithAi(throwingAi, db, {
+        clusterId: 'c_quota',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        dailyMax: 10,
+        nowMs: now,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_quota')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 0,
+      ai_retry_after: 0,
+    });
+
+    expect(
+      await summarizeClusterWithAi(throwingAi, db, {
+        clusterId: 'c_ai',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        dailyMax: 20,
+        nowMs: now,
+      }),
+    ).toBeNull();
+    expect(readAttemptState(sqlite, 'c_ai')).toEqual({
+      summary_source: 'ai',
+      ai_attempts: 0,
+      ai_retry_after: 0,
+    });
+  });
+
+  test('non-string choices[0].message.content returns null and triggers backoff instead of throwing', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_obj', 'rule');
+
+    const now = 1_795_240_000_000;
+    const sixHours = 6 * 3_600_000;
+    const oneDay = 24 * 3_600_000;
+
+    const objectContentAi: AiBindingLike = {
+      async run() {
+        return { choices: [{ message: { content: { summary: 'object payload' } } }] };
+      },
+    };
+    const r1 = await summarizeClusterWithAi(objectContentAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now,
+    });
+    expect(r1).toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: now + sixHours,
+    });
+
+    const numericContentAi: AiBindingLike = {
+      async run() {
+        return { choices: [{ message: { content: 12345 } }] };
+      },
+    };
+    const r2 = await summarizeClusterWithAi(numericContentAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now + 5_000,
+    });
+    expect(r2).toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 2,
+      ai_retry_after: now + 5_000 + oneDay,
+    });
+
+    const validChoicesAi: AiBindingLike = {
+      async run() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summary: 'Complete KiteAI quests via choices string response.',
+                  taskTypes: ['quest'],
+                  chains: ['Base'],
+                }),
+              },
+            },
+          ],
+        };
+      },
+    };
+    const r3 = await summarizeClusterWithAi(validChoicesAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now + 10_000,
+    });
+    expect(r3).not.toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'ai',
+      ai_attempts: 0,
+      ai_retry_after: 0,
+    });
   });
 });

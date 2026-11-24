@@ -305,6 +305,7 @@ export async function ingestPostIntoCluster(
              ELSE MAX(clusters.score, ?11)
            END,
            source_count = MAX(clusters.source_count, ?12),
+           trust_max = MAX(clusters.trust_max, ?17),
            surf_tier = COALESCE(?13, clusters.surf_tier), surf_rank = COALESCE(?14, clusters.surf_rank),
            first_seen = MIN(clusters.first_seen, ?15), last_seen = MAX(clusters.last_seen, ?16),
            project = ?2, ticker = COALESCE(?3, clusters.ticker), domain = COALESCE(?4, clusters.domain)
@@ -327,13 +328,14 @@ export async function ingestPostIntoCluster(
         surfRank,
         firstSeen,
         lastSeen,
+        trustMax,
       )
       .run();
   } else {
     await db
       .prepare(
-        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen, trust_max)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(id) DO UPDATE SET
            -- Two concurrent first posts for one cluster can both land here.
            -- The loser must MERGE into the winner, not overwrite it: union the
@@ -406,7 +408,8 @@ export async function ingestPostIntoCluster(
              ELSE MAX(clusters.score, excluded.score)
            END,
            source_count = MAX(clusters.source_count, excluded.source_count),
-           last_seen = MAX(clusters.last_seen, excluded.last_seen)`,
+           last_seen = MAX(clusters.last_seen, excluded.last_seen),
+           trust_max = MAX(clusters.trust_max, excluded.trust_max)`,
       )
       .bind(
         clusterId,
@@ -425,6 +428,7 @@ export async function ingestPostIntoCluster(
         surfRank,
         firstSeen,
         lastSeen,
+        trustMax,
       )
       .run();
   }
