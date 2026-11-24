@@ -282,6 +282,87 @@ describe('prepareFeedLinks', () => {
       { url: 'https://example.com/task', label: 'example.com', known: false },
     ]);
   });
+
+  test('keeps separate campaign links and distinct labels for the same Telegram bot while grouping channel posts', () => {
+    const botCampaigns = prepareFeedLinks(
+      makeItem({
+        links: [
+          { url: 'https://t.me/ExampleBot?start=spring', known: false },
+          { url: 'https://t.me/ExampleBot?start=summer', known: false },
+          { url: 'https://t.me/SuperLongCampaignExampleBot?start=alpha', known: false },
+          { url: 'https://t.me/SuperLongCampaignExampleBot?start=beta', known: false },
+        ],
+      }),
+      { max: 6 },
+    );
+    expect(botCampaigns.map(l => l.url)).toEqual([
+      'https://t.me/ExampleBot?start=spring',
+      'https://t.me/ExampleBot?start=summer',
+      'https://t.me/SuperLongCampaignExampleBot?start=alpha',
+      'https://t.me/SuperLongCampaignExampleBot?start=beta',
+    ]);
+    expect(botCampaigns[0].label).toBe('t.me/ExampleBot?start=spring');
+    expect(botCampaigns[1].label).toBe('t.me/ExampleBot?start=summer');
+    expect(botCampaigns[2].label).toContain('?start=alpha');
+    expect(botCampaigns[3].label).toContain('?start=beta');
+    expect(new Set(botCampaigns.map(l => l.label)).size).toBe(4);
+    for (const l of botCampaigns) {
+      expect(l.label.length).toBeLessThanOrEqual(34);
+    }
+
+    const channelPosts = prepareFeedLinks(
+      makeItem({
+        links: [
+          { url: 'https://t.me/AlphaChannel/101', known: false },
+          { url: 'https://t.me/AlphaChannel/102', known: false },
+        ],
+      }),
+    );
+    expect(channelPosts).toEqual([
+      { url: 'https://t.me/AlphaChannel/101', label: 't.me/AlphaChannel', known: false },
+    ]);
+  });
+
+  test('drops referral path only when a clean equivalent action link exists on the same host', () => {
+    const withDocs = prepareFeedLinks(
+      makeItem({
+        domain: 'example.com',
+        links: [
+          { url: 'https://example.com/join/AB12', known: false },
+          { url: 'https://example.com/docs', known: false },
+        ],
+      }),
+    );
+    expect(withDocs.map(l => l.url)).toEqual([
+      'https://example.com/join/AB12',
+      'https://example.com/docs',
+    ]);
+
+    const withCleanJoin = prepareFeedLinks(
+      makeItem({
+        domain: 'example.com',
+        links: [
+          { url: 'https://example.com/join/AB12', known: false },
+          { url: 'https://example.com/join', known: false },
+        ],
+      }),
+    );
+    expect(withCleanJoin.map(l => l.url)).toEqual(['https://example.com/join']);
+
+    const refWithDocs = prepareFeedLinks(
+      makeItem({
+        domain: 'make.fun',
+        links: [
+          { url: 'https://make.fun/r/yx3n09hc', known: false },
+          { url: 'https://make.fun/docs', known: false },
+        ],
+      }),
+    );
+    expect(refWithDocs.map(l => l.url)).toEqual([
+      'https://make.fun/r/yx3n09hc',
+      'https://make.fun/docs',
+    ]);
+  });
 });
 
 describe('formatRiskReasons', () => {
@@ -521,6 +602,25 @@ describe('formatFeedSummary', () => {
       "*NVIDIA BOARD IS NOT CONSIDERING A SPLIT *Bir kaynak CNBC'ye bunun g\u00fcndemde olmad\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
     );
     expect(nvidia.lead).toBe('NVIDIA BOARD IS NOT CONSIDERING A SPLIT');
+
+    const explicitMarker = formatFeedSummary(
+      'Claim opens on May 15.\nTR: Talep 15 May\u0131s tarihinde a\u00e7\u0131l\u0131yor.',
+    );
+    expect(explicitMarker.lead).toBe('Claim opens on May 15.');
+  });
+
+  test('preserves unique Turkish eligibility restrictions alongside English claim dates', () => {
+    const multilineMixed = formatFeedSummary(
+      'Claim opens on November 30.\nSadece KYC do\u011frulamas\u0131 yapan c\u00fczdanlar hak kazan\u0131r.',
+    );
+    expect(multilineMixed.lead).toContain('Claim opens on November 30.');
+    expect(multilineMixed.lead).toContain('Sadece KYC');
+
+    const sentenceMixed = formatFeedSummary(
+      'Claim opens on November 30. Kat\u0131l\u0131m i\u00e7in en az 200 puan gerekiyor.',
+    );
+    expect(sentenceMixed.lead).toContain('Claim opens on November 30.');
+    expect(sentenceMixed.lead).toContain('200 puan');
   });
 
   test('collapses excessive repeated alert emojis and keeps clean prose untouched', () => {

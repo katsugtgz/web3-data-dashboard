@@ -37,13 +37,33 @@ const CLEAN_SUBPATH_WORDS = new Set([
   'airdrop',
 ]);
 
-function isReferralPathUrl(pathname: string): boolean {
+type ReferralPathKind = 'root' | 'join' | 'invite';
+
+function referralPathKind(pathname: string): ReferralPathKind | null {
   const refMatch = pathname.match(REFERRAL_CODE_PATH_RE);
-  if (refMatch) return !CLEAN_SUBPATH_WORDS.has(refMatch[1].toLowerCase());
+  if (refMatch) {
+    if (CLEAN_SUBPATH_WORDS.has(refMatch[1].toLowerCase())) return null;
+    return /^\/invite\//i.test(pathname) ? 'invite' : 'root';
+  }
   const joinMatch = pathname.match(JOIN_PATH_RE);
-  if (!joinMatch) return false;
+  if (!joinMatch) return null;
   const seg = joinMatch[1];
-  return /\d/.test(seg) || seg.length <= 3 || (/[A-Z]/.test(seg) && /[a-z]/.test(seg));
+  const isCode = /\d/.test(seg) || seg.length <= 3 || (/[A-Z]/.test(seg) && /[a-z]/.test(seg));
+  return isCode ? 'join' : null;
+}
+
+function cleanEquivalentPath(kind: ReferralPathKind): string {
+  if (kind === 'join') return '/join';
+  if (kind === 'invite') return '/invite';
+  return '/';
+}
+
+function normalizePathname(pathname: string): string {
+  return pathname.replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase() || '/';
+}
+
+function isTelegramBotHandle(handle?: string): boolean {
+  return Boolean(handle && /bot$/i.test(handle));
 }
 const MEANINGFUL_HASH_RE = /^#[a-z0-9_-]{2,}$/i;
 const CHANNEL_VARIANT_SUFFIX_RE = /_(?:chat|group|news|channel|ann|announcements|community|official)$/;
@@ -116,7 +136,7 @@ interface LinkCandidate {
   known: boolean;
   isSocial: boolean;
   isBioAggregator: boolean;
-  isReferralPath: boolean;
+  referralKind: ReferralPathKind | null;
   tier: number;
   order: number;
 }
@@ -244,7 +264,16 @@ function canonicalLinkKey(url: URL, bareHost: string): string {
   const segs = url.pathname.split('/').filter(Boolean);
 
   if (bareHost === 't.me' || bareHost === 'telegram.me') {
-    return `tg:${(segs[0] ?? '').toLowerCase()}`;
+    const handle = (segs[0] ?? '').toLowerCase();
+    if (!isTelegramBotHandle(handle)) {
+      return `tg:${handle}`;
+    }
+    const subpath = segs.slice(1).join('/').toLowerCase();
+    const sortedParams = [...url.searchParams.entries()]
+      .sort(([aKey, aVal], [bKey, bVal]) => aKey.localeCompare(bKey) || aVal.localeCompare(bVal))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
+    return `tg:${handle}${subpath ? `/${subpath}` : ''}${sortedParams ? `?${sortedParams}` : ''}`;
   }
 
   if (bareHost === 'x.com' || bareHost === 'twitter.com') {
@@ -294,12 +323,42 @@ function truncateLabel(text: string, maxLen: number): string {
   return `${text.slice(0, maxLen - 1).replace(/[-/_]+$/, '')}\u2026`;
 }
 
+function formatBotLabelWithSuffix(handle: string, suffix: string, maxLen: number): string {
+  const full = `t.me/${handle}${suffix}`;
+  if (full.length <= maxLen) return full;
+  const minPrefixLen = 't.me/'.length + Math.min(handle.length, 4) + 1;
+  const safeSuffix = suffix.length <= maxLen - minPrefixLen ? suffix : truncateLabel(suffix, maxLen - minPrefixLen);
+  const handleChars = Math.max(0, maxLen - 't.me/'.length - 1 - safeSuffix.length);
+  if (handleChars === 0) return truncateLabel(full, maxLen);
+  return `t.me/${handle.slice(0, handleChars)}\u2026${safeSuffix}`;
+}
+
 function formatLinkLabel(url: URL, sameHostUrls: URL[]): string {
   const host = bareHostname(url.hostname);
   const segs = url.pathname.split('/').filter(Boolean);
 
   if (host === 't.me' || host === 'telegram.me') {
-    return segs[0] ? truncateLabel(`t.me/${segs[0]}`, MAX_LINK_LABEL_LEN) : 't.me';
+    const handle = segs[0];
+    if (!handle) return 't.me';
+    if (isTelegramBotHandle(handle)) {
+      const handleLower = handle.toLowerCase();
+      const sameBotPeers = sameHostUrls.filter(
+        peer => (peer.pathname.split('/').filter(Boolean)[0] ?? '').toLowerCase() === handleLower,
+      );
+      if (sameBotPeers.length > 1) {
+        const subpath = segs.slice(1).join('/');
+        const launchKey = ['start', 'startapp', 'startgroup', 'startchannel'].find(k => url.searchParams.has(k));
+        const paramPair = launchKey
+          ? ([launchKey, url.searchParams.get(launchKey) ?? ''] as const)
+          : [...url.searchParams.entries()][0];
+        const querySuffix = paramPair ? `?${paramPair[0]}=${paramPair[1]}` : '';
+        const suffix = `${subpath ? `/${subpath}` : ''}${querySuffix}`;
+        if (suffix) {
+          return formatBotLabelWithSuffix(handle, suffix, MAX_LINK_LABEL_LEN);
+        }
+      }
+    }
+    return truncateLabel(`t.me/${handle}`, MAX_LINK_LABEL_LEN);
   }
   if (host === 'x.com' || host === 'twitter.com') {
     if (segs[0] && segs[0].toLowerCase() !== 'i') {
@@ -398,10 +457,10 @@ export function prepareFeedLinks(
 
     const host = bareHostname(parsed.url.hostname);
     const segs = parsed.url.pathname.split('/').filter(Boolean);
-    const isTgBot = (host === 't.me' || host === 'telegram.me') && /bot$/i.test(segs[0] ?? '');
+    const isTgBot = (host === 't.me' || host === 'telegram.me') && isTelegramBotHandle(segs[0]);
     const isBioAggregator = BIO_AGGREGATOR_HOSTS.has(host);
     const isSocial = (SOCIAL_HOSTS.has(host) && !isTgBot) || isBioAggregator;
-    const isReferralPath = !isSocial && isReferralPathUrl(parsed.url.pathname);
+    const referralKind = isSocial ? null : referralPathKind(parsed.url.pathname);
     const matchesDomain = Boolean(item.domain && hostMatchesDomain(host, item.domain));
 
     const tier = !isSocial ? (rawLink.known ? 0 : matchesDomain ? 1 : 2) : 3;
@@ -412,7 +471,7 @@ export function prepareFeedLinks(
       known: rawLink.known === true,
       isSocial,
       isBioAggregator,
-      isReferralPath,
+      referralKind,
       tier,
       order,
     };
@@ -433,10 +492,20 @@ export function prepareFeedLinks(
     candidates = candidates.filter(c => !c.isBioAggregator);
   }
 
-  const hostsWithCleanPath = new Set(
-    candidates.filter(c => !c.isSocial && !c.isReferralPath).map(c => c.bareHost),
-  );
-  candidates = candidates.filter(c => !(c.isReferralPath && hostsWithCleanPath.has(c.bareHost)));
+  const cleanPathsByHost = new Map<string, Set<string>>();
+  for (const c of candidates) {
+    if (c.isSocial || c.referralKind !== null) continue;
+    let paths = cleanPathsByHost.get(c.bareHost);
+    if (!paths) {
+      paths = new Set<string>();
+      cleanPathsByHost.set(c.bareHost, paths);
+    }
+    paths.add(normalizePathname(c.url.pathname));
+  }
+  candidates = candidates.filter(c => {
+    if (!c.referralKind) return true;
+    return !cleanPathsByHost.get(c.bareHost)?.has(cleanEquivalentPath(c.referralKind));
+  });
 
   candidates.sort((a, b) => {
     if (a.tier !== b.tier) return a.tier - b.tier;
@@ -560,16 +629,122 @@ function hasSubstantialAscii(segment: string): boolean {
   return (letters?.length ?? 0) >= 12;
 }
 
+const EXPLICIT_TR_MARKER_RE = /^(?:\[?\s*(?:TR|T\u00fcrk\u00e7e|Turkish)\s*\]?\s*[:\-\u2013\u2014])/i;
+const WIRE_CAPS_HEADER_RE = /^\*[A-Z][A-Z0-9\s:,'"$%.-]{10,}/;
+const ANCHOR_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out',
+  'with', 'that', 'this', 'from', 'they', 'have', 'has', 'had', 'will', 'been', 'into', 'than',
+  'bir', 'veya', 'icin', 'ile', 'ama', 'fakat', 'ancak', 'gibi', 'daha', 'cok', 'olarak', 'gore',
+  'dedi', 'olan', 'yeni', 'son', 'kadar',
+]);
+
+function normalizeAsciiFold(input: string): string {
+  return input
+    .replace(/\u011e/g, 'G')
+    .replace(/\u011f/g, 'g')
+    .replace(/\u015e/g, 'S')
+    .replace(/\u015f/g, 's')
+    .replace(/\u0130/g, 'I')
+    .replace(/\u0131/g, 'i')
+    .replace(/[\u00d6\u00f6]/g, m => (m === '\u00d6' ? 'O' : 'o'))
+    .replace(/[\u00dc\u00fc]/g, m => (m === '\u00dc' ? 'U' : 'u'))
+    .replace(/[\u00c7\u00e7]/g, m => (m === '\u00c7' ? 'C' : 'c'));
+}
+
+function extractNumbers(text: string): Set<string> {
+  return new Set((text.match(/\d+(?:[.,]\d+)?/g) ?? []).map(n => n.replace(/,/g, '')));
+}
+
+function extractAcronyms(text: string): Set<string> {
+  const folded = normalizeAsciiFold(text);
+  const out = new Set<string>();
+  for (const m of folded.match(/\b[A-Z]{2,}(?='|\b)/g) ?? []) {
+    if (m !== 'TR') out.add(m);
+  }
+  return out;
+}
+
+function extractContentAnchors(text: string): string[] {
+  const cleaned = normalizeAsciiFold(text).toLowerCase();
+  const tokens = cleaned.match(/[a-z0-9]{2,}/g) ?? [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const tok of tokens) {
+    if (ANCHOR_STOP_WORDS.has(tok) || seen.has(tok)) continue;
+    if (/^(?:ye|ya|da|de|te|ta|nin|nun|in|un|den|dan|ten|tan)$/.test(tok)) continue;
+    seen.add(tok);
+    out.push(tok);
+  }
+  return out;
+}
+
+function isTurkishContentEquivalent(englishText: string, turkishSegment: string): boolean {
+  const enNums = extractNumbers(englishText);
+  const trNums = extractNumbers(turkishSegment);
+  for (const n of trNums) {
+    if (!enNums.has(n)) return false;
+  }
+  for (const n of enNums) {
+    if (!trNums.has(n)) return false;
+  }
+
+  const enAcronyms = extractAcronyms(englishText);
+  const trAcronyms = extractAcronyms(turkishSegment);
+  for (const acr of trAcronyms) {
+    if (!enAcronyms.has(acr)) return false;
+  }
+
+  const enAnchors = extractContentAnchors(englishText);
+  const trAnchors = extractContentAnchors(turkishSegment);
+  if (enAnchors.length === 0 || trAnchors.length === 0) return false;
+
+  const enSet = new Set(enAnchors);
+  let shared = 0;
+  for (const t of trAnchors) {
+    if (enSet.has(t)) {
+      shared += 1;
+      continue;
+    }
+    if (t.length >= 4 && enAnchors.some(e => e.length >= 4 && e.slice(0, 4) === t.slice(0, 4))) {
+      shared += 1;
+    }
+  }
+
+  const minLen = Math.min(enAnchors.length, trAnchors.length);
+  return shared >= 3 && shared / minLen >= 0.35 && shared / trAnchors.length >= 0.25;
+}
+
+function filterTurkishSegments(parts: string[], allowWireMirror = false): string[] | null {
+  const nonTurkish = parts.filter(p => !hasTurkishSignal(p));
+  if (nonTurkish.length === 0 || nonTurkish.length >= parts.length || !nonTurkish.some(hasSubstantialAscii)) {
+    return null;
+  }
+  const englishContext = nonTurkish.join(' ');
+  const isWireMirror = allowWireMirror && WIRE_CAPS_HEADER_RE.test(parts[0] ?? '');
+  let droppedAny = false;
+  const kept = parts.filter((part, idx) => {
+    if (!hasTurkishSignal(part)) return true;
+    const isTranslation =
+      EXPLICIT_TR_MARKER_RE.test(part) ||
+      (isWireMirror && idx > 0) ||
+      isTurkishContentEquivalent(englishContext, part);
+    if (isTranslation) {
+      droppedAny = true;
+      return false;
+    }
+    return true;
+  });
+  return droppedAny && kept.length > 0 ? kept : null;
+}
+
 function stripBilingualTurkishDuplicate(input: string): string {
   const lineParts = input
     .split(/\n+/)
     .map(p => p.trim())
     .filter(Boolean);
   if (lineParts.length >= 2) {
-    const nonTurkish = lineParts.filter(p => !hasTurkishSignal(p));
-    if (nonTurkish.length > 0 && nonTurkish.length < lineParts.length && nonTurkish.some(hasSubstantialAscii)) {
-      return nonTurkish.join(' ');
-    }
+    const kept = filterTurkishSegments(lineParts);
+    if (kept) return kept.join(' ');
   }
 
   const wireParts = input
@@ -577,10 +752,8 @@ function stripBilingualTurkishDuplicate(input: string): string {
     .map(p => p.trim())
     .filter(Boolean);
   if (wireParts.length >= 2) {
-    const nonTurkish = wireParts.filter(p => !hasTurkishSignal(p));
-    if (nonTurkish.length > 0 && nonTurkish.length < wireParts.length && nonTurkish.some(hasSubstantialAscii)) {
-      return nonTurkish.join(' ');
-    }
+    const kept = filterTurkishSegments(wireParts, true);
+    if (kept) return kept.join(' ');
   }
 
   const sentences = input
@@ -588,10 +761,8 @@ function stripBilingualTurkishDuplicate(input: string): string {
     .map(p => p.trim())
     .filter(Boolean);
   if (sentences.length >= 2) {
-    const nonTurkish = sentences.filter(s => !hasTurkishSignal(s));
-    if (nonTurkish.length > 0 && nonTurkish.length < sentences.length && nonTurkish.some(hasSubstantialAscii)) {
-      return nonTurkish.join(' ');
-    }
+    const kept = filterTurkishSegments(sentences);
+    if (kept) return kept.join(' ');
   }
 
   return input;

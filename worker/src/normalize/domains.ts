@@ -253,13 +253,29 @@ const CLEAN_SUBPATH_WORDS = new Set([
   'airdrop',
 ]);
 
-function isReferralPath(pathname: string): boolean {
+type ReferralPathKind = 'root' | 'join' | 'invite';
+
+function referralPathKind(pathname: string): ReferralPathKind | null {
   const refMatch = pathname.match(REFERRAL_CODE_PATH_RE);
-  if (refMatch) return !CLEAN_SUBPATH_WORDS.has(refMatch[1].toLowerCase());
+  if (refMatch) {
+    if (CLEAN_SUBPATH_WORDS.has(refMatch[1].toLowerCase())) return null;
+    return /^\/invite\//i.test(pathname) ? 'invite' : 'root';
+  }
   const joinMatch = pathname.match(JOIN_PATH_RE);
-  if (!joinMatch) return false;
+  if (!joinMatch) return null;
   const seg = joinMatch[1];
-  return /\d/.test(seg) || seg.length <= 3 || (/[A-Z]/.test(seg) && /[a-z]/.test(seg));
+  const isCode = /\d/.test(seg) || seg.length <= 3 || (/[A-Z]/.test(seg) && /[a-z]/.test(seg));
+  return isCode ? 'join' : null;
+}
+
+function cleanEquivalentPath(kind: ReferralPathKind): string {
+  if (kind === 'join') return '/join';
+  if (kind === 'invite') return '/invite';
+  return '/';
+}
+
+function normalizePathname(pathname: string): string {
+  return pathname.replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase() || '/';
 }
 
 function matchesDomainSet(domain: string, set: ReadonlySet<string>): boolean {
@@ -660,6 +676,75 @@ export interface SelectFeedLinksOptions {
 
 const MAX_CANONICAL_CANDIDATES = 40;
 
+interface RankedCandidate {
+  parts: CleanedUrlParts;
+  rank: number;
+  refKind: ReferralPathKind | null;
+  hostKey: string;
+  limitForHost: number;
+}
+
+function computeLinkRank(
+  parts: CleanedUrlParts,
+  projDom: string | undefined,
+  allKnownDomains?: ReadonlySet<string>,
+): number {
+  const { href: url, reg, pathname } = parts;
+  const known = Boolean(reg && allKnownDomains?.has(reg));
+  let rank = 0;
+  if (projDom && reg === projDom) rank += 100;
+  else if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) rank += 80;
+  else if (reg && isQuestDomain(reg)) rank += 50;
+  else if (reg === 'x.com' || reg === 'twitter.com') rank += 25;
+  else if (reg && URL_SHORTENERS[reg]) rank += 5;
+  else rank += 15;
+
+  if (known) rank += 10;
+  if (url.startsWith('https://')) rank += 4;
+  if (ACTIONABLE_PATH_RANK_RE.test(pathname.toLowerCase())) {
+    rank += 6;
+  }
+  return rank;
+}
+
+function effectiveRank(c: Pick<RankedCandidate, 'rank' | 'refKind'>): number {
+  return c.rank - (c.refKind ? 1 : 0);
+}
+
+function findWorstCandidate(
+  deduped: Map<string, RankedCandidate>,
+  hostBucketCounts: Map<string, number>,
+): { key: string; entry: RankedCandidate; isOver: boolean } | null {
+  let worstKey = '';
+  let worstEntry: RankedCandidate | null = null;
+  let worstOver = false;
+
+  for (const [key, entry] of deduped) {
+    const isOver = (hostBucketCounts.get(entry.hostKey) ?? 0) > entry.limitForHost;
+    if (!worstEntry) {
+      worstKey = key;
+      worstEntry = entry;
+      worstOver = isOver;
+      continue;
+    }
+    if (isOver !== worstOver) {
+      if (isOver) {
+        worstKey = key;
+        worstEntry = entry;
+        worstOver = true;
+      }
+      continue;
+    }
+    const diff = effectiveRank(entry) - effectiveRank(worstEntry);
+    if (diff < 0 || (diff === 0 && entry.parts.href.localeCompare(worstEntry.parts.href) > 0)) {
+      worstKey = key;
+      worstEntry = entry;
+      worstOver = isOver;
+    }
+  }
+  return worstEntry ? { key: worstKey, entry: worstEntry, isOver: worstOver } : null;
+}
+
 /**
  * Cleans, filters, deduplicates (including `http`/`https`, `www.`, and `/r/<code>`
  * referral twins), and orders links so user-facing link pills prioritize direct
@@ -667,69 +752,82 @@ const MAX_CANONICAL_CANDIDATES = 40;
  */
 export function selectFeedLinks(rawUrls: string[], opts: SelectFeedLinksOptions = {}): string[] {
   const maxLinks = opts.maxLinks ?? 6;
+  const projDom = opts.projectDomain?.toLowerCase();
   const lowerHandles = opts.sourceHandles
     ? new Set([...opts.sourceHandles].map(h => h.toLowerCase()))
     : undefined;
 
-  const deduped = new Map<string, CleanedUrlParts>();
+  const deduped = new Map<string, RankedCandidate>();
+  const hostBucketCounts = new Map<string, number>();
+
   for (const raw of rawUrls) {
     const parts = cleanUrlParts(raw);
     if (!parts) continue;
     if (isNoisyLinkParsed(parts.url, parts.host, parts.reg, lowerHandles)) continue;
+
+    const hostKey = parts.reg || parts.href;
+    const limitForHost = isSocialDomain(hostKey) ? 1 : 2;
+    const refKind = referralPathKind(parts.pathname);
+    const rank = computeLinkRank(parts, projDom, opts.allKnownDomains);
+    const candidate: RankedCandidate = { parts, rank, refKind, hostKey, limitForHost };
+
     const prev = deduped.get(parts.key);
     if (!prev) {
-      if (deduped.size >= MAX_CANONICAL_CANDIDATES) break;
-      deduped.set(parts.key, parts);
+      if (deduped.size >= MAX_CANONICAL_CANDIDATES) {
+        const worst = findWorstCandidate(deduped, hostBucketCounts);
+        if (!worst) continue;
+        const incomingCountAfterEvict =
+          (hostBucketCounts.get(hostKey) ?? 0) - (worst.entry.hostKey === hostKey ? 1 : 0);
+        const incomingWillOver = incomingCountAfterEvict >= limitForHost;
+        if (!worst.isOver && incomingWillOver) continue;
+        if (worst.isOver === incomingWillOver) {
+          const rankDiff = effectiveRank(candidate) - effectiveRank(worst.entry);
+          if (rankDiff < 0 || (rankDiff === 0 && candidate.parts.href.localeCompare(worst.entry.parts.href) >= 0)) {
+            continue;
+          }
+        }
+        deduped.delete(worst.key);
+        hostBucketCounts.set(worst.entry.hostKey, Math.max(0, (hostBucketCounts.get(worst.entry.hostKey) ?? 1) - 1));
+      }
+      deduped.set(parts.key, candidate);
+      hostBucketCounts.set(hostKey, (hostBucketCounts.get(hostKey) ?? 0) + 1);
       continue;
     }
-    const prevHttps = prev.href.startsWith('https://');
+
+    const prevHttps = prev.parts.href.startsWith('https://');
     const nextHttps = parts.href.startsWith('https://');
     if (nextHttps && !prevHttps) {
-      deduped.set(parts.key, parts);
-    } else if (nextHttps === prevHttps && prev.href.includes('://www.') && !parts.href.includes('://www.')) {
-      deduped.set(parts.key, parts);
+      deduped.set(parts.key, candidate);
+    } else if (nextHttps === prevHttps && prev.parts.href.includes('://www.') && !parts.href.includes('://www.')) {
+      deduped.set(parts.key, candidate);
     }
   }
 
-  const cleanHostSet = new Set<string>();
-  for (const parts of deduped.values()) {
-    if (!isReferralPath(parts.pathname)) {
-      cleanHostSet.add(parts.host);
+  const cleanPathsByHost = new Map<string, Set<string>>();
+  for (const entry of deduped.values()) {
+    if (entry.refKind === null) {
+      let paths = cleanPathsByHost.get(entry.parts.host);
+      if (!paths) {
+        paths = new Set<string>();
+        cleanPathsByHost.set(entry.parts.host, paths);
+      }
+      paths.add(normalizePathname(entry.parts.pathname));
     }
   }
 
-  // Collapse path-based referral links (`/r/<code>`, `/join/<code>`) when a clean
-  // non-referral URL on the same host already exists in the cluster, and pre-compute
-  // `{ url, rank, reg }` once before sorting (zero `new URL()` calls in comparator).
-  const projDom = opts.projectDomain?.toLowerCase();
+  // Collapse path-based referral links (`/r/<code>`, `/join/<code>`, `/invite/<code>`)
+  // ONLY when a retained non-referral URL provides the clean equivalent action on the same host.
   const seenRefHosts = new Set<string>();
   const ranked: { url: string; rank: number; reg: string }[] = [];
 
-  for (const parts of deduped.values()) {
-    if (isReferralPath(parts.pathname)) {
-      if (cleanHostSet.has(parts.host)) continue;
-      // Keep at most one referral link if no clean root exists.
+  for (const entry of deduped.values()) {
+    const { parts, rank, refKind } = entry;
+    if (refKind) {
+      if (cleanPathsByHost.get(parts.host)?.has(cleanEquivalentPath(refKind))) continue;
       if (seenRefHosts.has(parts.host)) continue;
       seenRefHosts.add(parts.host);
     }
-
-    const { href: url, reg, pathname } = parts;
-    const known = Boolean(reg && opts.allKnownDomains?.has(reg));
-    let rank = 0;
-    if (projDom && reg === projDom) rank += 100;
-    else if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) rank += 80;
-    else if (reg && isQuestDomain(reg)) rank += 50;
-    else if (reg === 'x.com' || reg === 'twitter.com') rank += 25;
-    else if (reg && URL_SHORTENERS[reg]) rank += 5;
-    else rank += 15;
-
-    if (known) rank += 10;
-    if (url.startsWith('https://')) rank += 4;
-    if (ACTIONABLE_PATH_RANK_RE.test(pathname.toLowerCase())) {
-      rank += 6;
-    }
-
-    ranked.push({ url, rank, reg });
+    ranked.push({ url: parts.href, rank, reg: parts.reg });
   }
 
   ranked.sort((a, b) => b.rank - a.rank || a.url.localeCompare(b.url));

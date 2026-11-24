@@ -240,7 +240,17 @@ export function truncateAtWordBoundary(text: string, maxLen = 195): string {
 // --- Drop Relevance Classification ---
 
 const HARD_WIRE_PREFIX_RE =
-  /^\s*(?:\*[A-Z]{2,}|(?:[\p{Emoji_Presentation}\p{Extended_Pictographic}]\uFE0F?\s*)*(?:JUST IN|BREAKING|LATEST|REGULATION|INSIGHT|BIG|UDDATE)\s*:)/iu;
+  /^\s*(?:[\p{Emoji_Presentation}\p{Extended_Pictographic}]\uFE0F?\s*)*(?:JUST IN|BREAKING|LATEST|REGULATION|INSIGHT|BIG|UDDATE)\s*:/iu;
+const HARD_WIRE_COLON_WIRE_RE = /^\s*\*[A-Z][A-Z0-9]{1,20}(?:\s+[A-Z0-9]{2,15})?\s*:/;
+const HARD_WIRE_CAPS_WIRE_RE = /^\s*\*[A-Z]{2,}(?:\s+[A-Z0-9$%.,'-]{2,}){2,}/;
+const ITALIC_SPAN_FIRST_LINE_RE = /^\s*\*[^*\n]+\S\*/;
+
+function isHardWirePrefix(text: string): boolean {
+  if (HARD_WIRE_PREFIX_RE.test(text) || HARD_WIRE_COLON_WIRE_RE.test(text)) {
+    return true;
+  }
+  return HARD_WIRE_CAPS_WIRE_RE.test(text) && !ITALIC_SPAN_FIRST_LINE_RE.test(text);
+}
 
 const WIRE_FOOTER_RE =
   /\bNews\s*\|\s*Markets\s*\|\s*YouTube\b|@(?:WatcherGuru|News_Crypto)\b/i;
@@ -327,7 +337,7 @@ export function classifyDropRelevance(input: DropRelevanceInput): DropRelevanceR
   if (HACK_NEWS_RE.test(text) && !hasActionableUrlPath && !hasQuestUrl) {
     return { isDrop: false, reason: 'hack-or-security-news' };
   }
-  if ((HARD_WIRE_PREFIX_RE.test(text) || WIRE_FOOTER_RE.test(text)) && !hasActionableUrlPath && !hasQuestUrl) {
+  if ((isHardWirePrefix(text) || WIRE_FOOTER_RE.test(text)) && !hasActionableUrlPath && !hasQuestUrl) {
     return { isDrop: false, reason: 'news-wire' };
   }
   if (hasNewsUrl && !hasProjectDomain && !hasActionableUrlPath && !hasQuestUrl) {

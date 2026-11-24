@@ -22,9 +22,9 @@ export const DRAINER_RE =
   /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}(?:connect (?:your )?wallet|verify (?:your )?wallet|claim[^.!?]{0,30}connect (?:your )?wallet)/i;
 
 // Crypto doubling / advance-fee scam phrasing ("send 100 USDT to receive 1000 back",
-// "double your ETH", "guaranteed 2x/5x/10x").
+// "double your ETH", "deposit ... 2x back", "guaranteed 2x return / 200% ROI").
 export const DOUBLING_SCAM_RE =
-  /\bsend\s+[\d,.]+\s*(?:k|m)?\s*\$?[a-z]{2,10}\b[^.!?]{0,60}\b(?:to\s+)?(?:receive|get)\s+[\d,.]+\s*(?:k|m)?(?:\s*\$?[a-z]{2,10})?\s*(?:back|in\s+return|instantly|immediately)\b|\bdouble\s+your\s+(?:crypto|btc|bitcoin|eth|ethereum|sol|solana|usdt|usdc|bnb|ton|tokens?|coins?|deposit|balance|funds|money|holdings)\b|\bguaranteed\s+(?:\d+(?:\.\d+)?x|\d{2,4}%\s*(?:return|profit|roi|daily))\b|\b\d+(?:\.\d+)?x\s+(?:return|profit|back|guaranteed)\b/i;
+  /\bsend\s+[\d,.]+\s*(?:k|m)?\s*\$?[a-z]{2,10}\b[^.!?]{0,60}\b(?:to\s+)?(?:receive|get)\s+[\d,.]+\s*(?:k|m)?(?:\s*\$?[a-z]{2,10})?\s*(?:back|in\s+return|instantly|immediately)\b|\bdouble\s+your\s+(?:crypto|btc|bitcoin|eth|ethereum|sol|solana|usdt|usdc|bnb|ton|tokens?|coins?|deposit|balance|funds|money|holdings)\b|\bguaranteed\s+(?:\d+(?:\.\d+)?x\s+(?:return|profit|roi|on\s+(?:your\s+)?(?:deposit|investment|crypto|btc|eth|sol|usdt|usdc|bnb|ton|funds|money))|\d{2,4}%\s*(?:return|profit|roi|daily))\b|\b(?:send|deposit|invest|transfer)\b[^.!?]{0,60}\b\d+(?:\.\d+)?x\s+(?:return|profit|back|guaranteed)\b|\b\d+(?:\.\d+)?x\s+(?:return|profit|back)\s+(?:on\s+(?:your\s+)?(?:deposit|investment|funds|money|crypto|btc|eth|sol|usdt|usdc|bnb|ton)|in\s+(?:crypto|btc|eth|sol|usdt|usdc|bnb|ton|cash|usd))\b|\b\d+(?:\.\d+)?x\s+(?:return|profit)\s+guaranteed\b/i;
 
 export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['galxe.com', 'Galxe'],

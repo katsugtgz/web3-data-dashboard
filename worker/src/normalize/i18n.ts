@@ -13,7 +13,7 @@ export const FORBIDDEN_CJK_RE =
 // Chinese airdrop channels (CG_yangmaoqianxian, pk_oa) without leaking CJK
 // literals into other worker/src modules.
 const CJK_DROP_SIGNAL_RE =
-  /空投|测试网|领水|交互|白名单|积分|签到|质押|铸造|节点|申领|盲盒|任务|资格查询|奖励池/;
+  /空投|测试网|測試網|领水|領水|交互|白名单|白名單|积分|積分|签到|簽到|质押|質押|铸造|鑄造|节点|節點|申领|申領|盲盒|任务|任務|资格查询|資格查詢|奖励池|獎勵池/;
 
 export function hasCjkDropSignal(value: string): boolean {
   return CJK_DROP_SIGNAL_RE.test(value);

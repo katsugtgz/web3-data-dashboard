@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import worker from '../src/index';
 import { createTestD1 } from './helpers';
 import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import {
@@ -241,6 +242,34 @@ describe('Domain classification & URL hygiene', () => {
     expect(selected.some(u => u.includes('linktr.ee'))).toBe(false);
     expect(selected.some(u => u.includes('x.com/search'))).toBe(false);
   });
+
+  test('selectFeedLinks does not discard higher-priority project links behind 40 X URLs and preserves /join/code alongside /docs', () => {
+    const xSpam = Array.from(
+      { length: 40 },
+      (_, i) => `https://x.com/user${i}/status/${2120000000000000000 + i}`,
+    );
+    const ranked = selectFeedLinks([...xSpam, 'https://novaprotocol.xyz/claim'], {
+      projectDomain: 'novaprotocol.xyz',
+      maxLinks: 6,
+    });
+    expect(ranked[0]).toBe('https://novaprotocol.xyz/claim');
+    expect(ranked).toHaveLength(2);
+
+    const joinWithDocs = selectFeedLinks(
+      ['https://example.com/join/AB12', 'https://example.com/docs'],
+      { projectDomain: 'example.com' },
+    );
+    expect(joinWithDocs).toEqual([
+      'https://example.com/docs',
+      'https://example.com/join/AB12',
+    ]);
+
+    const joinWithClean = selectFeedLinks(
+      ['https://example.com/join/AB12', 'https://example.com/join'],
+      { projectDomain: 'example.com' },
+    );
+    expect(joinWithClean).toEqual(['https://example.com/join']);
+  });
 });
 
 describe('Drop relevance classifier — real production live & snapshot regression cases', () => {
@@ -443,6 +472,60 @@ describe('Drop relevance classifier — real production live & snapshot regressi
       expect(parsed.isRelevantDrop).toBe(true);
     }
   });
+
+  test('recognizes both Simplified and Traditional Chinese drop terms without relying on URL alone', () => {
+    const homepageOnly = parseDropPost('Nova https://novaprotocol.xyz/');
+    expect(
+      classifyDropRelevance({
+        text: 'Nova https://novaprotocol.xyz/',
+        urls: homepageOnly.urls,
+        projectDomain: homepageOnly.projectDomain,
+        taskTypes: homepageOnly.taskTypes,
+      }).isDrop,
+    ).toBe(false);
+
+    const simplified = 'Nova \u6d4b\u8bd5\u7f51\u5df2\u4e0a\u7ebf https://novaprotocol.xyz/';
+    const parsedSimp = parseDropPost(simplified);
+    const resSimp = classifyDropRelevance({
+      text: simplified,
+      urls: parsedSimp.urls,
+      projectDomain: parsedSimp.projectDomain,
+      taskTypes: parsedSimp.taskTypes,
+    });
+    expect(resSimp).toEqual({ isDrop: true, reason: 'drop-keyword' });
+
+    const traditional = 'Nova \u6e2c\u8a66\u7db2\u5df2\u4e0a\u7dda https://novaprotocol.xyz/';
+    const parsedTrad = parseDropPost(traditional);
+    const resTrad = classifyDropRelevance({
+      text: traditional,
+      urls: parsedTrad.urls,
+      projectDomain: parsedTrad.projectDomain,
+      taskTypes: parsedTrad.taskTypes,
+    });
+    expect(resTrad).toEqual({ isDrop: true, reason: 'drop-keyword' });
+  });
+
+  test('does not reject italicized announcements as wire prefixes while keeping genuine wire rejection', () => {
+    const italicLower = parseDropPost('*Nova testnet is live* https://novaprotocol.xyz/');
+    expect(italicLower.isRelevantDrop).toBe(true);
+
+    const italicCaps = parseDropPost('*NOVA TESTNET IS LIVE* https://novaprotocol.xyz/');
+    expect(italicCaps.isRelevantDrop).toBe(true);
+
+    const wireColon = classifyDropRelevance({
+      text: '*NVIDIA: earnings beat expectations in Q3',
+      urls: [],
+      taskTypes: ['other'],
+    });
+    expect(wireColon).toEqual({ isDrop: false, reason: 'news-wire' });
+
+    const wireNoColon = classifyDropRelevance({
+      text: "*NVIDIA BOARD IS NOT CONSIDERING ANY MERGER ACCORDING TO SOURCES *Bir kaynak CNBC'ye konustu",
+      urls: [],
+      taskTypes: ['other'],
+    });
+    expect(wireNoColon).toEqual({ isDrop: false, reason: 'news-wire' });
+  });
 });
 
 describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n handling', () => {
@@ -526,7 +609,7 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
 });
 
 describe('Safety precision — doubling scams, raw IP links, exact http twin suppression, and shortener retention', () => {
-  test('M1: flags crypto doubling / advance-fee scams as risk', () => {
+  test('M1: flags crypto doubling / advance-fee scams as risk and leaves points multipliers ok', () => {
     const res = evaluateSafety({
       urls: ['https://promo-claim.xyz/'],
       text: 'Send 100 USDT to receive 1000 back, airdrop guaranteed',
@@ -536,6 +619,27 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     });
     expect(res.level).toBe('risk');
     expect(res.reasons).toContain('Crypto doubling / advance-fee scam phrasing');
+
+    const depositMultiplier = evaluateSafety({
+      urls: ['https://promo-claim.xyz/'],
+      text: 'Deposit 1 ETH and get 2x back instantly',
+      knownProjectDomains: new Map(),
+      trustMax: 0.8,
+      sourceCount: 2,
+    });
+    expect(depositMultiplier.level).toBe('risk');
+    expect(depositMultiplier.reasons).toContain('Crypto doubling / advance-fee scam phrasing');
+
+    const pointsMultiplier = evaluateSafety({
+      domain: 'novaprotocol.xyz',
+      urls: ['https://novaprotocol.xyz/quest'],
+      text: 'Nova testnet quest: earn 2x back in points on each completed task',
+      knownProjectDomains: new Map([['novaprotocol.xyz', 'Nova Protocol']]),
+      trustMax: 0.8,
+      sourceCount: 2,
+    });
+    expect(pointsMultiplier.level).toBe('ok');
+    expect(pointsMultiplier.reasons).toEqual([]);
   });
 
   test('M2: flags non-DNS raw IP links as risk and strips from display links while benign DNS IP stays silent', async () => {
@@ -1081,6 +1185,576 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .first<{ risk_level: string; risk_reasons: string }>();
     expect(row?.risk_level).toBe('ok');
     expect(JSON.parse(row?.risk_reasons ?? '[]')).toEqual([]);
+  });
+
+  test('base ID occupancy and identity-filtered candidates stay accurate past 200 unrelated domainless clusters', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    // 1. Seed older base cluster for "GammaQuest" 10 days before `now` (out of 3d window).
+    const oldTs = now - 10 * 86_400_000;
+    const baseOld = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:gq_old',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/gq_old',
+        postedAt: oldTs,
+        text: 'GammaQuest testnet campaign live on Base',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      oldTs,
+    );
+
+    // 2. Seed an in-window cluster for "BetaQuest" (1 hour before `now`).
+    const betaBase = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:bq_1',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/bq_1',
+        postedAt: now - 3_600_000,
+        text: 'BetaQuest testnet campaign live on Base',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now - 3_600_000,
+    );
+
+    // 3. Insert 205 newer unrelated domainless clusters within the 3d window so LIMIT 200 would fill up.
+    for (let i = 0; i < 205; i++) {
+      const ts = now - i * 1_000;
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop, project_key)
+           VALUES (?1, ?2, NULL, NULL, '[]', '["testnet"]', 'Unrelated testnet', 'rule', 'ok', '[]', 0.5, 1, ?3, ?3, 1, ?4)`,
+        )
+        .bind(`filler_${i}`, `UnrelatedProto${i}`, ts, `unrelatedproto${i}`)
+        .run();
+    }
+
+    // 4. Ingest new "GammaQuest" post at `now`: must detect out-of-window base row and NOT merge into `baseOld`.
+    const gammaNew = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:gq_new',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/gq_new',
+        postedAt: now,
+        text: 'GammaQuest Season 2 airdrop claim live',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(gammaNew.clusterId).not.toBe(baseOld.clusterId);
+
+    // 5. Ingest follow-up "BetaQuest" post at `now`: identity filter runs before LIMIT 200 so it STILL merges.
+    const betaFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:bq_2',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/bq_2',
+        postedAt: now,
+        text: 'BetaQuest reminder complete testnet tasks',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(betaFollow.clusterId).toBe(betaBase.clusterId);
+  });
+
+  test('concurrent fallback ingests reserve targets atomically for both project and ticker clusters (in-process & cross-isolate)', async () => {
+    const { db, sqlite } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+      )
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    // A. Concurrent project fallback posts 8 days apart -> MUST stay separate.
+    const [projA, projB] = await Promise.all([
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'telegram:ch1:conc_p1',
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: 'https://t.me/ch1/conc_p1',
+          postedAt: now - 8 * 86_400_000,
+          text: 'ParallelProto testnet quest live now',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'x:ch2:conc_p2',
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: 'https://x.com/ch2/status/conc_p2',
+          postedAt: now,
+          text: 'ParallelProto Season 2 airdrop claim open',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+    ]);
+    expect(projA.clusterId).not.toBe(projB.clusterId);
+
+    // B. Concurrent ticker fallback posts 8 days apart -> MUST stay separate; 2h apart -> MUST merge.
+    const [tickOld, tickNew] = await Promise.all([
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'telegram:ch1:conc_t1',
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: 'https://t.me/ch1/conc_t1',
+          postedAt: now - 8 * 86_400_000,
+          text: 'TickerSplit $TKSP testnet live',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'x:ch2:conc_t2',
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: 'https://x.com/ch2/status/conc_t2',
+          postedAt: now,
+          text: 'TickerSplit $TKSP claim live',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+    ]);
+    expect(tickOld.clusterId).not.toBe(tickNew.clusterId);
+
+    const [tickCloseA, tickCloseB] = await Promise.all([
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'telegram:ch1:conc_m1',
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: 'https://t.me/ch1/conc_m1',
+          postedAt: now - 7_200_000,
+          text: 'MergeTicker $MRGT testnet quest live',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: 'x:ch2:conc_m2',
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: 'https://x.com/ch2/status/conc_m2',
+          postedAt: now,
+          text: 'MergeTicker $MRGT faucet claim open',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+    ]);
+    expect(tickCloseA.clusterId).toBe(tickCloseB.clusterId);
+    const mergedRow = await db
+      .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+      .bind(tickCloseA.clusterId)
+      .first<{ source_count: number }>();
+    expect(mergedRow?.source_count).toBe(2);
+
+    // C. Cross-isolate simulation: two separate D1Database handles race past resolveClusterId before either writes.
+    let barrierHits = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>(resolve => {
+      releaseBarrier = resolve;
+    });
+    const wrapIsolateDb = (delayWrite: boolean): D1Database =>
+      ({
+        ...db,
+        prepare(sql: string) {
+          const stmt = db.prepare(sql);
+          if (/SELECT id, project.*FROM clusters WHERE id = \?1/i.test(sql)) {
+            return {
+              bind(...args: unknown[]) {
+                const bound = stmt.bind(...args);
+                return {
+                  ...bound,
+                  async first<T>() {
+                    const row = await bound.first<T>();
+                    if (!row) {
+                      barrierHits += 1;
+                      if (barrierHits === 2) {
+                        releaseBarrier();
+                      } else if (barrierHits < 2) {
+                        await barrier;
+                      }
+                    }
+                    return row;
+                  },
+                };
+              },
+            };
+          }
+          if (delayWrite && /^\s*INSERT INTO clusters/i.test(sql)) {
+            return {
+              bind(...args: unknown[]) {
+                const bound = stmt.bind(...args);
+                return {
+                  ...bound,
+                  async run() {
+                    await new Promise(r => setTimeout(r, 10));
+                    return bound.run();
+                  },
+                };
+              },
+            };
+          }
+          return stmt;
+        },
+      }) as unknown as D1Database;
+
+    const dbIso1 = wrapIsolateDb(false);
+    const dbIso2 = wrapIsolateDb(true);
+    const [isoFar1, isoFar2] = await Promise.all([
+      ingestPostIntoCluster(
+        dbIso1,
+        {
+          postId: 'telegram:ch1:iso_1',
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: 'https://t.me/ch1/iso_1',
+          postedAt: now - 8 * 86_400_000,
+          text: 'CrossIsoProto testnet campaign live',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+      ingestPostIntoCluster(
+        dbIso2,
+        {
+          postId: 'x:ch2:iso_2',
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: 'https://x.com/ch2/status/iso_2',
+          postedAt: now,
+          text: 'CrossIsoProto Season 2 claim live',
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      ),
+    ]);
+    expect(isoFar1.clusterId).not.toBe(isoFar2.clusterId);
+    const isoCount = sqlite
+      .query(`SELECT COUNT(*) AS n FROM clusters WHERE project = 'CrossIsoProto'`)
+      .get() as { n: number };
+    expect(isoCount.n).toBe(2);
+  });
+
+  test('reuses stored posts.cluster_id on retry and completes missing cluster row without touching competing cluster', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+      )
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const originalClusterId = 'retry_unwritten_cluster_id';
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('telegram:ch1:retry1', 'telegram:ch1', 'https://t.me/ch1/retry1', ?1, 'ReplayProto testnet airdrop live', '[]', ?2, ?1)`,
+      )
+      .bind(now - 600_000, originalClusterId)
+      .run();
+
+    // Another source creates a nearby cluster while originalClusterId has no cluster row yet.
+    const competing = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'x:ch2:competing1',
+        sourceId: 'x:ch2',
+        sourceTrust: 0.8,
+        postUrl: 'https://x.com/ch2/status/competing1',
+        postedAt: now,
+        text: 'ReplayProto testnet quest live',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(competing.clusterId).not.toBe(originalClusterId);
+
+    const retryRes = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:retry1',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/retry1',
+        postedAt: now - 600_000,
+        text: 'ReplayProto testnet airdrop live',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(retryRes.clusterId).toBe(originalClusterId);
+
+    const createdRow = await db
+      .prepare('SELECT id, source_count FROM clusters WHERE id = ?1')
+      .bind(originalClusterId)
+      .first<{ id: string; source_count: number }>();
+    expect(createdRow?.id).toBe(originalClusterId);
+    expect(createdRow?.source_count).toBe(1);
+
+    const competingRow = await db
+      .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+      .bind(competing.clusterId)
+      .first<{ source_count: number }>();
+    expect(competingRow?.source_count).toBe(1);
+  });
+
+  test('returns continuation cursor when 500 legacy noise rows exhaust scan budget and reaches drops past 500th row', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+
+    // Seed 500 high-score legacy noise rows (5 full batches of 100).
+    for (let i = 0; i < 500; i++) {
+      const cid = `scan_noise_${String(i).padStart(3, '0')}`;
+      const ts = now - i * 1_000;
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+           VALUES (?1, 'Noise', NULL, NULL, '[]', '["other"]', 'Bitcoin Drops Below $60,000', 'rule', 'ok', '[]', 0.99, 3, ?2, ?2, NULL)`,
+        )
+        .bind(cid, ts)
+        .run();
+      await db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:ch1', ?2, ?3, 'Bitcoin Drops Below $60,000', '[]', ?4, ?3)`,
+        )
+        .bind(`p_${cid}`, `https://t.me/ch1/sn_${i}`, ts, cid)
+        .run();
+    }
+
+    // Seed 5 real drops ranked after the 500th row.
+    const expectedIds: string[] = [];
+    for (let j = 0; j < 5; j++) {
+      const cid = `beyond_budget_${j}`;
+      expectedIds.push(cid);
+      const ts = now - 900_000 - j * 1_000;
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+           VALUES (?1, ?2, NULL, ?3, '["Base"]', '["testnet"]', 'Testnet airdrop live on Base', 'rule', 'ok', '[]', 0.45, 1, ?4, ?4, 1)`,
+        )
+        .bind(cid, `BeyondProto${j}`, `beyond${j}.xyz`, ts)
+        .run();
+      await db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:ch1', ?2, ?3, 'Testnet airdrop live on Base', ?4, ?5, ?3)`,
+        )
+        .bind(`p_${cid}`, `https://t.me/ch1/by_${j}`, ts, JSON.stringify([`https://beyond${j}.xyz/testnet`]), cid)
+        .run();
+    }
+
+    const page1 = await queryFeed(db, new Set(), { sort: 'score', limit: 20 });
+    expect(page1.items).toEqual([]);
+    expect(page1.cursor).toBeTruthy();
+
+    const page2 = await queryFeed(db, new Set(), { sort: 'score', limit: 20, cursor: page1.cursor });
+    expect(page2.items.map(i => i.id)).toEqual(expectedIds);
+    expect(page2.cursor).toBeUndefined();
+
+    const newPage1 = await queryFeed(db, new Set(), { sort: 'new', limit: 20 });
+    expect(newPage1.items).toEqual([]);
+    expect(newPage1.cursor).toBeTruthy();
+
+    const newPage2 = await queryFeed(db, new Set(), { sort: 'new', limit: 20, cursor: newPage1.cursor });
+    expect(newPage2.items.map(i => i.id)).toEqual(expectedIds);
+    expect(newPage2.cursor).toBeUndefined();
+
+    // Verify /feed.json?cursor=... worker handler accepts cursor cleanly.
+    const g = globalThis as unknown as { caches?: CacheStorage };
+    const hadCaches = 'caches' in g;
+    const prevCaches = g.caches;
+    const store = new Map<string, Response>();
+    g.caches = {
+      default: {
+        async match(req: RequestInfo | URL) {
+          const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+          return store.get(key)?.clone();
+        },
+        async put(req: RequestInfo | URL, res: Response) {
+          const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+          store.set(key, res.clone());
+        },
+      },
+    } as unknown as CacheStorage;
+    try {
+      const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+      const r1 = await worker.fetch(new Request('https://radar.test/feed.json'), { DB: db }, ctx);
+      const b1 = (await r1.json()) as { items: unknown[]; cursor?: string };
+      expect(b1.items).toEqual([]);
+      expect(b1.cursor).toBeTruthy();
+
+      const r2 = await worker.fetch(
+        new Request(`https://radar.test/feed.json?cursor=${encodeURIComponent(b1.cursor!)}`),
+        { DB: db },
+        ctx,
+      );
+      const b2 = (await r2.json()) as { items: { id: string }[]; cursor?: string };
+      expect(b2.items.map(i => i.id)).toEqual(expectedIds);
+      expect(b2.cursor).toBeUndefined();
+    } finally {
+      if (hadCaches) g.caches = prevCaches;
+      else delete g.caches;
+    }
+  });
+
+  test('classifies legacy null-verdict rows using complete post text beyond 1200 chars and beyond 3 posts while trusting persisted is_drop = 1', async () => {
+    const { db, queries } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+
+    // 1. Legacy row whose only drop signal ("airdrop") appears after char 1,300 (no actionable URL).
+    const longIntro = 'Protocol architecture overview and community update. '.repeat(30); // > 1,500 chars
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('legacy_tail_kw', 'LongTailProto', NULL, NULL, '[]', '["other"]', 'LongTailProto: other', 'rule', 'ok', '[]', 0.8, 1, ?1, ?1, NULL)`,
+      )
+      .bind(now - 1_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_tail', 'telegram:ch1', 'https://t.me/ch1/tail', ?1, ?2, '[]', 'legacy_tail_kw', ?1)`,
+      )
+      .bind(now - 1_000, `${longIntro} Airdrop claim opens next week.`)
+      .run();
+
+    // 2. Legacy row with 4 posts where only the 4th (oldest) post contains the drop keyword.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('legacy_4th_post', 'FourthPostProto', NULL, NULL, '[]', '["other"]', 'FourthPostProto: other', 'rule', 'ok', '[]', 0.75, 1, ?1, ?2, NULL)`,
+      )
+      .bind(now - 5_000, now - 2_000)
+      .run();
+    for (let k = 0; k < 4; k++) {
+      const isOldestWithSignal = k === 3;
+      await db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:ch1', ?2, ?3, ?4, '[]', 'legacy_4th_post', ?3)`,
+        )
+        .bind(
+          `p_4th_${k}`,
+          `https://t.me/ch1/4th_${k}`,
+          now - (k + 2) * 1_000,
+          isOldestWithSignal ? 'FourthPostProto testnet faucet live now' : 'FourthPostProto community update',
+        )
+        .run();
+    }
+
+    // 3. Persisted is_drop = 1 cluster with no legacy rows should NOT query p.text.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('persisted_only', 'PersistedProto', NULL, 'persisted.xyz', '[]', '["testnet"]', 'PersistedProto: testnet', 'rule', 'ok', '[]', 0.7, 1, ?1, ?1, 1)`,
+      )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_persisted', 'telegram:ch1', 'https://t.me/ch1/persisted', ?1, 'Non-drop reminder', '["https://persisted.xyz/"]', 'persisted_only', ?1)`,
+      )
+      .bind(now)
+      .run();
+
+    const feed = await queryFeed(db, new Set(), { risk: 'include' });
+    const ids = feed.items.map(i => i.id);
+    expect(ids).toContain('legacy_tail_kw');
+    expect(ids).toContain('legacy_4th_post');
+    expect(ids).toContain('persisted_only');
+
+    // Verify ordinary reads with zero legacy rows do not select p.text.
+    await db.prepare(`UPDATE clusters SET is_drop = 1 WHERE is_drop IS NULL`).run();
+    const beforeNormal = queries.length;
+    await queryFeed(db, new Set(), { risk: 'include' });
+    const normalQueries = queries.slice(beforeNormal);
+    expect(normalQueries.some(q => /\bp\.text\b/i.test(q))).toBe(false);
   });
 });
 

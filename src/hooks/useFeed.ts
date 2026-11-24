@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedResponse } from '../../shared/types';
-import { API_BASE, getJson } from '../lib/api';
+import { API_BASE } from '../lib/api';
+import { fetchFeedPages } from '../lib/feedFetch';
 import { mergeVisibleUpdates, selectPending } from '../lib/feedMerge';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
@@ -55,7 +56,7 @@ export function useFeed(): FeedState {
     const { signal, skipped } = poll.beginRequest(mode);
     if (skipped) return;
 
-    getJson<FeedResponse>('/feed.json', etagRef.current, signal)
+    fetchFeedPages(etagRef.current, signal)
       .then(res => {
         if (signal.aborted) return;
         poll.settle();
