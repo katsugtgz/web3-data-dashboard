@@ -72,7 +72,6 @@ export async function fetchFeedPages(
   let nextCursor: string | undefined = options?.startCursor;
   let usedContinuation = Boolean(options?.startCursor);
   let firstEtag: string | null = null;
-  let fellBackToSnapshot = false;
 
   if (!options?.startCursor) {
     const first = await fetcher('/feed.json', etag, signal);
@@ -103,8 +102,9 @@ export async function fetchFeedPages(
     const nextPath = buildCursorPath(nextCursor, remaining);
     const nextRes = await fetcher(nextPath, null, signal);
     if (nextRes.status !== 200 || nextRes.source !== 'api') {
-      fellBackToSnapshot = true;
-      nextCursor = undefined;
+      // Preserve the unfinished cursor when a continuation request falls back
+      // so callers can recognize an incomplete scan.
+      seenCursors.delete(nextCursor);
       break;
     }
     if (nextRes.body.generatedAt > generatedAt) {
@@ -115,9 +115,7 @@ export async function fetchFeedPages(
   }
 
   const preservedCursor =
-    !fellBackToSnapshot && merged.length < limit && nextCursor && !seenCursors.has(nextCursor)
-      ? nextCursor
-      : undefined;
+    merged.length < limit && nextCursor && !seenCursors.has(nextCursor) ? nextCursor : undefined;
 
   return {
     status: 200,
@@ -202,7 +200,6 @@ export function createFeedSession(
       let usedContinuation = active?.usedContinuation ?? false;
       let firstEtag = active?.firstEtag ?? null;
       let nextCursor: string | undefined = active?.cursor;
-      let fellBack = false;
 
       if (!active) {
         const root = await fetchPageWithCache('/feed.json', signal, nextPages);
@@ -237,11 +234,12 @@ export function createFeedSession(
         const pagePath = buildCursorPath(nextCursor, remaining);
         const page = await fetchPageWithCache(pagePath, signal, nextPages);
         if (page.kind === 'fallback') {
-          fellBack = true;
-          nextCursor = undefined;
           cachedPages = new Map();
           pendingResume = null;
-          break;
+          if (page.res.status === 200 && page.res.source === 'snapshot') {
+            return page.res;
+          }
+          throw new Error('Feed continuation failed');
         }
 
         anyModified = anyModified || page.modified;
@@ -253,9 +251,7 @@ export function createFeedSession(
       }
 
       const preservedCursor =
-        !fellBack && merged.length < limit && nextCursor && !seenCursors.has(nextCursor)
-          ? nextCursor
-          : undefined;
+        merged.length < limit && nextCursor && !seenCursors.has(nextCursor) ? nextCursor : undefined;
 
       if (preservedCursor) {
         pendingResume = {
@@ -282,11 +278,9 @@ export function createFeedSession(
       }
 
       pendingResume = null;
-      if (!fellBack) {
-        cachedPages = nextPages;
-        if (!anyModified && !active) {
-          return { status: 304 };
-        }
+      cachedPages = nextPages;
+      if (!anyModified && !active) {
+        return { status: 304 };
       }
 
       return {
@@ -295,7 +289,7 @@ export function createFeedSession(
           generatedAt,
           items: merged,
         },
-        etag: !fellBack && !usedContinuation ? firstEtag : null,
+        etag: !usedContinuation ? firstEtag : null,
         source: 'api',
       };
     },

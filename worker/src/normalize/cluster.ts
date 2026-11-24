@@ -598,20 +598,38 @@ export async function ingestPostIntoCluster(
       const isDropFlag = parsed.isRelevantDrop ? 1 : 0;
 
       if (existing) {
-        if (
-          fallbackIdentity &&
-          (input.postedAt < existing.first_seen - fallbackIdentity.windowMs ||
-            input.postedAt > existing.last_seen + fallbackIdentity.windowMs)
-        ) {
-          rejectedClusterId = clusterId;
-          if (attempt < maxAttempts - 1) continue;
-          throw new Error(`Fallback cluster window conflict exhausted for ${clusterId}`);
+        if (fallbackIdentity) {
+          const inDirectWindow =
+            input.postedAt >= existing.first_seen - fallbackIdentity.windowMs &&
+            input.postedAt <= existing.last_seen + fallbackIdentity.windowMs;
+          // Query fallback_windows strictly after reading `existing` so any
+          // concurrent writer's reservation expansion is guaranteed visible.
+          const reservedWin = !inDirectWindow
+            ? await db
+                .prepare(
+                  'SELECT first_seen, last_seen FROM fallback_windows WHERE identity_key = ?1 AND cluster_id = ?2',
+                )
+                .bind(fallbackIdentity.key, clusterId)
+                .first<{ first_seen: number; last_seen: number }>()
+            : null;
+          const inBridgedWindow = Boolean(
+            reservedWin &&
+              input.postedAt >= reservedWin.first_seen &&
+              input.postedAt <= reservedWin.last_seen &&
+              existing.first_seen >= reservedWin.first_seen &&
+              existing.last_seen <= reservedWin.last_seen,
+          );
+          if (!inDirectWindow && !inBridgedWindow) {
+            rejectedClusterId = clusterId;
+            if (attempt < maxAttempts - 1) continue;
+            throw new Error(`Fallback cluster window conflict exhausted for ${clusterId}`);
+          }
         }
 
         // Merge against the STORED row, not the stale in-memory `existing` read:
         // a concurrent ingest may have escalated risk between our SELECT and this
         // UPDATE, and a plain `risk_level = ?9` would silently downgrade it.
-        // Also enforce sliding-window bounds when updating fallback clusters.
+        // Also enforce sliding-window (or coordinated fallback_windows bridge) bounds.
         const updateRes = await db
           .prepare(
             `UPDATE clusters SET
@@ -678,7 +696,22 @@ export async function ingestPostIntoCluster(
                is_drop = CASE WHEN clusters.is_drop = 1 OR ?19 = 1 THEN 1 ELSE COALESCE(clusters.is_drop, ?19) END,
                project_key = COALESCE(clusters.project_key, ?21)
              WHERE id = ?1
-               AND (?22 IS NULL OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22))`,
+               AND (
+                 ?22 IS NULL
+                 OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22)
+                 OR (
+                   ?24 IS NOT NULL
+                   AND EXISTS (
+                     SELECT 1 FROM fallback_windows fw
+                     WHERE fw.identity_key = ?24
+                       AND fw.cluster_id = clusters.id
+                       AND ?23 >= fw.first_seen
+                       AND ?23 <= fw.last_seen
+                       AND clusters.first_seen >= fw.first_seen
+                       AND clusters.last_seen <= fw.last_seen
+                   )
+                 )
+               )`,
           )
           .bind(
             clusterId,
@@ -704,6 +737,7 @@ export async function ingestPostIntoCluster(
             projectKey,
             fallbackIdentity?.windowMs ?? null,
             Number.isFinite(input.postedAt) ? input.postedAt : null,
+            fallbackIdentity?.key ?? null,
           )
           .run();
 
@@ -782,7 +816,20 @@ export async function ingestPostIntoCluster(
                is_drop = CASE WHEN clusters.is_drop = 1 OR excluded.is_drop = 1 THEN 1 ELSE COALESCE(clusters.is_drop, excluded.is_drop) END,
                trust_max = MAX(clusters.trust_max, excluded.trust_max),
                project_key = COALESCE(clusters.project_key, excluded.project_key)
-             WHERE ?22 IS NULL OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22)`,
+             WHERE ?22 IS NULL
+                OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22)
+                OR (
+                  ?24 IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM fallback_windows fw
+                    WHERE fw.identity_key = ?24
+                      AND fw.cluster_id = clusters.id
+                      AND ?23 >= fw.first_seen
+                      AND ?23 <= fw.last_seen
+                      AND clusters.first_seen >= fw.first_seen
+                      AND clusters.last_seen <= fw.last_seen
+                  )
+                )`,
           )
           .bind(
             clusterId,
@@ -808,6 +855,7 @@ export async function ingestPostIntoCluster(
             projectKey,
             fallbackIdentity?.windowMs ?? null,
             Number.isFinite(input.postedAt) ? input.postedAt : null,
+            fallbackIdentity?.key ?? null,
           )
           .run();
 

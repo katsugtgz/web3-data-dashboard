@@ -1481,7 +1481,8 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .prepare(
         `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
          VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
-                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1),
+                ('telegram:ch3', 'telegram', 'ch3', 'en', 0.8, 1)`,
       )
       .run();
     const surfIndex = { byDomain: new Map(), byTicker: new Map() };
@@ -1702,7 +1703,8 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .prepare(
         `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
          VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
-                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1),
+                ('telegram:ch3', 'telegram', 'ch3', 'en', 0.8, 1)`,
       )
       .run();
     const surfIndex = { byDomain: new Map(), byTicker: new Map() };
@@ -2194,6 +2196,275 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
         .bind(resC.clusterId)
         .first<{ source_count: number }>();
       expect(cRow?.source_count).toBe(1);
+
+      // Schedule 4: Posts A (day 0), B (mid-window bridging), and C (past direct window from A)
+      // reserve in A -> B -> C order, then C writes `clusters` first while A and B wait.
+      // A (reading C's cluster) MUST still merge into C's cluster via fallback_windows bridge,
+      // and A, B, C MUST all land on the same cluster.
+      const s4Proj = `BridgeWrite${s.kind === 'ticker' ? 'Tick' : 'Proj'}`;
+      const s4Ticker = s.kind === 'ticker' ? 'BRWT' : undefined;
+      const midOffset = s.kind === 'ticker' ? 5 * 86_400_000 : 2 * 86_400_000;
+      const farOffset = 2 * midOffset;
+      const tA = now;
+      const tB = now + midOffset;
+      const tC = now + farOffset;
+      const s4AText = s4Ticker ? `${s4Proj} $${s4Ticker} Phase 1 testnet live` : `${s4Proj} Phase 1 testnet live`;
+      const s4BText = s4Ticker ? `${s4Proj} $${s4Ticker} Phase 2 claim live` : `${s4Proj} Phase 2 claim live`;
+      const s4CText = s4Ticker ? `${s4Proj} $${s4Ticker} Phase 3 waitlist live` : `${s4Proj} Phase 3 waitlist live`;
+
+      const s4BaseId = await computeClusterId(undefined, s4Ticker, s4Proj, 's4_probe', tA);
+      let s4Checked = 0;
+      let releaseS4AllChecked!: () => void;
+      const s4AllChecked = new Promise<void>(resolve => {
+        releaseS4AllChecked = resolve;
+      });
+      let releaseS4AReserved!: () => void;
+      const s4AReserved = new Promise<void>(resolve => {
+        releaseS4AReserved = resolve;
+      });
+      let releaseS4BReserved!: () => void;
+      const s4BReserved = new Promise<void>(resolve => {
+        releaseS4BReserved = resolve;
+      });
+      let releaseS4CWrote!: () => void;
+      const s4CWrote = new Promise<void>(resolve => {
+        releaseS4CWrote = resolve;
+      });
+      let releaseS4ADone!: () => void;
+      const s4ADone = new Promise<void>(resolve => {
+        releaseS4ADone = resolve;
+      });
+
+      const makeBridgeWriteDb = (role: 'A' | 'B' | 'C'): D1Database => {
+        let checkedOnce = false;
+        let reservedGateDone = false;
+        let existingGateDone = false;
+        let wroteGateDone = false;
+        return {
+          ...db,
+          prepare(sql: string) {
+            const stmt = db.prepare(sql);
+            if (
+              /SELECT id, project, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql) ||
+              /SELECT id, project, ticker, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql)
+            ) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      const row = await bound.first<T>();
+                      if (!checkedOnce && args[0] === s4BaseId) {
+                        checkedOnce = true;
+                        s4Checked += 1;
+                        if (s4Checked === 3) {
+                          releaseS4AllChecked();
+                        } else if (s4Checked < 3) {
+                          await s4AllChecked;
+                        }
+                      }
+                      return row;
+                    },
+                  };
+                },
+              };
+            }
+            if (/INSERT(?:\s+OR\s+IGNORE)?\s+INTO\s+fallback_windows/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      if (!reservedGateDone) {
+                        reservedGateDone = true;
+                        if (role === 'B') await s4AReserved;
+                        if (role === 'C') await s4BReserved;
+                        const row = await bound.first<T>();
+                        if (role === 'A') releaseS4AReserved();
+                        return row;
+                      }
+                      return bound.first<T>();
+                    },
+                  };
+                },
+              };
+            }
+            if ((role === 'B' || role === 'C') && /UPDATE\s+fallback_windows/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      const row = await bound.first<T>();
+                      if (role === 'B') releaseS4BReserved();
+                      return row;
+                    },
+                  };
+                },
+              };
+            }
+            if ((role === 'A' || role === 'B') && /SELECT id, project, ticker, domain, chains.*FROM clusters WHERE id = \?1/is.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      if (!existingGateDone) {
+                        existingGateDone = true;
+                        if (role === 'A') await s4CWrote;
+                        if (role === 'B') await s4ADone;
+                      }
+                      return bound.first<T>();
+                    },
+                  };
+                },
+              };
+            }
+            if (role === 'C' && /^\s*INSERT INTO clusters/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async run() {
+                      const out = await bound.run();
+                      if (!wroteGateDone) {
+                        wroteGateDone = true;
+                        releaseS4CWrote();
+                      }
+                      return out;
+                    },
+                  };
+                },
+              };
+            }
+            if (role === 'A' && /^\s*UPDATE\s+clusters/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async run() {
+                      const out = await bound.run();
+                      if (!wroteGateDone) {
+                        wroteGateDone = true;
+                        releaseS4ADone();
+                      }
+                      return out;
+                    },
+                  };
+                },
+              };
+            }
+            return stmt;
+          },
+        } as unknown as D1Database;
+      };
+
+      const [s4ResA, s4ResB, s4ResC] = await Promise.all([
+        ingestPostIntoCluster(
+          makeBridgeWriteDb('A'),
+          {
+            postId: `telegram:ch1:s4_a_${s.kind}`,
+            sourceId: 'telegram:ch1',
+            sourceTrust: 0.8,
+            postUrl: `https://t.me/ch1/s4_a_${s.kind}`,
+            postedAt: tA,
+            text: s4AText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          tC,
+        ),
+        ingestPostIntoCluster(
+          makeBridgeWriteDb('B'),
+          {
+            postId: `x:ch2:s4_b_${s.kind}`,
+            sourceId: 'x:ch2',
+            sourceTrust: 0.8,
+            postUrl: `https://x.com/ch2/status/s4_b_${s.kind}`,
+            postedAt: tB,
+            text: s4BText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          tC,
+        ),
+        ingestPostIntoCluster(
+          makeBridgeWriteDb('C'),
+          {
+            postId: `telegram:ch3:s4_c_${s.kind}`,
+            sourceId: 'telegram:ch3',
+            sourceTrust: 0.8,
+            postUrl: `https://t.me/ch3/s4_c_${s.kind}`,
+            postedAt: tC,
+            text: s4CText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          tC,
+        ),
+      ]);
+
+      expect(s4ResC.clusterId).toBe(s4BaseId);
+      expect(s4ResA.clusterId).toBe(s4BaseId);
+      expect(s4ResB.clusterId).toBe(s4BaseId);
+      const s4ClusterCount = sqlite
+        .query(`SELECT COUNT(*) AS n FROM clusters WHERE project = ?1`)
+        .get(s4Proj) as { n: number };
+      expect(s4ClusterCount.n).toBe(1);
+      const s4Row = await db
+        .prepare('SELECT first_seen, last_seen, source_count FROM clusters WHERE id = ?1')
+        .bind(s4BaseId)
+        .first<{ first_seen: number; last_seen: number; source_count: number }>();
+      expect(s4Row).toEqual({ first_seen: tA, last_seen: tC, source_count: 3 });
+
+      // Negative control: without bridging B, A (day 0) and C (farOffset) still remain separate.
+      const s4NoBridgeProj = `NoBridge${s.kind === 'ticker' ? 'Tick' : 'Proj'}`;
+      const s4NoBridgeTick = s.kind === 'ticker' ? 'NBRT' : undefined;
+      const nb1 = await ingestPostIntoCluster(
+        db,
+        {
+          postId: `telegram:ch1:s4_nb1_${s.kind}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/s4_nb1_${s.kind}`,
+          postedAt: tA,
+          text: s4NoBridgeTick ? `${s4NoBridgeProj} $${s4NoBridgeTick} testnet live` : `${s4NoBridgeProj} testnet live`,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        tC,
+      );
+      const nb2 = await ingestPostIntoCluster(
+        db,
+        {
+          postId: `x:ch2:s4_nb2_${s.kind}`,
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: `https://x.com/ch2/status/s4_nb2_${s.kind}`,
+          postedAt: tC,
+          text: s4NoBridgeTick ? `${s4NoBridgeProj} $${s4NoBridgeTick} claim live` : `${s4NoBridgeProj} claim live`,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        tC,
+      );
+      expect(nb1.clusterId).not.toBe(nb2.clusterId);
     }
   });
 
@@ -2204,7 +2475,8 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .prepare(
         `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
          VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
-                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1),
+                ('telegram:ch3', 'telegram', 'ch3', 'en', 0.8, 1)`,
       )
       .run();
     const surfIndex = { byDomain: new Map(), byTicker: new Map() };

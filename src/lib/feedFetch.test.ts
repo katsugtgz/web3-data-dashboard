@@ -111,6 +111,7 @@ describe('fetchFeedPages', () => {
     if (res.status === 200) {
       expect(res.etag).toBeNull();
       expect(res.body.items.map(i => i.id)).toEqual(['drop_1']);
+      expect(res.body.cursor).toBe('score|0.8|100|n1');
     }
   });
 
@@ -370,5 +371,76 @@ describe('createFeedSession', () => {
     expect(firstFull.status).toBe(200);
     const secondFull = await fullCachedSession.fetch();
     expect(secondFull).toEqual({ status: 304 });
+  });
+
+  test('treats continuation snapshot fallback or unexpected failure as incomplete/error instead of returning partial live items', async () => {
+    let page2Mode: 'live' | 'snapshot' | 'bad304' = 'live';
+    const seenEtags: { path: string; etag: string | null | undefined }[] = [];
+
+    const fetcher: FeedFetcher = async (path, etag) => {
+      seenEtags.push({ path, etag });
+      if (path === '/feed.json') {
+        if (etag === '"p1"') return { status: 304 };
+        return {
+          status: 200,
+          body: { generatedAt: 100, items: [makeFeedItem('drop_1', 100)], cursor: 'c1' },
+          etag: '"p1"',
+          source: 'api',
+        };
+      }
+      if (page2Mode === 'snapshot') {
+        return {
+          status: 200,
+          body: { generatedAt: 999, items: [makeFeedItem('snap_1', 999)] },
+          etag: null,
+          source: 'snapshot',
+        };
+      }
+      if (page2Mode === 'bad304') {
+        return { status: 304 };
+      }
+      if (etag === '"p2"') return { status: 304 };
+      return {
+        status: 200,
+        body: { generatedAt: 200, items: [makeFeedItem('drop_2', 200)] },
+        etag: '"p2"',
+        source: 'api',
+      };
+    };
+
+    const session = createFeedSession(fetcher);
+
+    // 1. Initial live load collects both pages.
+    const poll1 = await session.fetch();
+    expect(poll1.status).toBe(200);
+    if (poll1.status === 200) {
+      expect(poll1.source).toBe('api');
+      expect(poll1.body.items.map(i => i.id)).toEqual(['drop_1', 'drop_2']);
+    }
+
+    // 2. Continuation page falls back to snapshot -> MUST propagate snapshot (not truncated live API items).
+    page2Mode = 'snapshot';
+    const poll2 = await session.fetch();
+    expect(poll2.status).toBe(200);
+    if (poll2.status === 200) {
+      expect(poll2.source).toBe('snapshot');
+      expect(poll2.body.items.map(i => i.id)).toEqual(['snap_1']);
+    }
+
+    // 3. After API recovers, cached ETags were cleared on fallback and full feed loads cleanly.
+    page2Mode = 'live';
+    const callsBeforeRecovery = seenEtags.length;
+    const poll3 = await session.fetch();
+    expect(poll3.status).toBe(200);
+    if (poll3.status === 200) {
+      expect(poll3.source).toBe('api');
+      expect(poll3.body.items.map(i => i.id)).toEqual(['drop_1', 'drop_2']);
+    }
+    expect(seenEtags.slice(callsBeforeRecovery).every(c => c.etag == null)).toBe(true);
+
+    // 4. Malformed uncached 304 on continuation throws instead of emitting truncated API response.
+    page2Mode = 'bad304';
+    const uncachedSession = createFeedSession(fetcher);
+    await expect(uncachedSession.fetch()).rejects.toThrow('Feed continuation failed');
   });
 });
