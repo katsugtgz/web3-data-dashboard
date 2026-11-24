@@ -592,16 +592,11 @@ describe('formatFeedSummary', () => {
     });
   });
 
-  test('strips bilingual Turkish duplicate segments (newline and wire formats) only when marked or content-equivalent', () => {
-    const huang = formatFeedSummary(
-      "*HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED\n\nNvidia CEO Huang, FT'ye yapt\u0131\u011f\u0131 a\u00e7\u0131klamada yapay zeka talebinin g\u00fc\u00e7l\u00fc kald\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
+  test('strips bilingual Turkish duplicate segments (newline and wire formats) only when marked or identical duplicate', () => {
+    const huangExplicit = formatFeedSummary(
+      "*HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED\n\nTR: Nvidia CEO Huang, FT'ye yapt\u0131\u011f\u0131 a\u00e7\u0131klamada yapay zeka talebinin g\u00fc\u00e7l\u00fc kald\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
     );
-    expect(huang.lead).toBe('HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED');
-
-    const huangInline = formatFeedSummary(
-      "*HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED *Nvidia CEO Huang, FT'ye yapt\u0131\u011f\u0131 a\u00e7\u0131klamada yapay zeka talebinin g\u00fc\u00e7l\u00fc kald\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
-    );
-    expect(huangInline.lead).toBe('HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED');
+    expect(huangExplicit.lead).toBe('HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED');
 
     const wireExplicitMarker = formatFeedSummary(
       "*CLAIM OPENS ON NOVEMBER 30 *TR: Talep 30 Kas\u0131m'da a\u00e7\u0131l\u0131yor.",
@@ -638,6 +633,12 @@ describe('formatFeedSummary', () => {
     );
     expect(wireWithUniqueEntity.lead).toContain('NVIDIA BOARD IS NOT CONSIDERING A SPLIT');
     expect(wireWithUniqueEntity.lead).toContain('CNBC');
+
+    const wireSharedTokensRestriction = formatFeedSummary(
+      "*BASE KYC CLAIM OPENS ON NOVEMBER 30 *Base KYC claim 30 Kas\u0131m'da sadece do\u011frulanm\u0131\u015f c\u00fczdanlara a\u00e7\u0131kt\u0131r.",
+    );
+    expect(wireSharedTokensRestriction.lead).toContain('BASE KYC CLAIM OPENS ON NOVEMBER 30');
+    expect(wireSharedTokensRestriction.lead).toContain('sadece do\u011frulanm\u0131\u015f c\u00fczdanlara');
   });
 
   test('collapses excessive repeated alert emojis and keeps clean prose untouched', () => {

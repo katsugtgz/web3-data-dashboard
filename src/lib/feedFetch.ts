@@ -1,5 +1,6 @@
 import type { FeedItem, FeedResponse } from '../../shared/types';
 import { getJson, type JsonFetchResult } from './api';
+import { mergeVisibleUpdates, selectPending } from './feedMerge';
 
 const MAX_CONTINUATION_PAGES = 10;
 const DEFAULT_MAX_CHUNKS_PER_POLL = 10;
@@ -283,7 +284,7 @@ export function createFeedSession(
       pendingResume = null;
       if (!fellBack) {
         cachedPages = nextPages;
-        if (!anyModified) {
+        if (!anyModified && !active) {
           return { status: 304 };
         }
       }
@@ -298,5 +299,55 @@ export function createFeedSession(
         source: 'api',
       };
     },
+  };
+}
+
+export interface ReconciledFeedUpdate {
+  items: FeedItem[];
+  pending: FeedItem[] | null;
+  knownIds: Set<string>;
+  generatedAt: number | null;
+  preserved: boolean;
+}
+
+/**
+ * Reconciles a 200 `/feed.json` response against currently displayed items.
+ * When `res.cursor` indicates a partial multi-poll scan and items are already
+ * visible, preserves the current list intact until the scan finishes.
+ */
+export function reconcileFeedUpdate(
+  displayed: FeedItem[],
+  knownIds: ReadonlySet<string>,
+  res: FeedResponse,
+  mode: 'initial' | 'manual' | 'background',
+): ReconciledFeedUpdate {
+  if (res.cursor && displayed.length > 0) {
+    return {
+      items: displayed,
+      pending: null,
+      knownIds: new Set(knownIds),
+      generatedAt: null,
+      preserved: true,
+    };
+  }
+
+  if (mode !== 'background') {
+    return {
+      items: res.items,
+      pending: [],
+      knownIds: new Set(res.items.map(it => it.id)),
+      generatedAt: res.generatedAt,
+      preserved: false,
+    };
+  }
+
+  const queued = selectPending(res.items, knownIds);
+  const next = displayed.length === 0 ? res.items : mergeVisibleUpdates(displayed, res.items);
+  return {
+    items: next,
+    pending: queued ?? [],
+    knownIds: new Set(next.map(it => it.id)),
+    generatedAt: res.generatedAt,
+    preserved: false,
   };
 }

@@ -630,12 +630,6 @@ function hasSubstantialAscii(segment: string): boolean {
 }
 
 const EXPLICIT_TR_MARKER_RE = /^(?:\[?\s*(?:TR|T\u00fcrk\u00e7e|Turkish)\s*\]?\s*[:\-\u2013\u2014])/i;
-const ANCHOR_STOP_WORDS = new Set([
-  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out',
-  'with', 'that', 'this', 'from', 'they', 'have', 'has', 'had', 'will', 'been', 'into', 'than',
-  'bir', 'veya', 'icin', 'ile', 'ama', 'fakat', 'ancak', 'gibi', 'daha', 'cok', 'olarak', 'gore',
-  'dedi', 'olan', 'yeni', 'son', 'kadar',
-]);
 
 function normalizeAsciiFold(input: string): string {
   return input
@@ -650,67 +644,11 @@ function normalizeAsciiFold(input: string): string {
     .replace(/[\u00c7\u00e7]/g, m => (m === '\u00c7' ? 'C' : 'c'));
 }
 
-function extractNumbers(text: string): Set<string> {
-  return new Set((text.match(/\d+(?:[.,]\d+)?/g) ?? []).map(n => n.replace(/,/g, '')));
-}
-
-function extractAcronyms(text: string): Set<string> {
-  const folded = normalizeAsciiFold(text);
-  const out = new Set<string>();
-  for (const m of folded.match(/\b[A-Z]{2,}(?='|\b)/g) ?? []) {
-    if (m !== 'TR') out.add(m);
-  }
-  return out;
-}
-
-function extractContentAnchors(text: string): string[] {
-  const cleaned = normalizeAsciiFold(text).toLowerCase();
-  const tokens = cleaned.match(/[a-z0-9]{2,}/g) ?? [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const tok of tokens) {
-    if (ANCHOR_STOP_WORDS.has(tok) || seen.has(tok)) continue;
-    if (/^(?:ye|ya|da|de|te|ta|nin|nun|in|un|den|dan|ten|tan)$/.test(tok)) continue;
-    seen.add(tok);
-    out.push(tok);
-  }
-  return out;
-}
-
-function isTurkishContentEquivalent(englishText: string, turkishSegment: string): boolean {
-  const enNums = extractNumbers(englishText);
-  const trNums = extractNumbers(turkishSegment);
-  for (const n of trNums) {
-    if (!enNums.has(n)) return false;
-  }
-  for (const n of enNums) {
-    if (!trNums.has(n)) return false;
-  }
-
-  const enAcronyms = extractAcronyms(englishText);
-  const trAcronyms = extractAcronyms(turkishSegment);
-  for (const acr of trAcronyms) {
-    if (!enAcronyms.has(acr)) return false;
-  }
-
-  const enAnchors = extractContentAnchors(englishText);
-  const trAnchors = extractContentAnchors(turkishSegment);
-  if (enAnchors.length === 0 || trAnchors.length === 0) return false;
-
-  const enSet = new Set(enAnchors);
-  let shared = 0;
-  for (const t of trAnchors) {
-    if (enSet.has(t)) {
-      shared += 1;
-      continue;
-    }
-    if (t.length >= 4 && enAnchors.some(e => e.length >= 4 && e.slice(0, 4) === t.slice(0, 4))) {
-      shared += 1;
-    }
-  }
-
-  const minLen = Math.min(enAnchors.length, trAnchors.length);
-  return shared >= 3 && shared / minLen >= 0.35 && shared / trAnchors.length >= 0.25;
+function normalizeDuplicateKey(text: string): string {
+  return normalizeAsciiFold(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 function filterTurkishSegments(parts: string[]): string[] | null {
@@ -718,12 +656,12 @@ function filterTurkishSegments(parts: string[]): string[] | null {
   if (nonTurkish.length === 0 || nonTurkish.length >= parts.length || !nonTurkish.some(hasSubstantialAscii)) {
     return null;
   }
-  const englishContext = nonTurkish.join(' ');
+  const nonTurkishKeys = new Set(nonTurkish.map(normalizeDuplicateKey).filter(Boolean));
   let droppedAny = false;
   const kept = parts.filter(part => {
     if (!hasTurkishSignal(part)) return true;
     const isTranslation =
-      EXPLICIT_TR_MARKER_RE.test(part) || isTurkishContentEquivalent(englishContext, part);
+      EXPLICIT_TR_MARKER_RE.test(part) || nonTurkishKeys.has(normalizeDuplicateKey(part));
     if (isTranslation) {
       droppedAny = true;
       return false;

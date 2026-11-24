@@ -1305,14 +1305,18 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .run();
     const surfIndex = { byDomain: new Map(), byTicker: new Map() };
 
-    // Legacy pre-0006 in-window non-base cluster (ticker-derived ID) with punctuation in project name.
+    // Legacy pre-0006 in-window non-base clusters (ticker-derived IDs) with punctuation or Unicode uppercase.
     const legacyTickerClusterId = await computeClusterId(undefined, 'ABT', 'Alpha+Beta', 'p_legacy', now - 3_600_000);
+    const istanbulLegacyId = await computeClusterId(undefined, 'IST', '\u0130stanbul', 'p_ist', now - 3_600_000);
+    const kelvinLegacyId = await computeClusterId(undefined, 'KLV', '\u212Aelvin', 'p_klv', now - 3_600_000);
     await db
       .prepare(
         `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
-         VALUES (?1, 'Alpha+Beta', 'ABT', NULL, '[]', '["testnet"]', 'Alpha+Beta testnet live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+         VALUES (?1, 'Alpha+Beta', 'ABT', NULL, '[]', '["testnet"]', 'Alpha+Beta testnet live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2),
+                (?3, '\u0130stanbul', 'IST', NULL, '[]', '["testnet"]', 'Istanbul testnet live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2),
+                (?4, '\u212Aelvin', 'KLV', NULL, '[]', '["testnet"]', 'Kelvin testnet live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
       )
-      .bind(legacyTickerClusterId, now - 3_600_000)
+      .bind(legacyTickerClusterId, now - 3_600_000, istanbulLegacyId, kelvinLegacyId)
       .run();
 
     applyMigrations(sqlite, [MIGRATION_FILES[5]]);
@@ -1322,15 +1326,29 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .bind(legacyTickerClusterId)
       .first<{ project_key: string | null }>();
     expect(migratedRow?.project_key).toBe('alphabeta');
+    const migratedIst = await db
+      .prepare('SELECT project_key FROM clusters WHERE id = ?1')
+      .bind(istanbulLegacyId)
+      .first<{ project_key: string | null }>();
+    expect(migratedIst?.project_key).toBe('istanbul');
+    const migratedKelvin = await db
+      .prepare('SELECT project_key FROM clusters WHERE id = ?1')
+      .bind(kelvinLegacyId)
+      .first<{ project_key: string | null }>();
+    expect(migratedKelvin?.project_key).toBe('kelvin');
 
-    // Non-base cluster still with project_key = NULL (e.g. legacy unmigrated row inserted raw).
+    // Non-base clusters still with project_key = NULL (e.g. legacy unmigrated rows inserted raw).
     const nullKeyClusterId = 'win_plus_proto_nonbase';
+    const nullIstanbulClusterId = 'win_istanbul_net_nonbase';
+    const nullKelvinClusterId = 'win_kelvin_net_nonbase';
     await db
       .prepare(
         `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop, project_key)
-         VALUES (?1, 'Plus+Proto', NULL, NULL, '[]', '["quest"]', 'Plus+Proto quest live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2, 1, NULL)`,
+         VALUES (?1, 'Plus+Proto', NULL, NULL, '[]', '["quest"]', 'Plus+Proto quest live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2, 1, NULL),
+                (?3, '\u0130stanbulNet', NULL, NULL, '[]', '["quest"]', 'IstanbulNet quest live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2, 1, NULL),
+                (?4, '\u212AelvinNet', NULL, NULL, '[]', '["quest"]', 'KelvinNet quest live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2, 1, NULL)`,
       )
-      .bind(nullKeyClusterId, now - 3_600_000)
+      .bind(nullKeyClusterId, now - 3_600_000, nullIstanbulClusterId, nullKelvinClusterId)
       .run();
 
     // Seed 205 newer unrelated domainless filler clusters within the 3d window.
@@ -1345,8 +1363,8 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
         .run();
     }
 
-    // Domainless, tickerless AlphaBeta post has base ID proj:alphabeta (!= tick:$ABT),
-    // so only full non-alphanumeric project_key normalization can locate the non-base cluster.
+    // Domainless, tickerless posts have project base IDs != tick:$..., so only full
+    // ASCII+Unicode project_key normalization can locate each non-base cluster.
     const alphaFollow = await ingestPostIntoCluster(
       db,
       {
@@ -1365,6 +1383,42 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     );
     expect(alphaFollow.clusterId).toBe(legacyTickerClusterId);
 
+    const istFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:ist_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/ist_follow',
+        postedAt: now,
+        text: 'Istanbul testnet campaign live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(istFollow.clusterId).toBe(istanbulLegacyId);
+
+    const klvFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:klv_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/klv_follow',
+        postedAt: now,
+        text: 'Kelvin testnet campaign live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(klvFollow.clusterId).toBe(kelvinLegacyId);
+
     const plusFollow = await ingestPostIntoCluster(
       db,
       {
@@ -1382,6 +1436,42 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       now,
     );
     expect(plusFollow.clusterId).toBe(nullKeyClusterId);
+
+    const istNetFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:istnet_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/istnet_follow',
+        postedAt: now,
+        text: 'IstanbulNet airdrop quest live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(istNetFollow.clusterId).toBe(nullIstanbulClusterId);
+
+    const klvNetFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:klvnet_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/klvnet_follow',
+        postedAt: now,
+        text: 'KelvinNet airdrop quest live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(klvNetFollow.clusterId).toBe(nullKelvinClusterId);
   });
 
   test('concurrent fallback ingests reserve targets atomically for both project and ticker clusters (in-process & cross-isolate)', async () => {
@@ -1893,6 +1983,217 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
         .bind(winA.clusterId)
         .first<{ source_count: number }>();
       expect(mergedNewRow?.source_count).toBe(2);
+
+      // Schedule 3: Occupied old base exists; A (nearby), B (nearby), C (distant) all see
+      // no matching new cluster; A reserves -> C reserves distant window BEFORE A writes ->
+      // B reserves BEFORE A writes. A and B MUST converge and C MUST get its own cluster.
+      const s3Proj = `ThreeWay${s.kind === 'ticker' ? 'Tick' : 'Proj'}`;
+      const s3Ticker = s.kind === 'ticker' ? 'THWT' : undefined;
+      const s3OldText = s3Ticker ? `${s3Proj} $${s3Ticker} v1 testnet live` : `${s3Proj} v1 testnet live`;
+      const s3AText = s3Ticker ? `${s3Proj} $${s3Ticker} Season 2 testnet live` : `${s3Proj} Season 2 testnet live`;
+      const s3BText = s3Ticker ? `${s3Proj} $${s3Ticker} Season 2 claim open` : `${s3Proj} Season 2 claim open`;
+      const s3CText = s3Ticker ? `${s3Proj} $${s3Ticker} Season 3 waitlist open` : `${s3Proj} Season 3 waitlist open`;
+
+      const s3OldBase = await ingestPostIntoCluster(
+        db,
+        {
+          postId: `telegram:ch1:s3_old_${s.kind}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/s3_old_${s.kind}`,
+          postedAt: now - s.windowMs - 2 * 86_400_000,
+          text: s3OldText,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      );
+
+      let s3Checked = 0;
+      let releaseAllChecked!: () => void;
+      const allThreeChecked = new Promise<void>(resolve => {
+        releaseAllChecked = resolve;
+      });
+      let releaseAReserved!: () => void;
+      const aReserved = new Promise<void>(resolve => {
+        releaseAReserved = resolve;
+      });
+      let releaseCReserved!: () => void;
+      const cReserved = new Promise<void>(resolve => {
+        releaseCReserved = resolve;
+      });
+      let releaseBReserved!: () => void;
+      const bReserved = new Promise<void>(resolve => {
+        releaseBReserved = resolve;
+      });
+
+      const makeThreeWayDb = (role: 'A' | 'B' | 'C'): D1Database => {
+        let checkedOnce = false;
+        let reservedGateDone = false;
+        let clusterInsertHeld = false;
+        return {
+          ...db,
+          prepare(sql: string) {
+            const stmt = db.prepare(sql);
+            if (
+              /SELECT id, project, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql) ||
+              /SELECT id, project, ticker, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql)
+            ) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      const row = await bound.first<T>();
+                      if (!checkedOnce && args[0] === s3OldBase.clusterId) {
+                        checkedOnce = true;
+                        s3Checked += 1;
+                        if (s3Checked === 3) {
+                          releaseAllChecked();
+                        } else if (s3Checked < 3) {
+                          await allThreeChecked;
+                        }
+                      }
+                      return row;
+                    },
+                  };
+                },
+              };
+            }
+            if (/INSERT(?:\s+OR\s+IGNORE)?\s+INTO\s+fallback_windows/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  const execInsert = async <T>(call: () => Promise<T>) => {
+                    if (!reservedGateDone) {
+                      reservedGateDone = true;
+                      if (role === 'C') await aReserved;
+                      if (role === 'B') await cReserved;
+                      const res = await call();
+                      if (role === 'A') releaseAReserved();
+                      if (role === 'C') releaseCReserved();
+                      return res;
+                    }
+                    return call();
+                  };
+                  return {
+                    ...bound,
+                    first: <T>() => execInsert(() => bound.first<T>()),
+                    run: () => execInsert(() => bound.run()),
+                  };
+                },
+              };
+            }
+            if (role === 'B' && /UPDATE\s+fallback_windows/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      const res = await bound.first<T>();
+                      releaseBReserved();
+                      return res;
+                    },
+                  };
+                },
+              };
+            }
+            if (/^\s*INSERT INTO clusters/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async run() {
+                      if (!clusterInsertHeld) {
+                        clusterInsertHeld = true;
+                        await bReserved;
+                      }
+                      return bound.run();
+                    },
+                  };
+                },
+              };
+            }
+            return stmt;
+          },
+        } as unknown as D1Database;
+      };
+
+      const [resA, resB, resC] = await Promise.all([
+        ingestPostIntoCluster(
+          makeThreeWayDb('A'),
+          {
+            postId: `telegram:ch1:s3_a_${s.kind}`,
+            sourceId: 'telegram:ch1',
+            sourceTrust: 0.8,
+            postUrl: `https://t.me/ch1/s3_a_${s.kind}`,
+            postedAt: now - 7_200_000,
+            text: s3AText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          now,
+        ),
+        ingestPostIntoCluster(
+          makeThreeWayDb('B'),
+          {
+            postId: `x:ch2:s3_b_${s.kind}`,
+            sourceId: 'x:ch2',
+            sourceTrust: 0.8,
+            postUrl: `https://x.com/ch2/status/s3_b_${s.kind}`,
+            postedAt: now,
+            text: s3BText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          now,
+        ),
+        ingestPostIntoCluster(
+          makeThreeWayDb('C'),
+          {
+            postId: `telegram:ch1:s3_c_${s.kind}`,
+            sourceId: 'telegram:ch1',
+            sourceTrust: 0.8,
+            postUrl: `https://t.me/ch1/s3_c_${s.kind}`,
+            postedAt: now + s.windowMs + 2 * 86_400_000,
+            text: s3CText,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          now,
+        ),
+      ]);
+
+      expect(s3Checked).toBeGreaterThanOrEqual(3);
+      expect(resA.clusterId).toBe(resB.clusterId);
+      expect(resA.clusterId).not.toBe(s3OldBase.clusterId);
+      expect(resC.clusterId).not.toBe(resA.clusterId);
+      expect(resC.clusterId).not.toBe(s3OldBase.clusterId);
+      const s3Count = sqlite
+        .query(`SELECT COUNT(*) AS n FROM clusters WHERE project = ?1`)
+        .get(s3Proj) as { n: number };
+      expect(s3Count.n).toBe(3);
+      const abRow = await db
+        .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+        .bind(resA.clusterId)
+        .first<{ source_count: number }>();
+      expect(abRow?.source_count).toBe(2);
+      const cRow = await db
+        .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+        .bind(resC.clusterId)
+        .first<{ source_count: number }>();
+      expect(cRow?.source_count).toBe(1);
     }
   });
 

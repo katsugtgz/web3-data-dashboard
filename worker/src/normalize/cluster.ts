@@ -197,14 +197,14 @@ function getFallbackIdentity(parsed: ParsedDrop, postedAt: number): FallbackIden
 }
 
 function mintWindowedClusterId(baseClusterId: string, postedAt: number, postId: string, attempt = 0): Promise<string> {
-  const suffix = attempt >= 2 ? `:${attempt}` : '';
+  const suffix = attempt >= 1 ? `:${attempt}` : '';
   return sha1Hex(`${baseClusterId}:win:${postedAt}:${postId}${suffix}`);
 }
 
 /**
- * Atomically reserves or joins the active window cluster ID for a fallback
- * ticker/project identity in D1 so concurrent isolates creating a new window
- * converge on the same ID while out-of-window ingests start a separate window.
+ * Atomically reserves or joins a per-identity window cluster ID in D1 without
+ * overwriting separate out-of-window reservations so concurrent nearby ingests
+ * converge on one shared ID even when a distant ingest reserves concurrently.
  */
 async function reserveFallbackWindow(
   db: D1Database,
@@ -214,40 +214,61 @@ async function reserveFallbackWindow(
   postedAt: number,
   rejectedClusterId: string | null,
 ): Promise<string> {
-  const row = await db
+  const inserted = await db
     .prepare(
-      `INSERT INTO fallback_windows (identity_key, cluster_id, first_seen, last_seen)
-       VALUES (?1, ?2, ?3, ?3)
-       ON CONFLICT(identity_key) DO UPDATE SET
-         cluster_id = CASE
-           WHEN ?3 >= fallback_windows.first_seen - ?4
-            AND ?3 <= fallback_windows.last_seen + ?4
-            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
-           THEN fallback_windows.cluster_id
-           WHEN excluded.cluster_id = fallback_windows.cluster_id
+      `INSERT OR IGNORE INTO fallback_windows (identity_key, cluster_id, first_seen, last_seen)
+       SELECT
+         ?1,
+         CASE
+           WHEN EXISTS (SELECT 1 FROM fallback_windows WHERE identity_key = ?1 AND cluster_id = ?2)
            THEN ?5
-           ELSE excluded.cluster_id
+           ELSE ?2
          END,
-         first_seen = CASE
-           WHEN ?3 >= fallback_windows.first_seen - ?4
-            AND ?3 <= fallback_windows.last_seen + ?4
-            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
-           THEN MIN(fallback_windows.first_seen, ?3)
-           ELSE ?3
-         END,
-         last_seen = CASE
-           WHEN ?3 >= fallback_windows.first_seen - ?4
-            AND ?3 <= fallback_windows.last_seen + ?4
-            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
-           THEN MAX(fallback_windows.last_seen, ?3)
-           ELSE ?3
-         END
+         ?3,
+         ?3
+       WHERE NOT EXISTS (
+         SELECT 1 FROM fallback_windows
+         WHERE identity_key = ?1
+           AND ?3 >= first_seen - ?4
+           AND ?3 <= last_seen + ?4
+           AND (?6 IS NULL OR cluster_id != ?6)
+       )
        RETURNING cluster_id`,
     )
     .bind(identity.key, preferredClusterId, postedAt, identity.windowMs, windowedClusterId, rejectedClusterId)
     .first<{ cluster_id: string }>();
 
-  return row?.cluster_id ?? preferredClusterId;
+  if (inserted?.cluster_id) return inserted.cluster_id;
+
+  const updated = await db
+    .prepare(
+      `UPDATE fallback_windows
+       SET first_seen = MIN(first_seen, ?2),
+           last_seen = MAX(last_seen, ?2)
+       WHERE identity_key = ?1
+         AND cluster_id = (
+           SELECT cluster_id
+           FROM fallback_windows
+           WHERE identity_key = ?1
+             AND ?2 >= first_seen - ?3
+             AND ?2 <= last_seen + ?3
+             AND (?4 IS NULL OR cluster_id != ?4)
+           ORDER BY
+             CASE
+               WHEN ?2 < first_seen THEN first_seen - ?2
+               WHEN ?2 > last_seen THEN ?2 - last_seen
+               ELSE 0
+             END ASC,
+             last_seen DESC,
+             cluster_id ASC
+           LIMIT 1
+         )
+       RETURNING cluster_id`,
+    )
+    .bind(identity.key, postedAt, identity.windowMs, rejectedClusterId)
+    .first<{ cluster_id: string }>();
+
+  return updated?.cluster_id ?? windowedClusterId;
 }
 
 /**
@@ -340,7 +361,7 @@ async function resolveClusterId(
       db
         .prepare(
           `WITH RECURSIVE legacy_null(id, project, first_seen, last_seen, rest, acc) AS (
-             SELECT id, project, first_seen, last_seen, lower(project), ''
+             SELECT id, project, first_seen, last_seen, replace(replace(lower(project), char(304), 'i'), char(8490), 'k'), ''
              FROM clusters
              WHERE domain IS NULL
                AND project_key IS NULL
@@ -825,6 +846,20 @@ export async function ingestPostIntoCluster(
         postInserted = true;
       } else {
         postInserted = true;
+      }
+
+      // Sync source_count from posts when concurrent ingests both raced past prevAgg
+      // before either post row was committed.
+      if (postInserted) {
+        await db
+          .prepare(
+            `UPDATE clusters
+             SET source_count = (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1)
+             WHERE id = ?1
+               AND source_count < (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1)`,
+          )
+          .bind(clusterId)
+          .run();
       }
 
       return {

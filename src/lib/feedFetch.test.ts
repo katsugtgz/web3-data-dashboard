@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type { FeedItem, FeedResponse } from '../../shared/types';
-import { createFeedSession, fetchFeedPages, type FeedFetcher } from './feedFetch';
+import {
+  createFeedSession,
+  fetchFeedPages,
+  reconcileFeedUpdate,
+  type FeedFetcher,
+} from './feedFetch';
 
 function makeFeedItem(id: string, lastSeen = 1_795_364_909_000): FeedItem {
   return {
@@ -283,5 +288,87 @@ describe('createFeedSession', () => {
       { path: '/feed.json', etag: '"p1-v1"' },
       { path: '/feed.json?cursor=c1&limit=100', etag: '"p2-v2"' },
     ]);
+  });
+
+  test('preserves complete displayed feed across partial multi-poll scans and returns complete body even when all ETags match', async () => {
+    const fetcher: FeedFetcher = async (path, etag) => {
+      if (path === '/feed.json') {
+        if (etag === '"e0"') return { status: 304 };
+        return { status: 200, body: { generatedAt: 100, items: [], cursor: 'c1' }, etag: '"e0"', source: 'api' };
+      }
+      const idx = Number(path.match(/cursor=c(\d+)/)?.[1] ?? '0');
+      const expected = `"e${idx}"`;
+      if (etag === expected) return { status: 304 };
+      if (idx < 11) {
+        return {
+          status: 200,
+          body: { generatedAt: 100 + idx, items: [], cursor: `c${idx + 1}` },
+          etag: expected,
+          source: 'api',
+        };
+      }
+      return {
+        status: 200,
+        body: { generatedAt: 500, items: [makeFeedItem('drop_5501', 500)] },
+        etag: expected,
+        source: 'api',
+      };
+    };
+
+    const session = createFeedSession(fetcher, { limit: 100, maxContinuationPages: 10, maxChunksPerPoll: 1 });
+
+    // First complete load (2 polls).
+    const init1 = await session.fetch();
+    expect(init1.status).toBe(200);
+    const init2 = await session.fetch();
+    expect(init2.status).toBe(200);
+    if (init2.status !== 200) throw new Error('expected 200');
+    const displayed = init2.body.items;
+    expect(displayed.map(i => i.id)).toEqual(['drop_5501']);
+
+    // Next background poll hits maxChunksPerPoll while all 11 fetched pages return 304 -> partial 200.
+    const partialRes = await session.fetch();
+    expect(partialRes.status).toBe(200);
+    if (partialRes.status !== 200) throw new Error('expected partial 200');
+    expect(partialRes.body.items).toEqual([]);
+    expect(partialRes.body.cursor).toBe('c11');
+
+    // Displayed items MUST stay intact during a partial scan (both background and manual).
+    const duringPartial = reconcileFeedUpdate(
+      displayed,
+      new Set(['drop_5501']),
+      partialRes.body,
+      'background',
+    );
+    expect(duringPartial.preserved).toBe(true);
+    expect(duringPartial.items.map(i => i.id)).toEqual(['drop_5501']);
+
+    // Resumed poll completes on cached page 12 (which also returns 304):
+    // MUST return 200 with complete items instead of 304 so partial state cannot leave items hidden.
+    const resumedComplete = await session.fetch();
+    expect(resumedComplete.status).toBe(200);
+    if (resumedComplete.status !== 200) throw new Error('expected 200 after partial scan');
+    expect(resumedComplete.body.cursor).toBeUndefined();
+    expect(resumedComplete.body.items.map(i => i.id)).toEqual(['drop_5501']);
+
+    const afterComplete = reconcileFeedUpdate(
+      duringPartial.items,
+      duringPartial.knownIds,
+      resumedComplete.body,
+      'background',
+    );
+    expect(afterComplete.preserved).toBe(false);
+    expect(afterComplete.items.map(i => i.id)).toEqual(['drop_5501']);
+
+    // A full single-poll revalidation where all 12 cached pages return 304 still yields 304.
+    const fullCachedSession = createFeedSession(fetcher, {
+      limit: 100,
+      maxContinuationPages: 10,
+      maxChunksPerPoll: 5,
+    });
+    const firstFull = await fullCachedSession.fetch();
+    expect(firstFull.status).toBe(200);
+    const secondFull = await fullCachedSession.fetch();
+    expect(secondFull).toEqual({ status: 304 });
   });
 });

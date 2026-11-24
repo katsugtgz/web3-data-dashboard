@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedResponse } from '../../shared/types';
 import { API_BASE } from '../lib/api';
-import { createFeedSession } from '../lib/feedFetch';
-import { mergeVisibleUpdates, selectPending } from '../lib/feedMerge';
+import { createFeedSession, reconcileFeedUpdate } from '../lib/feedFetch';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
 const FEED_POLL_MS = 60_000;
@@ -26,6 +25,12 @@ function getInitialFeed(): FeedResponse | null {
   return cached ?? null;
 }
 
+function countUnseenPending(items: FeedItem[], pendingItems: FeedItem[]): number {
+  if (pendingItems.length === 0) return 0;
+  const visibleIds = new Set(items.map(it => it.id));
+  return pendingItems.reduce((acc, it) => (visibleIds.has(it.id) ? acc : acc + 1), 0);
+}
+
 export function useFeed(): FeedState {
   const [initial] = useState<FeedResponse | null>(() => getInitialFeed());
   const [items, setItems] = useState<FeedItem[]>(() => initial?.items ?? []);
@@ -37,10 +42,7 @@ export function useFeed(): FeedState {
 
   const [poll] = useState(createPollLifecycle);
   const [session] = useState(() => createFeedSession());
-  const knownIdsRef = useRef<Set<string> | null>(null);
-  if (knownIdsRef.current === null) {
-    knownIdsRef.current = new Set(initial?.items.map(it => it.id) ?? []);
-  }
+  const knownIdsRef = useRef<Set<string>>(new Set());
   const hasLiveRef = useRef(false);
 
   // Mirrors of state for stable callbacks (no re-creation per render).
@@ -49,6 +51,7 @@ export function useFeed(): FeedState {
   useEffect(() => {
     pendingItemsRef.current = pendingItems;
     itemsRef.current = items;
+    knownIdsRef.current = new Set(items.map(it => it.id));
   }, [pendingItems, items]);
 
   const fetchNow = useCallback((mode: PollMode) => {
@@ -69,31 +72,15 @@ export function useFeed(): FeedState {
           }
           hasLiveRef.current = res.source === 'api';
           setIsLiveApi(hasLiveRef.current);
-          setGeneratedAt(res.body.generatedAt);
-          if (mode !== 'background') {
-            knownIdsRef.current = new Set(res.body.items.map(it => it.id));
-            setItems(res.body.items);
-            setPendingItems([]); // latest always clears the queue
-          } else {
-            const known = knownIdsRef.current ?? new Set<string>();
-            // New clusters → queue the full latest list while the user reads.
-            // Otherwise refresh displayed entries in place so risk/summary/
-            // AI-summary stay current, without reordering or auto-inserting —
-            // and clear any stale queue: the newest fetch supersedes it.
-            const queued = selectPending(res.body.items, known);
-            setPendingItems(queued ?? []);
-            // Nothing displayed (e.g. first load failed) → show the latest list
-            // now instead of hiding the whole feed behind the new-drops pill.
-            // Compute-then-set from the ref mirror keeps the updater pure
-            // (knownIds rebuilt outside it); a fetch callback only runs after
-            // the previous commit, so itemsRef is the displayed list.
-            const displayed = itemsRef.current;
-            const next =
-              displayed.length === 0 ? res.body.items : mergeVisibleUpdates(displayed, res.body.items);
-            // Rebuild from the merged list: an item that left the top-100
-            // window and returned must be re-queued as new, not treated as known.
-            knownIdsRef.current = new Set(next.map(it => it.id));
-            setItems(next);
+          const known = knownIdsRef.current ?? new Set<string>();
+          const update = reconcileFeedUpdate(itemsRef.current, known, res.body, mode);
+          if (!update.preserved) {
+            if (update.generatedAt !== null) {
+              setGeneratedAt(update.generatedAt);
+            }
+            knownIdsRef.current = update.knownIds;
+            setItems(update.items);
+            setPendingItems(update.pending ?? []);
           }
         }
         setFailed(false);
@@ -123,7 +110,7 @@ export function useFeed(): FeedState {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  const newCount = pendingItems.reduce((acc, it) => (knownIdsRef.current?.has(it.id) ? acc : acc + 1), 0);
+  const newCount = countUnseenPending(items, pendingItems);
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
 
   // Freshness check for first-copy: the queued snapshot may be stale; risk is
