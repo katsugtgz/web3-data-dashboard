@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FORBIDDEN_CJK_RE } from './helpers';
 import { parseDropPost } from '../src/normalize/parse';
 import { parseTelegramHtml } from '../src/sources/telegram';
 
-const FIXTURE_DIR = new URL('./fixtures/telegram/', import.meta.url).pathname;
+const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/telegram/', import.meta.url));
 const fixtureFiles = readdirSync(FIXTURE_DIR).filter(f => f.endsWith('.html')).sort();
 
 describe('Telegram HTMLRewriter parser across >=15 real channel fixtures', () => {

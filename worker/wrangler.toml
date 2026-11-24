@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2026-11-21"
 
 [vars]
-TG_BATCH_SIZE = "4"
+TG_BATCH_SIZE = "8"
 X_BATCH_SIZE = "3"
 AI_DAILY_MAX = "300"
 AI_SUMMARY_CHUNK = "6"
@@ -12,7 +12,7 @@ AI_SUMMARY_CHUNK = "6"
 binding = "AI"
 
 [triggers]
-crons = ["* * * * *", "*/5 * * * *"]
+crons = ["*/2 * * * *", "*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

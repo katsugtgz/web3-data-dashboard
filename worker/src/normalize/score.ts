@@ -30,23 +30,19 @@ export function computeScore(input: ScoreInput): number {
 }
 
 export async function decayClusterScores(db: D1Database, nowMs = Date.now()): Promise<void> {
-  // Keyset-paged decay over ALL clusters: a LIMIT-250 cap froze scores of
-  // older (but still retained) clusters, letting them outrank fresh ones.
-  // The `score IS NOT ?2` guard skips no-op writes so stable clusters cost
-  // zero D1 row writes per tick.
+  // Keyset-paged PK scan over ALL clusters using stored trust_max (no joins):
+  // a LIMIT-250 cap froze scores of older (but still retained) clusters,
+  // letting them outrank fresh ones, and the CAS UPDATE skips unchanged or
+  // concurrently modified rows.
   const PAGE = 400;
   let lastId = '';
   for (;;) {
     const res = await db
       .prepare(
-        `SELECT c.id, c.source_count, c.last_seen, c.surf_tier, c.risk_level, c.score,
-                COALESCE(MAX(s.trust), 0.5) AS trust_max
-         FROM clusters c
-         LEFT JOIN posts p ON p.cluster_id = c.id
-         LEFT JOIN sources s ON s.id = p.source_id
-         WHERE c.id > ?1
-         GROUP BY c.id
-         ORDER BY c.id ASC
+        `SELECT id, source_count, last_seen, surf_tier, risk_level, score, trust_max
+         FROM clusters
+         WHERE id > ?1
+         ORDER BY id ASC
          LIMIT ?2`,
       )
       .bind(lastId, PAGE)

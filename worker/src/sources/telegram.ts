@@ -201,17 +201,15 @@ export async function fetchTelegramChannelHtml(handle: string): Promise<string> 
   return res.text();
 }
 
-async function pollSingleTelegramSource(
-  db: D1Database,
+type TelegramFetchOutcome =
+  | { ok: true; src: SourceRow; newPosts: ParsedTelegramPost[]; maxSeenNum: number }
+  | { ok: false; src: SourceRow; err: unknown };
+
+async function fetchAndParseTelegramSource(
   src: SourceRow,
-  parseCtx: ParseContext,
-  surfIndex: SurfIndex,
-  projectDomains: Map<string, string>,
-  platformDomains: Set<string> | undefined,
-  nowMs: number,
+  cutoffMs: number,
   fetcher: (handle: string) => Promise<string>,
-): Promise<{ insertedPosts: number; error: boolean; ingestedResults: IngestPostResult[] }> {
-  const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
+): Promise<TelegramFetchOutcome> {
   try {
     const html = await fetcher(src.handle);
     const parsedPosts = await parseTelegramHtml(html, src.handle);
@@ -227,6 +225,48 @@ async function pollSingleTelegramSource(
       return post.postedAt >= cutoffMs;
     });
 
+    return { ok: true, src, newPosts, maxSeenNum };
+  } catch (err) {
+    return { ok: false, src, err };
+  }
+}
+
+async function markTelegramSourceError(db: D1Database, src: SourceRow, err: unknown, nowMs: number): Promise<void> {
+  const nextFails = (src.fail_count ?? 0) + 1;
+  const nextStatus = nextFails >= 10 ? 'down' : nextFails >= 3 ? 'degraded' : 'ok';
+  console.error(`tg-poll-error:${src.handle}`, err);
+  await db
+    .prepare(
+      `UPDATE sources
+       SET last_polled_at = ?2, fail_count = ?3, status = ?4
+       WHERE id = ?1`,
+    )
+    .bind(src.id, nowMs, nextFails, nextStatus)
+    .run();
+}
+
+async function markTelegramSourceOk(db: D1Database, src: SourceRow, maxSeenNum: number, nowMs: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE sources
+       SET last_seen_id = ?2, last_ok_at = ?3, last_polled_at = ?3, status = 'ok', fail_count = 0
+       WHERE id = ?1`,
+    )
+    .bind(src.id, maxSeenNum > 0 ? String(maxSeenNum) : src.last_seen_id, nowMs)
+    .run();
+}
+
+async function ingestTelegramSourcePosts(
+  db: D1Database,
+  outcome: Extract<TelegramFetchOutcome, { ok: true }>,
+  parseCtx: ParseContext,
+  surfIndex: SurfIndex,
+  projectDomains: Map<string, string>,
+  platformDomains: Set<string> | undefined,
+  nowMs: number,
+): Promise<{ insertedPosts: number; error: boolean; ingestedResults: IngestPostResult[] }> {
+  const { src, newPosts, maxSeenNum } = outcome;
+  try {
     const ingestedResults = await Promise.all(
       newPosts.map(post =>
         ingestPostIntoCluster(
@@ -250,28 +290,10 @@ async function pollSingleTelegramSource(
       ),
     );
 
-    await db
-      .prepare(
-        `UPDATE sources
-         SET last_seen_id = ?2, last_ok_at = ?3, last_polled_at = ?3, status = 'ok', fail_count = 0
-         WHERE id = ?1`,
-      )
-      .bind(src.id, maxSeenNum > 0 ? String(maxSeenNum) : src.last_seen_id, nowMs)
-      .run();
-
+    await markTelegramSourceOk(db, src, maxSeenNum, nowMs);
     return { insertedPosts: ingestedResults.length, error: false, ingestedResults };
   } catch (err) {
-    const nextFails = (src.fail_count ?? 0) + 1;
-    const nextStatus = nextFails >= 10 ? 'down' : nextFails >= 3 ? 'degraded' : 'ok';
-    console.error(`tg-poll-error:${src.handle}`, err);
-    await db
-      .prepare(
-        `UPDATE sources
-         SET last_polled_at = ?2, fail_count = ?3, status = ?4
-         WHERE id = ?1`,
-      )
-      .bind(src.id, nowMs, nextFails, nextStatus)
-      .run();
+    await markTelegramSourceError(db, src, err, nowMs);
     return { insertedPosts: 0, error: true, ingestedResults: [] };
   }
 }
@@ -299,18 +321,34 @@ export async function pollTelegramBatch(
     return { polled: 0, insertedPosts: 0, errors: 0, ingestedResults: [] };
   }
 
-  const { projectDomains, platformDomains } = await loadKnownDomains(db);
+  const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
+  const fetchOutcomes = await Promise.all(sources.map(src => fetchAndParseTelegramSource(src, cutoffMs, fetcher)));
+  const failedOutcomes = fetchOutcomes.filter((o): o is Extract<TelegramFetchOutcome, { ok: false }> => !o.ok);
+  const okOutcomes = fetchOutcomes.filter((o): o is Extract<TelegramFetchOutcome, { ok: true }> => o.ok);
+
+  if (failedOutcomes.length > 0) {
+    await Promise.all(failedOutcomes.map(o => markTelegramSourceError(db, o.src, o.err, nowMs)));
+  }
+
+  if (!okOutcomes.some(o => o.newPosts.length > 0)) {
+    await Promise.all(okOutcomes.map(o => markTelegramSourceOk(db, o.src, o.maxSeenNum, nowMs)));
+    return { polled: sources.length, insertedPosts: 0, errors: failedOutcomes.length, ingestedResults: [] };
+  }
+
+  const { projectDomains, platformDomains } = await loadKnownDomains(db, nowMs);
   const surfIndex: SurfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 
-  const results = await Promise.all(
-    sources.map(src => pollSingleTelegramSource(db, src, parseCtx, surfIndex, projectDomains, platformDomains, nowMs, fetcher)),
+  const ingestOutcomes = await Promise.all(
+    okOutcomes.map(o =>
+      ingestTelegramSourcePosts(db, o, parseCtx, surfIndex, projectDomains, platformDomains, nowMs),
+    ),
   );
 
   let insertedPosts = 0;
-  let errors = 0;
+  let errors = failedOutcomes.length;
   const ingestedResults: IngestPostResult[] = [];
-  for (const r of results) {
+  for (const r of ingestOutcomes) {
     insertedPosts += r.insertedPosts;
     if (r.error) errors++;
     ingestedResults.push(...r.ingestedResults);
@@ -319,10 +357,20 @@ export async function pollTelegramBatch(
   return { polled: sources.length, insertedPosts, errors, ingestedResults };
 }
 
-export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise<void> {
+export interface PruneOldPostsResult {
+  deletedPosts: number;
+  deletedClusters: number;
+}
+
+export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise<PruneOldPostsResult> {
   const cutoff = nowMs - THIRTY_DAYS_MS;
-  await db.prepare('DELETE FROM posts WHERE posted_at < ?1').bind(cutoff).run();
-  await db
+  const del = await db.prepare('DELETE FROM posts WHERE posted_at < ?1').bind(cutoff).run();
+  const deletedPosts = del.meta?.changes ?? 0;
+  if (deletedPosts === 0) {
+    return { deletedPosts: 0, deletedClusters: 0 };
+  }
+  const clDel = await db
     .prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)')
     .run();
+  return { deletedPosts, deletedClusters: clDel.meta?.changes ?? 0 };
 }

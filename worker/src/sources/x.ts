@@ -291,7 +291,7 @@ export async function pollXBatch(
   let projectDomains: Map<string, string>;
   let platformDomains: Set<string> | undefined;
   try {
-    ({ projectDomains, platformDomains } = await loadKnownDomains(db));
+    ({ projectDomains, platformDomains } = await loadKnownDomains(db, nowMs));
   } catch (err) {
     console.error('x-poll-error:loadKnownDomains', err);
     // Mark the whole batch degraded in parallel (no await-in-loop: each write
