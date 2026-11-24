@@ -6,8 +6,17 @@ import {
   type IngestPostResult,
   type SurfIndex,
 } from '../normalize/cluster';
-import type { ParseContext } from '../normalize/parse';
-import { loadKnownDomains } from '../safety';
+import {
+  BENIGN_DNS_IPS,
+  extractSuspiciousRawIpUrls,
+  extractUrls,
+  getRegistrableDomain,
+  isAlwaysHttpsDomain,
+  isBareDomainAutoLink,
+  isRawIpHost,
+} from '../normalize/domains';
+import { parseDropPost, type ParseContext } from '../normalize/parse';
+import { loadKnownDomains, URL_SHORTENERS } from '../safety';
 
 export interface ParsedTelegramPost {
   msgId: string;
@@ -58,6 +67,58 @@ function extractTelegramHandleFromUrl(href: string | null): string | null {
   }
 }
 
+function normalizeTelegramAnchorUrl(rawHref: string, rawAnchorText: string, channelHandle: string): string | null {
+  const anchorText = rawAnchorText.trim();
+  // Skip whitespace-only hidden anchors (e.g. Cointelegraph footer `<a href="..."> </a>`).
+  if (!anchorText) return null;
+
+  let href = decodeHtmlEntities(rawHref).trim();
+  if (!/^https?:\/\//i.test(href)) return null;
+
+  try {
+    const parsed = new URL(href);
+    const host = parsed.hostname.toLowerCase();
+    // Skip benign DNS IPs auto-linked by Telegram (e.g. `http://1.1.1.1/`),
+    // while preserving non-DNS raw IP URLs so parseDropPost/evaluateSafety flag them as risk.
+    if (isRawIpHost(host)) {
+      return BENIGN_DNS_IPS.has(host) ? null : href;
+    }
+
+    const reg = getRegistrableDomain(href);
+    // Drop channel boost links and exact self-home footer links.
+    if (reg === 't.me' || reg === 'telegram.me') {
+      if (parsed.searchParams.has('boost') || anchorText.toLowerCase() === 'boost') return null;
+      const segs = parsed.pathname.split('/').filter(Boolean);
+      if (segs.length === 1 && segs[0].toLowerCase() === channelHandle.toLowerCase()) return null;
+    }
+
+    // Upgrade Telegram's server-side bare-domain `http://` auto-links
+    // (`<a href="http://rgbstone.com/">rgbstone.com</a>`) and always-HTTPS
+    // platforms (`http://t.me/atoms_chat`) to `https://`. Genuine explicit
+    // plain-HTTP links (`http://sketchy.xyz` or disguised `<a href="http://...">Claim</a>`)
+    // remain `http://` so evaluateSafety still flags Insecure transport.
+    if (parsed.protocol === 'http:' && (isBareDomainAutoLink(href, anchorText) || isAlwaysHttpsDomain(reg))) {
+      parsed.protocol = 'https:';
+      href = parsed.toString();
+    }
+    return href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * When Telegram renders a shortened link (e.g. `<a href="https://t.co/xyz">jrny.club/token-hub/claim</a>`),
+ * recover any valid destination URL or bare domain+path shown in the anchor text.
+ */
+function extractShortenerAnchorUrls(href: string, anchorText: string): string[] {
+  const reg = getRegistrableDomain(href);
+  if (!reg || !URL_SHORTENERS[reg]) return [];
+  const extracted = extractUrls(anchorText);
+  const rawIps = extractSuspiciousRawIpUrls(anchorText);
+  return [...extracted, ...rawIps];
+}
+
 interface DraftPost {
   msgId: string;
   msgNum: number;
@@ -67,10 +128,17 @@ interface DraftPost {
   forwardedFrom: string | null;
 }
 
+interface ActiveLink {
+  href: string;
+  textParts: string[];
+}
+
 export async function parseTelegramHtml(html: string, handle: string): Promise<ParsedTelegramPost[]> {
   const posts: DraftPost[] = [];
   let current: DraftPost | null = null;
   let textDepth = 0;
+  let replyDepth = 0;
+  const activeLinks: ActiveLink[] = [];
 
   const rewriter = new HTMLRewriter()
     .on('div.tgme_widget_message', {
@@ -93,41 +161,82 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
         posts.push(draft);
         current = draft;
         textDepth = 0;
+        replyDepth = 0;
+        activeLinks.length = 0;
 
         el.onEndTag(() => {
           if (current === draft) {
             current = null;
             textDepth = 0;
+            replyDepth = 0;
+            activeLinks.length = 0;
           }
+        });
+      },
+    })
+    // Exclude Telegram's quoted reply preview (`a.tgme_widget_message_reply` and
+    // its child `div.tgme_widget_message_text.js-message_reply_text`): concatenating
+    // reply previews onto the main message glued URLs to prose (`...status/123Update`,
+    // `pixelateids.comthe/`), duplicated posts, and leaked stale URLs.
+    .on('a.tgme_widget_message_reply, div.js-message_reply_text', {
+      element(el) {
+        if (!current) return;
+        const owner = current;
+        replyDepth++;
+        el.onEndTag(() => {
+          if (current === owner && replyDepth > 0) replyDepth--;
         });
       },
     })
     .on('div.tgme_widget_message_text', {
       element(el) {
-        if (!current) return;
+        if (!current || replyDepth > 0) return;
+        const cls = el.getAttribute('class') ?? '';
+        if (cls.includes('js-message_reply_text')) return;
         const owner = current;
+        if (textDepth === 0 && owner.textParts.length > 0) {
+          owner.textParts.push('\n');
+        }
         textDepth++;
         el.onEndTag(() => {
           if (current === owner && textDepth > 0) textDepth--;
         });
       },
       text(chunk) {
-        if (!current || textDepth <= 0) return;
+        if (!current || textDepth <= 0 || replyDepth > 0) return;
         if (chunk.text) current.textParts.push(chunk.text);
       },
     })
     .on('div.tgme_widget_message_text br', {
       element() {
-        if (current && textDepth > 0) current.textParts.push('\n');
+        if (current && textDepth > 0 && replyDepth === 0) current.textParts.push('\n');
       },
     })
     .on('div.tgme_widget_message_text a', {
       element(el) {
-        if (!current || textDepth <= 0) return;
+        if (!current || textDepth <= 0 || replyDepth > 0) return;
         const href = el.getAttribute('href');
-        // Telegram HTML-escapes hrefs (&amp;); store decoded so identical
-        // destinations dedupe instead of producing `&amp;s=20` twins.
-        if (href && /^https?:\/\//i.test(href)) current.urls.push(decodeHtmlEntities(href));
+        if (!href || !/^https?:\/\//i.test(href)) return;
+        const owner = current;
+        const linkState: ActiveLink = { href, textParts: [] };
+        activeLinks.push(linkState);
+        el.onEndTag(() => {
+          const idx = activeLinks.lastIndexOf(linkState);
+          if (idx >= 0) activeLinks.splice(idx, 1);
+          if (current !== owner) return;
+          const anchorText = decodeHtmlEntities(linkState.textParts.join(''));
+          const normalized = normalizeTelegramAnchorUrl(linkState.href, anchorText, handle);
+          if (normalized) {
+            owner.urls.push(normalized);
+            for (const extra of extractShortenerAnchorUrls(normalized, anchorText)) {
+              owner.urls.push(extra);
+            }
+          }
+        });
+      },
+      text(chunk) {
+        if (!current || textDepth <= 0 || replyDepth > 0 || activeLinks.length === 0) return;
+        if (chunk.text) activeLinks[activeLinks.length - 1].textParts.push(chunk.text);
       },
     })
     .on('a.tgme_widget_message_date time', {
@@ -180,6 +289,7 @@ const THIRTY_DAYS_MS = 30 * 86_400_000;
 interface SourceRow {
   id: string;
   handle: string;
+  lang: string | null;
   trust: number;
   last_seen_id: string | null;
   fail_count: number;
@@ -267,8 +377,18 @@ async function ingestTelegramSourcePosts(
 ): Promise<{ insertedPosts: number; error: boolean; ingestedResults: IngestPostResult[] }> {
   const { src, newPosts, maxSeenNum } = outcome;
   try {
+    const sourceParseCtx: ParseContext = {
+      ...parseCtx,
+      sourceLang: src.lang ?? undefined,
+      surfByDomain: surfIndex.byDomain,
+      surfByTicker: surfIndex.byTicker,
+    };
+
+    const relevantPosts = newPosts
+      .map(post => ({ post, parsed: parseDropPost(post.text, post.urls, sourceParseCtx) }))
+      .filter(entry => entry.parsed.isRelevantDrop);
     const ingestedResults = await Promise.all(
-      newPosts.map(post =>
+      relevantPosts.map(({ post, parsed }) =>
         ingestPostIntoCluster(
           db,
           {
@@ -280,12 +400,14 @@ async function ingestTelegramSourcePosts(
             text: post.text,
             htmlUrls: post.urls,
             forwardedFrom: post.forwardedFrom,
+            sourceLang: src.lang ?? undefined,
           },
-          parseCtx,
+          sourceParseCtx,
           surfIndex,
           projectDomains,
           platformDomains,
           nowMs,
+          parsed,
         ),
       ),
     );
@@ -307,7 +429,7 @@ export async function pollTelegramBatch(
 ): Promise<TelegramPollSummary> {
   const batchRes = await db
     .prepare(
-      `SELECT id, handle, trust, last_seen_id, fail_count
+      `SELECT id, handle, lang, trust, last_seen_id, fail_count
        FROM sources
        WHERE platform = 'telegram' AND enabled = 1
        ORDER BY last_polled_at ASC NULLS FIRST

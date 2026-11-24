@@ -1,58 +1,25 @@
 import type { TaskType } from '../../../shared/types';
-import { HAN_RE } from './i18n';
 import { URL_SHORTENERS } from '../safety/shorteners';
+import {
+  cleanUrl,
+  extractSuspiciousRawIpUrls,
+  extractUrls,
+  extractWrapperSubdomainHint,
+  getRegistrableDomain,
+  isPlatformDomain,
+  PLATFORM_DOMAINS,
+} from './domains';
+import { FORBIDDEN_CJK_RE, HAN_RE, stripOrTranslateCjk } from './i18n';
+import {
+  classifyDropRelevance,
+  cleanSummaryText,
+  detectNonEnglishLatin,
+  isStopName,
+  MAJOR_TICKERS,
+  truncateAtWordBoundary,
+} from './text';
 
-export const PLATFORM_DOMAINS = new Set<string>([
-  't.me',
-  'x.com',
-  'twitter.com',
-  'youtube.com',
-  'youtu.be',
-  'medium.com',
-  'discord.gg',
-  'discord.com',
-  'linktr.ee',
-  'galxe.com',
-  'zealy.io',
-  'layer3.xyz',
-  'app.galxe.com',
-  'docs.google.com',
-  'google.com',
-  'forms.gle',
-  'github.com',
-  'notion.site',
-  'mirror.xyz',
-  'substack.com',
-  'intract.io',
-  'questn.com',
-  'guild.xyz',
-]);
-
-// ponytail: curated slice of the Public Suffix List — just the common
-// multipart suffixes feed URLs actually use. Ceiling: a full vendored PSL
-// (publicsuffix.org list, refreshed at build time); upgrade when an exotic
-// ccTLD merges unrelated projects. Unknown suffixes fall back to
-// last-two-labels.
-const MULTI_PART_TLDS = new Set([
-  'co.uk',
-  'org.uk',
-  'gov.uk',
-  'ac.uk',
-  'com.au',
-  'co.id',
-  'com.br',
-  'co.jp',
-  'com.sg',
-  'com.tr',
-  'co.kr',
-  'com.cn',
-  'com.hk',
-  'co.in',
-  'com.mx',
-  'co.nz',
-  'com.ar',
-  'co.za',
-]);
+export { PLATFORM_DOMAINS, cleanUrl, extractUrls, getRegistrableDomain, isPlatformDomain };
 
 const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Ethereum', /\b(?:ethereum|eth mainnet|erc-?20)\b/i],
@@ -76,8 +43,7 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Polygon', /\bpolygon\b|\bmatic\b/i],
   // The coin/network phrases need case-insensitivity ('Toncoin', 'Telegram
   // Open Network'); the bare ticker stays uppercase-only so 'a ton of
-  // rewards' never tags TON. The first row carries /i for phrases; extract
-  // dedupes chain names, so the second row never doubles the entry.
+  // rewards' never tags TON.
   ['TON', /\btoncoin\b|\bton ?(?:blockchain|network)\b|\btelegram open network\b/i],
   ['TON', /\bTON\b/],
   ['Sei', /\bsei\b(?:\s+(?:network|chain))?/i],
@@ -93,30 +59,54 @@ const CHAIN_PATTERNS: [string, RegExp][] = [
   ['Movement', /\bmovement\s+(?:chain|mainnet|testnet|network|ecosystem)|\bon movement\b|\$move\b/i],
 ];
 
+// Tightened task patterns: avoid false positives from news articles ("political
+// campaign", "ad campaign", "tokenized deposits", "in the form of", "Senate
+// passes bill", "daily outflows", "10% hack bounty", "Season 2 of my podcast",
+// "Bitcoin validator count").
 const TASK_PATTERNS: [TaskType, RegExp][] = [
   ['faucet', /\bfaucet\b|\btest\s*tokens?\b|\bclaim test\b/i],
-  ['testnet', /\btestnet\b|\bdevnet\b|sepolia|holesky/i],
-  ['quest', /\b(?:galxe|zealy|layer3|intract|questn|guild|quest|campaign|bounty)\b/i],
-  ['waitlist', /\b(?:waitlist|whitelist|early access|invite code|beta access|form)\b/i],
-  ['bridge', /\bbridge\b|cross-?chain/i],
-  ['stake', /\b(?:stak(?:e|ing)|restak(?:e|ing)|deposit|delegate|lp|liquidity)\b/i],
-  ['mint', /\b(?:mint|nft|sbt|badge|pass)\b/i],
-  ['points', /\b(?:points?|xp|season\s*\d+|epoch|leaderboard)\b/i],
-  ['trade', /\b(?:trade|trading|swap|perp|perps|volume|dex)\b/i],
-  ['node', /\b(?:node|validator|depin|cli|docker|run a node)\b/i],
-  ['social', /\b(?:follow|retweet|repost|discord|telegram|social|check-?in|daily)\b/i],
+  ['testnet', /\btestnet\b|\btesnet\b|\bdevnet\b|\bsepolia\b|\bholesky\b/i],
+  [
+    'quest',
+    /\b(?:galxe|zealy|layer3|intract|questn|taskon|soquest|guild\.xyz|quests?)\b|\b(?:airdrop|points?|rewards?|creator|social|incentivized|new)\s+campaign\b|\bjoin\s+(?:the\s+)?[a-z0-9\s]{0,20}campaign\b|\/campaigns?\//i,
+  ],
+  [
+    'waitlist',
+    /\b(?:waitlist|whitelist|allowlist|early\s*access|invite\s*code|beta\s*access|wl\b|fill\s+(?:out\s+)?(?:the\s+)?form|google\s+form|waitlist\s+form|application\s+form|submit\s+(?:the\s+)?form)\b|forms\.gle|typeform\.com|tally\.so/i,
+  ],
+  ['bridge', /\bbridge\b|\bcross-?chain\b/i],
+  [
+    'stake',
+    /\b(?:stak(?:e|ing)|restak(?:e|ing)|delegate|liquidity|lp\s+(?:pool|farm|reward)|deposit\s+(?:eth|sol|usdc|usdt|weth|tokens?|into\s+vault|to\s+earn))\b/i,
+  ],
+  ['mint', /\b(?:mint|free\s*mint|nft|sbt|soulbound|badge|mint\s+pass|access\s+pass(?:es)?|genesis\s+pass)\b/i],
+  [
+    'points',
+    /(?<!basis\s)(?<!percentage\s)\b(?:points?|xp|epoch\s*\d+|leaderboard|season\s*\d+(?:\s+\S+){0,3}\s+(?:drop|drops|points?|rewards?|airdrop|airdrops|farm(?:ing)?|claim|campaign|quests?|xp|badges?)|(?:drop|drops|points?|rewards?|airdrop|airdrops|farm(?:ing)?|claim|campaign|quests?|xp|badges?)\s+season\s*\d+)\b/i,
+  ],
+  ['trade', /\b(?:trading\s+competition|perp\s*dex|perps?\s+trading|trade\s+to\s+earn|swap|dex)\b/i],
+  [
+    'node',
+    /\b(?:run\s+a\s+node|run\s+(?:a\s+)?validator|validator\s+(?:testnet|node|rewards?|incentiv\w*)|depin\s+(?:airdrop|testnet|nodes?|farm(?:ing)?|points?|rewards?|earn|mining|campaign)|cli\s+node|docker\s+node|node\s+(?:setup|guide|runner))\b/i,
+  ],
+  [
+    'social',
+    /\b(?:follow\s+@|follow\s+[a-z0-9_]+\s+on\s+x|retweet|repost|join\s+(?:our\s+)?(?:discord|telegram)|connect\s+(?:your\s+)?(?:x|twitter|discord)|social\s*(?:task|quest|camp)|daily\s*(?:check-?in|spin|quest|task|crate)|check-?in)\b|discord\.gg/i,
+  ],
 ];
 
-const STOP_NAMES = new Set([
-  'THE', 'THIS', 'THAT', 'NEW', 'FREE', 'AIRDROP', 'TESTNET', 'MAINNET', 'CLAIM', 'HOW', 'HERE', 'JOIN',
-  'UPDATE', 'ALERT', 'LIVE', 'NOW', 'CHECK', 'GUIDE', 'TASK', 'TASKS', 'REWARD', 'REWARDS', 'TOKEN',
-  'TOKENS', 'POINTS', 'SEASON', 'OFFICIAL', 'LINK', 'LINKS', 'CRYPTO', 'WEB3', 'HTTP', 'HTTPS',
-]);
+const NON_LATIN_SCRIPT_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Thai}]/u;
 
-const NON_LATIN_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Thai}]/u;
+// Payout/reward currency context preceding a $TICKER (`paid out 100 $HYPE`, `win 50 $SOL`).
+const PAYOUT_CURRENCY_PREFIX_RE =
+  /\b(?:reward(?:s|\s*pool)?|prize(?:\s*pool)?|paid\s+out|worth|win|bonus|pool|total\s+rewards|with\s+[\d,.]+)\s*[:~]?\s*(?:[\d,.]+[kmb]?\s*)?$/i;
+
+const DOMAIN_VERB_PREFIX_RE = /^(?:get|use|try|join|play|app|go|my|the)(?=[a-z]{4,})/;
 
 export interface ParsedDrop {
   urls: string[];
+  rawIpUrls?: string[];
   projectDomain?: string;
   ticker?: string;
   chains: string[];
@@ -124,6 +114,7 @@ export interface ParsedDrop {
   project: string;
   summary: string;
   isNonLatinSource: boolean;
+  isRelevantDrop: boolean;
 }
 
 export interface SurfMatch {
@@ -132,91 +123,31 @@ export interface SurfMatch {
   cardRank?: number;
 }
 
-export function cleanUrl(raw: string): string | null {
-  try {
-    // Trailing text glued to the last path segment (CJK-adjacent posts emit
-    // `.../status/<id>Update` — the bare-URL regex cannot know where the link
-    // ends) and percent-encoded non-ASCII decoration (`.../103153%F0%9F%8F%82`
-    // → dead pages) both survive into the feed without this trim.
-    // ponytail: targets the observed shapes (pure-digit final segment with
-    // alphanumeric glue, ≥8 digits to skip `/page-2`-style slugs and version
-    // paths like /v2/12345abc; trailing %XX runs — percent-encoded non-ASCII
-    // never appears in a real link the bare-URL regex can capture). A real
-    // URL-token extractor over the post text is the full fix if a third
-    // shape appears.
-    let cleaned = raw.trim().replace(/[),.;!?]+$/, '');
-    const path = cleaned.split(/[?#]/)[0];
-    const lastSeg = path.slice(path.lastIndexOf('/') + 1);
-    const m = lastSeg.match(/^(\d{8,})([A-Za-z][A-Za-z0-9]*)$/);
-    if (m) {
-      cleaned = cleaned.slice(0, cleaned.lastIndexOf(lastSeg)) + m[1] + cleaned.slice(cleaned.lastIndexOf(lastSeg) + lastSeg.length);
-    }
-    cleaned = cleaned.replace(/(?:%[0-9A-Fa-f]{2})+$/, '');
-    const u = new URL(cleaned);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-    for (const key of [...u.searchParams.keys()]) {
-      if (/^(?:utm_|fbclid|gclid|igshid|si$|ref_)/i.test(key)) {
-        u.searchParams.delete(key);
-      }
-    }
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
-export function extractUrls(text: string, htmlUrls: string[] = []): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const bareMatches = text.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
-
-  for (const raw of [...htmlUrls, ...bareMatches]) {
-    const normalized = cleanUrl(raw);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      out.push(normalized);
-    }
-  }
-  return out;
-}
-
-export function getRegistrableDomain(rawUrl: string): string | undefined {
-  try {
-    const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '');
-    if (!host || !host.includes('.')) return undefined;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return host;
-    const parts = host.split('.');
-    if (parts.length <= 2) return host;
-    const lastTwo = parts.slice(-2).join('.');
-    if (MULTI_PART_TLDS.has(lastTwo) && parts.length >= 3) {
-      return parts.slice(-3).join('.');
-    }
-    return lastTwo;
-  } catch {
-    return undefined;
-  }
-}
-
-export function isPlatformDomain(domain: string): boolean {
-  const d = domain.toLowerCase();
-  if (PLATFORM_DOMAINS.has(d)) return true;
-  for (const plat of PLATFORM_DOMAINS) {
-    if (d.endsWith(`.${plat}`)) return true;
-  }
-  return false;
+export interface ParseContext {
+  knownDomains?: Map<string, string>;
+  surfByDomain?: Map<string, SurfMatch>;
+  surfByTicker?: Map<string, SurfMatch>;
+  sourceLang?: string;
 }
 
 export function extractTicker(text: string): string | undefined {
-  const m = text.match(/\$([A-Z][A-Z0-9]{1,9})\b/);
-  if (!m) return undefined;
-  const sym = m[1];
-  if (sym === 'USD' || sym === 'USDT' || sym === 'USDC') return undefined;
-  return sym;
+  const re = /\$([A-Z][A-Z0-9]{1,8})\b/g;
+  for (const m of text.matchAll(re)) {
+    const sym = m[1];
+    if (!sym || MAJOR_TICKERS.has(sym)) continue;
+    // Skip tickers mentioned purely as payout/prize currency (`193M $HYPE paid out`).
+    const idx = m.index ?? 0;
+    const before = text.slice(Math.max(0, idx - 45), idx);
+    const after = text.slice(idx + m[0].length, idx + m[0].length + 25);
+    if (PAYOUT_CURRENCY_PREFIX_RE.test(before) || /^\s*(?:\([^)]*\)\s*)?(?:paid\s+out|in\s+rewards|prize)/i.test(after)) {
+      continue;
+    }
+    return sym;
+  }
+  return undefined;
 }
 
 export function extractChainsFromText(text: string): string[] {
-  // A chain can be matched by several rows (TON phrases + bare ticker); keep
-  // one entry per chain name, in CHAIN_PATTERNS order.
   const chains = new Set<string>();
   for (const [name, re] of CHAIN_PATTERNS) {
     if (re.test(text)) chains.add(name);
@@ -239,11 +170,99 @@ function titleFromDomain(domain: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+function normalizeAlphaNum(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * Matches a registrable domain label (e.g. `zeroguys.fun`, `getclocked.com`,
+ * `cityprotocol.co`, `decalabs.ai`) against human-cased 1-3 word phrases in the
+ * post text so cards display `"Zero Guys"`, `"Clocked"`, `"City Protocol"`,
+ * `"DECA Labs"` instead of glued lowercase domain labels.
+ */
+function matchDomainNameInText(domainOrLabel: string, text: string): string | undefined {
+  const rawLabel = domainOrLabel.includes('.') ? (domainOrLabel.split('.')[0] ?? domainOrLabel) : domainOrLabel;
+  const target = normalizeAlphaNum(rawLabel);
+  if (target.length < 3) return undefined;
+  const core = target.replace(DOMAIN_VERB_PREFIX_RE, '');
+  const strippedText = text.replace(/https?:\/\/\S+/g, ' ');
+
+  const tokens = strippedText.match(/[A-Za-z0-9][A-Za-z0-9._-]*/g) ?? [];
+  for (let i = 0; i < tokens.length; i++) {
+    for (let span = 3; span >= 1; span--) {
+      if (i + span > tokens.length) continue;
+      const slice = tokens.slice(i, i + span);
+      // Avoid grabbing lowercase filler phrases; require at least one capitalized token.
+      if (!slice.some(tok => /^[A-Z]/.test(tok))) continue;
+      const phrase = slice.join(' ');
+      const norm = normalizeAlphaNum(phrase);
+      if (
+        norm === target ||
+        (core.length >= 4 && norm === core) ||
+        (target.endsWith('s') && norm === target.slice(0, -1)) ||
+        (norm.endsWith('s') && norm.slice(0, -1) === target)
+      ) {
+        if (!isStopName(phrase)) return phrase;
+      }
+    }
+  }
+  return undefined;
+}
+
+function sanitizeCandidateName(raw: string): string | undefined {
+  const stripped = stripOrTranslateCjk(raw)
+    .replace(/^[\s*#@:|\-\u2013\u2014]+/, '')
+    .replace(/[\s*#@:|\-\u2013\u2014(]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (stripped.length < 2 || stripped.length > 32) return undefined;
+  if (isStopName(stripped)) return undefined;
+  // Reject names made entirely of stopwords.
+  const words = stripped.split(/\s+/);
+  if (words.every(w => isStopName(w))) return undefined;
+  if (CHAIN_PATTERNS.some(([name]) => name.toUpperCase() === stripped.toUpperCase())) return undefined;
+  return stripped;
+}
+
+/**
+ * Extracts a project name from common Telegram airdrop post headers
+ * (`New Waitlist: PLUMBERS`, `TopNod Free Daily Spin`, `Update Psy Testnet`,
+ * `#Update please check Topnod result`).
+ */
+function extractStructuredProjectName(text: string): string | undefined {
+  const stripped = text.replace(/https?:\/\/\S+/g, ' ').replace(/\r/g, '');
+  const firstLines = stripped
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' ');
+
+  const patterns: RegExp[] = [
+    // "New Waitlist: ZUNKI", "New Airdrops: TopNod Spin & Win", "New Whitelist : De1 Platform"
+    /\b(?:New\s+)?(?:Airdrops?|Waitlist|Whitelist|Testnet|Quest|Campaign|Mint|Checker)\s*(?:NFT\s*)?[:|]\s*([A-Z0-9][A-Za-z0-9._-]*(?:\s+[A-Z0-9][A-Za-z0-9._-]*)?)/,
+    // "Update Voice New Polls", "Update Psy Tesnet", "Update DAC New Badge"
+    /\bUpdate\s+([A-Z][A-Za-z0-9._-]*(?:\s+[A-Z][A-Za-z0-9._-]*)?)(?=\s+(?:New|Quest|Testnet|Tesnet|Airdrop|Campaign|Shutdown|Badge|Checker|Update|Live)\b)/,
+    // "TopNod Free Daily Spin", "StrikeLabs Waitlist", "Galxe Shutdown Update"
+    /(?:^|[\p{Emoji_Presentation}\s])([A-Z][A-Za-z0-9._-]*(?:\s+[A-Z][A-Za-z0-9._-]*)?)\s+(?:Waitlist|Whitelist|Testnet|Tesnet|Airdrop|Quest|Faucet|Mint|Campaign|Early\s+Access|Checker|Shutdown|Bounty|Free\s+Daily\s+Spin|Spin\s*&\s*Win)\b/u,
+    // "#Update please check Topnod result and claim"
+    /\b(?:check|claim)\s+([A-Z][A-Za-z0-9._-]{2,20})\s+(?:result|rewards?|airdrop|eligibility|allocation|checker)\b/i,
+  ];
+
+  for (const re of patterns) {
+    const m = firstLines.match(re);
+    if (!m?.[1]) continue;
+    const candidate = sanitizeCandidateName(m[1]);
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
 function guessCapitalizedToken(text: string): string | undefined {
   const stripped = text.replace(/https?:\/\/\S+/g, ' ');
   const matches = stripped.match(/\b[A-Z][A-Za-z0-9]{2,20}\b/g) ?? [];
   for (const tok of matches) {
-    if (STOP_NAMES.has(tok.toUpperCase())) continue;
+    if (isStopName(tok)) continue;
     if (CHAIN_PATTERNS.some(([name]) => name.toUpperCase() === tok.toUpperCase())) continue;
     return tok;
   }
@@ -255,44 +274,42 @@ export function buildRuleSummary(
   project: string,
   taskTypes: TaskType[],
   chains: string[],
+  sourceLang?: string,
 ): { summary: string; isNonLatin: boolean } {
-  const cleaned = text
-    .replace(/https?:\/\/\S+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const hasNonLatin = HAN_RE.test(text) || FORBIDDEN_CJK_RE.test(text) || NON_LATIN_SCRIPT_RE.test(text);
+  const cleaned = cleanSummaryText(text, sourceLang);
+  const isNonEnglishLatin = !hasNonLatin && detectNonEnglishLatin(cleaned, sourceLang);
+  const needsTranslation = hasNonLatin || isNonEnglishLatin;
 
-  const hasNonLatin = HAN_RE.test(cleaned) || NON_LATIN_SCRIPT_RE.test(cleaned);
-  if (!cleaned || hasNonLatin) {
+  if (!cleaned || hasNonLatin || isNonEnglishLatin) {
     const tasksText = taskTypes.join(', ');
     const chainsText = chains.length > 0 ? ` on ${chains.join(', ')}` : '';
+    const safeProject = stripOrTranslateCjk(project) || 'Web3 Project';
     return {
-      summary: `${project}: ${tasksText}${chainsText}`.slice(0, 200),
-      isNonLatin: hasNonLatin,
+      summary: truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`, 195),
+      isNonLatin: needsTranslation,
     };
   }
 
-  // Code-point truncation: UTF-16 slice could split an emoji surrogate pair
-  // and leave a lone surrogate at the end of the summary.
   return {
-    summary: cleaned.length > 200 ? `${[...cleaned].slice(0, 197).join('')}…` : cleaned,
+    summary: truncateAtWordBoundary(cleaned, 195),
     isNonLatin: false,
   };
 }
 
-export interface ParseContext {
-  knownDomains?: Map<string, string>;
-  surfByDomain?: Map<string, SurfMatch>;
-  surfByTicker?: Map<string, SurfMatch>;
-}
-
 export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseContext = {}): ParsedDrop {
   const urls = extractUrls(text, htmlUrls);
+  const rawIpUrls = extractSuspiciousRawIpUrls(text, htmlUrls);
   let projectDomain: string | undefined;
+  let wrapperHint: string | undefined;
+
   for (const u of urls) {
     const dom = getRegistrableDomain(u);
-    // Shorteners point anywhere: they must never become the cluster identity,
-    // or every post sharing one shortener collapses into a single cluster.
-    if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+    if (!dom || URL_SHORTENERS[dom]) continue;
+    if (!wrapperHint) {
+      wrapperHint = extractWrapperSubdomainHint(u);
+    }
+    if (isPlatformDomain(dom)) continue;
     projectDomain = dom;
     break;
   }
@@ -302,27 +319,42 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
   const taskTypes = extractTaskTypes(text, urls);
 
   // A domain-identified post keeps its identity: a $TICKER pointing at a
-  // different surf card must not rename it. Ticker fallback only applies
-  // when no project domain was identified.
+  // different surf card must not rename it.
   const surfMatch =
     (projectDomain && ctx.surfByDomain?.get(projectDomain)) ||
     (!projectDomain && ticker && ctx.surfByTicker?.get(ticker)) ||
     undefined;
 
-  // Domain-derived name outranks a capitalized filler word from the text:
-  // 'Hey degens ... https://foo.xyz' must become "Foo", not "Hey". The surf
-  // match and the registry still take precedence (they are verified names).
-  const project =
+  const domainTextMatch = projectDomain ? matchDomainNameInText(projectDomain, text) : undefined;
+  const wrapperTextMatch = !projectDomain && wrapperHint ? matchDomainNameInText(wrapperHint, text) : undefined;
+  const structuredName = !projectDomain ? extractStructuredProjectName(text) : undefined;
+
+  const rawProject =
     surfMatch?.name ||
     (projectDomain && ctx.knownDomains?.get(projectDomain)) ||
+    domainTextMatch ||
     (projectDomain && titleFromDomain(projectDomain)) ||
+    wrapperTextMatch ||
+    (wrapperHint && titleFromDomain(wrapperHint)) ||
+    structuredName ||
     guessCapitalizedToken(text) ||
     (ticker ? `$${ticker}` : 'Web3 Project');
 
-  const { summary, isNonLatin } = buildRuleSummary(text, project, taskTypes, chains);
+  const project = stripOrTranslateCjk(rawProject) || 'Web3 Project';
+
+  const { summary, isNonLatin } = buildRuleSummary(text, project, taskTypes, chains, ctx.sourceLang);
+
+  const relevance = classifyDropRelevance({
+    text,
+    urls,
+    projectDomain,
+    taskTypes,
+    hasSurfMatch: Boolean(surfMatch),
+  });
 
   return {
     urls,
+    rawIpUrls,
     projectDomain,
     ticker,
     chains,
@@ -330,5 +362,6 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
     project,
     summary,
     isNonLatinSource: isNonLatin,
+    isRelevantDrop: relevance.isDrop,
   };
 }

@@ -1,5 +1,14 @@
 import type { AirdropFeed, MarketSection, RiskLevel } from '../../../shared/types';
-import { getRegistrableDomain, isPlatformDomain } from '../normalize/parse';
+import {
+  BENIGN_DNS_IPS,
+  canonicalLinkKey,
+  cleanUrl,
+  extractSuspiciousRawIpUrls,
+  getRegistrableDomain,
+  isAlwaysHttpsDomain,
+  isPlatformDomain,
+  isRawIpHost,
+} from '../normalize/domains';
 import { URL_SHORTENERS } from './shorteners';
 
 export { URL_SHORTENERS };
@@ -12,6 +21,11 @@ export { URL_SHORTENERS };
 export const DRAINER_RE =
   /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}(?:connect (?:your )?wallet|verify (?:your )?wallet|claim[^.!?]{0,30}connect (?:your )?wallet)/i;
 
+// Crypto doubling / advance-fee scam phrasing ("send 100 USDT to receive 1000 back",
+// "double your ETH", "deposit ... 2x back", "guaranteed 2x return / 200% ROI").
+export const DOUBLING_SCAM_RE =
+  /\bsend\s+[\d,.]+\s*(?:k|m)?\s*\$?[a-z]{2,10}\b[^.!?]{0,60}\b(?:to\s+)?(?:receive|get)\s+[\d,.]+\s*(?:k|m)?(?:\s*\$?[a-z]{2,10})?\s*(?:back|in\s+return|instantly|immediately)\b|\bdouble\s+your\s+(?:crypto|btc|bitcoin|eth|ethereum|sol|solana|usdt|usdc|bnb|ton|tokens?|coins?|deposit|balance|funds|money|holdings)\b|\bguaranteed\s+(?:\d+(?:\.\d+)?x\s+(?:return|profit|roi|on\s+(?:your\s+)?(?:deposit|investment|crypto|btc|eth|sol|usdt|usdc|bnb|ton|funds|money))|\d{2,4}%\s*(?:return|profit|roi|daily))\b|\b(?:send|deposit|invest|transfer)\b[^.!?]{0,60}\b\d+(?:\.\d+)?x\s+(?:return|profit|back|guaranteed)\b|\b\d+(?:\.\d+)?x\s+(?:return|profit|back)\s+(?:on\s+(?:your\s+)?(?:deposit|investment|funds|money|crypto|btc|eth|sol|usdt|usdc|bnb|ton)|in\s+(?:crypto|btc|eth|sol|usdt|usdc|bnb|ton|cash|usd))\b|\b\d+(?:\.\d+)?x\s+(?:return|profit)\s+guaranteed\b/i;
+
 export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['galxe.com', 'Galxe'],
   ['app.galxe.com', 'Galxe'],
@@ -20,6 +34,11 @@ export const KNOWN_QUEST_PLATFORMS: [string, string][] = [
   ['intract.io', 'Intract'],
   ['guild.xyz', 'Guild'],
   ['questn.com', 'QuestN'],
+  ['taskon.xyz', 'TaskOn'],
+  ['soquest.xyz', 'SoQuest'],
+  ['alphabot.app', 'Alphabot'],
+  ['premint.xyz', 'Premint'],
+  ['tokenops.xyz', 'TokenOps'],
   ['github.com', 'GitHub'],
 ];
 
@@ -75,6 +94,7 @@ export function findLookalikeDomain(domain: string, knownDomains: Map<string, st
 export interface SafetyInput {
   domain?: string;
   urls: string[];
+  rawIpUrls?: string[];
   text: string;
   knownProjectDomains: Map<string, string>;
   /** Quest-platform domains, used as lookalike targets only (never trusted). */
@@ -99,9 +119,6 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
   if (input.platformDomains instanceof Set) {
     lookalikeBaseline = new Map<string, string>(input.knownProjectDomains);
     for (const d of input.platformDomains) {
-      // Shared-code hosts (github.com, github.io, gitlab.com) produce mass
-      // false lookalikes (gitlab.com vs github.com, *.github.io pages) —
-      // never useful comparison targets.
       if (/^(github\.com|github\.io|gitlab\.com)$/.test(d)) continue;
       lookalikeBaseline.set(d, 'platform');
     }
@@ -113,19 +130,56 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
     else if (next === 'warn' && level === 'ok') level = 'warn';
   };
 
+  // Flag any non-DNS raw-IP URL across explicit rawIpUrls, input.urls, and raw post text.
+  const rawIpCandidates = [
+    ...(input.rawIpUrls ?? []),
+    ...input.urls,
+    ...extractSuspiciousRawIpUrls(input.text),
+  ];
+  for (const raw of rawIpCandidates) {
+    try {
+      const host = new URL(raw).hostname.toLowerCase();
+      if (isRawIpHost(host) && !BENIGN_DNS_IPS.has(host)) {
+        bump('risk', `Raw IP link: ${host}`);
+      }
+    } catch {
+      // Ignore malformed URL
+    }
+  }
+
+  // Collect exact canonical keys of https:// URLs so only an exact canonical
+  // twin suppresses "Insecure transport" (NOT host-wide across different paths).
+  const httpsKeys = new Set<string>();
+  for (const u of input.urls) {
+    if (!/^https:\/\//i.test(u)) continue;
+    httpsKeys.add(canonicalLinkKey(cleanUrl(u) ?? u));
+  }
+
+  const warnedHttpKeys = new Set<string>();
   for (const u of input.urls) {
     try {
-      // Plain http:// is an insecure transport (MITM can rewrite airdrop
-      // instructions/links). Flag only — no auto-upgrade to https.
-      if (/^http:\/\//i.test(u)) {
+      const parsedUrl = new URL(u);
+      const host = parsedUrl.hostname.toLowerCase();
+      if (isRawIpHost(host)) continue;
+
+      const reg = getRegistrableDomain(u);
+      const canonKey = canonicalLinkKey(cleanUrl(u) ?? u);
+
+      // Flag genuine plain http:// only: skip always-HTTPS platforms (t.me, x.com)
+      // and links that have an exact canonical https:// twin in the same post/cluster.
+      if (
+        /^http:\/\//i.test(u) &&
+        !isAlwaysHttpsDomain(reg) &&
+        !httpsKeys.has(canonKey) &&
+        !warnedHttpKeys.has(canonKey)
+      ) {
+        warnedHttpKeys.add(canonKey);
         bump('warn', `Insecure transport (plain http): ${u}`);
       }
-      const host = new URL(u).hostname.toLowerCase();
+
       if (isPunycodeOrMixedScript(host)) {
         bump('risk', `Punycode or mixed-script domain: ${host}`);
       }
-      const reg = getRegistrableDomain(u);
-      // Shorteners hide the real destination: always at least a warning.
       if (reg && URL_SHORTENERS[reg]) {
         bump('warn', `URL shortener used: ${reg}`);
       }
@@ -144,6 +198,10 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
     bump('risk', 'Suspicious wallet-connect or claim phrasing');
   }
 
+  if (DOUBLING_SCAM_RE.test(input.text)) {
+    bump('risk', 'Crypto doubling / advance-fee scam phrasing');
+  }
+
   if (input.domain && !isPlatformDomain(input.domain)) {
     if (isPunycodeOrMixedScript(input.domain)) {
       bump('risk', `Punycode or mixed-script project domain: ${input.domain}`);
@@ -151,11 +209,6 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
       const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
       if (similar) {
         bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
-      // ponytail: feed-derived (surf/defi) domains are attacker-influenced, so
-      // they are NOT trusted as verified registry identity — every project domain
-      // outside KNOWN_QUEST_PLATFORMS gets the 'not in verified registry' warning
-      // and serves only as a lookalike baseline. Upgrade path: a curated registry
-      // table with a verified flag, loaded here instead.
       }
       if (!input.knownProjectDomains.has(input.domain.toLowerCase())) {
         bump('warn', `Domain not in verified registry: ${input.domain}`);
@@ -168,6 +221,76 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
   }
 
   return { level, reasons: [...reasons] };
+}
+
+export interface ReconcileSafetyInput {
+  level: RiskLevel;
+  reasons: string[];
+  domain?: string;
+  cleanedLinks: string[];
+  knownDomains: ReadonlySet<string>;
+}
+
+/**
+ * Reconciles stored cluster safety reasons against the live `known_domains`
+ * registry and cleaned links (handles legacy D1 rows where a domain was seeded
+ * after initial ingest or bare-domain `http://` twins were stored previously).
+ * Never downgrades `'risk'` to `'warn'` or `'ok'`, and preserves URL shortener
+ * warnings even when shorteners are not shown in `cleanedLinks`.
+ */
+export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResult {
+  const httpsKeys = new Set<string>();
+  for (const u of input.cleanedLinks) {
+    try {
+      const parsed = new URL(u);
+      if (parsed.protocol === 'https:') {
+        httpsKeys.add(canonicalLinkKey(cleanUrl(u) ?? u));
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  const seenHttpKeys = new Set<string>();
+  const kept: string[] = [];
+
+  for (const reason of input.reasons) {
+    const unverifiedMatch = reason.match(/^Domain not in verified registry:\s*(.+)$/i);
+    if (unverifiedMatch) {
+      const dom = unverifiedMatch[1].trim().toLowerCase();
+      if (input.knownDomains.has(dom) || isPlatformDomain(dom)) continue;
+    }
+
+    const httpMatch = reason.match(/^Insecure transport \(plain http\):\s*(.+)$/i);
+    if (httpMatch) {
+      const rawUrl = httpMatch[1].trim();
+      try {
+        const parsed = new URL(rawUrl);
+        const host = parsed.hostname.toLowerCase();
+        const reg = getRegistrableDomain(rawUrl);
+        const key = canonicalLinkKey(cleanUrl(rawUrl) ?? rawUrl);
+        if (BENIGN_DNS_IPS.has(host) || isAlwaysHttpsDomain(reg) || httpsKeys.has(key)) continue;
+        if (seenHttpKeys.has(key)) continue;
+        seenHttpKeys.add(key);
+      } catch {
+        continue;
+      }
+    }
+
+    kept.push(reason);
+  }
+
+  const uniqueReasons = [...new Set(kept)];
+  const level: RiskLevel =
+    input.level === 'risk'
+      ? 'risk'
+      : input.level === 'warn'
+        ? uniqueReasons.length > 0
+          ? 'warn'
+          : 'ok'
+        : 'ok';
+
+  return { level, reasons: uniqueReasons };
 }
 
 export interface KnownDomainEntry {
@@ -245,7 +368,7 @@ export async function seedKnownDomains(
 export interface KnownDomainsLoaded {
   projectDomains: Map<string, string>;
   allKnownDomains: Set<string>;
-  /** Platform domains (Galxe, Zealy, …) live only here: known for the feed's
+  /** Platform domains (Galxe, Zealy, ...) live only here: known for the feed's
    *  `known` link flag and as lookalike targets, never trusted as project
    *  identity (impersonations of these must still be flagged). */
   platformDomains: Set<string>;

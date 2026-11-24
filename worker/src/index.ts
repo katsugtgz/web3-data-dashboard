@@ -451,6 +451,7 @@ export default {
           const limitParam = url.searchParams.get('limit');
           const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
           const sortParam = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
+          const cursorParam = url.searchParams.get('cursor') ?? undefined;
           const { allKnownDomains } = await loadKnownDomains(env.DB);
           // queryFeed clamps non-finite limits to the default itself.
           const feed = await queryFeed(env.DB, allKnownDomains, {
@@ -458,6 +459,7 @@ export default {
             limit: limitParam ? Number(limitParam) : 100,
             risk: riskParam,
             sort: sortParam,
+            cursor: cursorParam,
           });
           const body = JSON.stringify(feed);
           return { body };

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
+import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
 
@@ -107,6 +108,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
 function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Card) => void }) {
   const mins = c.best.m && c.best.m !== '—' ? ` · ${c.best.m}` : '';
   const cost = c.best.c !== 'Free' ? `${c.best.c}${mins}` : `Free${mins}`;
+  const href = normalizeExternalUrl(c.url);
 
   return (
     <div className="best">
@@ -118,8 +120,8 @@ function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Ca
         </div>
         <span className="subs mono">{cost}</span>
       </div>
-      {c.url ? (
-        <a className="btn" href={c.url} target="_blank" rel="noopener noreferrer">
+      {href ? (
+        <a className="btn" href={href} target="_blank" rel="noopener noreferrer">
           Do it
           <span className="sr"> — {c.n} task (opens in a new tab)</span>
           <span aria-hidden="true">↗</span>

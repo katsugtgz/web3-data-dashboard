@@ -61,6 +61,45 @@ export function isHttpUrl(value: string): boolean {
   }
 }
 
+const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+.-]*:/i;
+const BARE_DOMAIN_URL_RE =
+  /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?::\d+)?(?:[/?#].*)?$/i;
+const ASCII_TLD_RE = /^[a-z]{2,}$/i;
+
+/**
+ * Normalizes an external link URL for safe anchor/brief usage.
+ * Keeps valid http(s) URLs, upgrades scheme-less domain paths (e.g.
+ * "t.me/DoodlesUP_bot") to https://, decodes stray &amp;, and rejects
+ * non-HTTP schemes, embedded credentials, and malformed hosts.
+ */
+export function normalizeExternalUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value.trim().replace(/&amp;/gi, '&');
+  if (!cleaned || /\s/.test(cleaned)) return null;
+
+  let candidate: string;
+  if (SCHEME_PREFIX_RE.test(cleaned)) {
+    if (!/^https?:\/\//i.test(cleaned)) return null;
+    candidate = cleaned;
+  } else {
+    if (!BARE_DOMAIN_URL_RE.test(cleaned)) return null;
+    candidate = `https://${cleaned}`;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (parsed.username || parsed.password) return null;
+    const host = parsed.hostname.toLowerCase();
+    if (!host.includes('.')) return null;
+    const tld = host.split('.').pop() ?? '';
+    if (!SCHEME_PREFIX_RE.test(cleaned) && !ASCII_TLD_RE.test(tld)) return null;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
 export function hostnameLabel(url: string): string {
   try {
     return new URL(url.trim()).hostname.replace(/^www\./, '');

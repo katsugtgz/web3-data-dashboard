@@ -17,6 +17,7 @@ export const MIGRATION_FILES = [
   '../migrations/0003_p4.sql',
   '../migrations/0004_tags.sql',
   '../migrations/0005_d1_reads_and_ai_queue.sql',
+  '../migrations/0006_drop_verdict.sql',
 ] as const;
 
 export function applyMigrations(sqlite: Database, files: readonly string[] = MIGRATION_FILES): void {

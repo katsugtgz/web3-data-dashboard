@@ -11,7 +11,7 @@ export function DropsFilterDock({ filters, searchRef }: Props) {
   return (
     <div className="filter-dock">
       <div className="dock-primary">
-        <div className="search">
+        <div className="search search-wide">
           <label htmlFor="drops-q" className="sr">
             Search live drops
           </label>

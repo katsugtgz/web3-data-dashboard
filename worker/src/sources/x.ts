@@ -6,8 +6,14 @@ import {
   type IngestPostResult,
   type SurfIndex,
 } from '../normalize/cluster';
-import type { ParseContext } from '../normalize/parse';
-import { loadKnownDomains } from '../safety';
+import {
+  BENIGN_DNS_IPS,
+  extractBareDomainUrls,
+  getRegistrableDomain,
+  isRawIpHost,
+} from '../normalize/domains';
+import { parseDropPost, type ParseContext } from '../normalize/parse';
+import { loadKnownDomains, URL_SHORTENERS } from '../safety';
 
 export interface ParsedXPost {
   idStr: string;
@@ -19,6 +25,7 @@ export interface ParsedXPost {
 
 interface NextTweetEntityUrl {
   expanded_url?: string;
+  display_url?: string;
   url?: string;
 }
 
@@ -32,6 +39,30 @@ interface NextTweet {
   entities?: {
     urls?: NextTweetEntityUrl[];
   };
+}
+
+function extractTweetEntityUrls(entities?: NextTweetEntityUrl[]): string[] {
+  const out: string[] = [];
+  for (const item of entities ?? []) {
+    const primary = item.expanded_url || item.url;
+    if (primary && /^https?:\/\//i.test(primary)) {
+      try {
+        const host = new URL(primary).hostname.toLowerCase();
+        if (isRawIpHost(host) && BENIGN_DNS_IPS.has(host)) continue;
+      } catch {
+        continue;
+      }
+      out.push(primary);
+
+      const reg = getRegistrableDomain(primary);
+      if (reg && URL_SHORTENERS[reg] && item.display_url) {
+        for (const extra of extractBareDomainUrls(item.display_url)) {
+          out.push(extra);
+        }
+      }
+    }
+  }
+  return [...new Set(out)];
 }
 
 export function parseNextDataTimeline(html: string, handle: string): ParsedXPost[] {
@@ -54,9 +85,7 @@ export function parseNextDataTimeline(html: string, handle: string): ParsedXPost
       // 14-day cutoff would otherwise admit stale undated tweets forever.
       const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
       if (!Number.isFinite(parsedTime)) continue;
-      const urls = (tweet.entities?.urls ?? [])
-        .map(u => u.expanded_url || u.url)
-        .filter((u): u is string => Boolean(u && /^https?:\/\//i.test(u)));
+      const urls = extractTweetEntityUrls(tweet.entities?.urls);
       const postUrl = tweet.permalink
         ? tweet.permalink.startsWith('http')
           ? tweet.permalink
@@ -91,9 +120,7 @@ export function parseCdnSyndication(body: string, handle: string): ParsedXPost[]
           // Same rejection as the __NEXT_DATA__ path: no valid timestamp, no post.
           const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
           if (!Number.isFinite(parsedTime)) return null;
-          const urls = (tweet.entities?.urls ?? [])
-            .map(u => u.expanded_url || u.url)
-            .filter((u): u is string => Boolean(u && /^https?:\/\//i.test(u)));
+          const urls = extractTweetEntityUrls(tweet.entities?.urls);
           return {
             idStr,
             postUrl: `https://x.com/${handle}/status/${idStr}`,
@@ -172,6 +199,7 @@ export async function fetchXTimelineBestEffort(handle: string): Promise<ParsedXP
 interface XSourceRow {
   id: string;
   handle: string;
+  lang: string | null;
   trust: number;
   last_seen_id: string | null;
   fail_count: number;
@@ -212,8 +240,19 @@ async function pollSingleXSource(
       return p.postedAt >= cutoffMs;
     });
 
+    const sourceParseCtx: ParseContext = {
+      ...parseCtx,
+      sourceLang: src.lang ?? undefined,
+      surfByDomain: surfIndex.byDomain,
+      surfByTicker: surfIndex.byTicker,
+    };
+
+    const relevantPosts = newPosts
+      .map(post => ({ post, parsed: parseDropPost(post.text, post.urls, sourceParseCtx) }))
+      .filter(entry => entry.parsed.isRelevantDrop);
+
     const ingestedResults = await Promise.all(
-      newPosts.map(p =>
+      relevantPosts.map(({ post: p, parsed }) =>
         ingestPostIntoCluster(
           db,
           {
@@ -224,12 +263,14 @@ async function pollSingleXSource(
             postedAt: p.postedAt,
             text: p.text,
             htmlUrls: p.urls,
+            sourceLang: src.lang ?? undefined,
           },
-          parseCtx,
+          sourceParseCtx,
           surfIndex,
           projectDomains,
           platformDomains,
           nowMs,
+          parsed,
         ),
       ),
     );
@@ -246,8 +287,6 @@ async function pollSingleXSource(
 
     return { insertedPosts: ingestedResults.length, degraded: false, ingestedResults };
   } catch (err) {
-    // Log with source scope: silently swallowing here made ingest/D1 failures
-    // indistinguishable from X endpoint outages.
     console.error(`x-poll-error:${src.id}`, err);
     const backoff = computeXBackoff(src.fail_count ?? 0, src.first_fail_at ?? null, nowMs);
     await db
@@ -271,7 +310,7 @@ export async function pollXBatch(
 ): Promise<XPollSummary> {
   const res = await db
     .prepare(
-      `SELECT id, handle, trust, last_seen_id, fail_count, first_fail_at
+      `SELECT id, handle, lang, trust, last_seen_id, fail_count, first_fail_at
        FROM sources
        WHERE platform = 'x' AND enabled = 1 AND (next_poll_at IS NULL OR next_poll_at <= ?1)
        ORDER BY last_polled_at ASC NULLS FIRST
@@ -285,17 +324,12 @@ export async function pollXBatch(
     return { polled: 0, insertedPosts: 0, degraded: 0, ingestedResults: [] };
   }
 
-  // Setup failure (e.g. transient D1 error in loadKnownDomains) must degrade
-  // the batch, not reject: a rejection here aborts the whole five-minute cron
-  // before domain seeding, pruning, and score decay can run.
   let projectDomains: Map<string, string>;
   let platformDomains: Set<string> | undefined;
   try {
     ({ projectDomains, platformDomains } = await loadKnownDomains(db, nowMs));
   } catch (err) {
     console.error('x-poll-error:loadKnownDomains', err);
-    // Mark the whole batch degraded in parallel (no await-in-loop: each write
-    // is independent, and the cron must not stall on N round trips).
     await Promise.all(
       sources.map(src =>
         db
@@ -309,8 +343,6 @@ export async function pollXBatch(
   const surfIndex = buildSurfIndex(surfFeed);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 
-  // Never reject: a failed D1 write inside one source poll must not skip the
-  // remaining five-minute cron steps (domain seeding, pruning, decay).
   const outcomes = (
     await Promise.all(
       sources.map(async src => {
