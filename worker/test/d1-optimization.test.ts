@@ -186,6 +186,105 @@ describe('cronGate runIfDue', () => {
       .first<{ last_run_at: number }>();
     expect(row?.last_run_at).toBe(tNewer);
   });
+
+  test('reserves cron slot atomically before running fn so overlapping calls cannot both execute and failed runs release for immediate retry', async () => {
+    const { db } = createTestD1();
+    const intervalMs = 60_000;
+    const t0 = 1_795_240_000_000;
+
+    // 1. Overlapping invocations both finish initial SELECT before either writes.
+    let selectBarrierCount = 0;
+    let releaseSelects!: () => void;
+    const selectBarrier = new Promise<void>(resolve => {
+      releaseSelects = resolve;
+    });
+
+    const overlappingDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/^\s*SELECT\s+last_run_at\s+FROM\s+cron_state/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              const bound = stmt.bind(...args);
+              return {
+                ...bound,
+                async first<T>() {
+                  const res = await bound.first<T>();
+                  selectBarrierCount++;
+                  if (selectBarrierCount === 2) {
+                    releaseSelects();
+                  } else {
+                    await selectBarrier;
+                  }
+                  return res;
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    let releaseFn!: () => void;
+    const fnHold = new Promise<void>(resolve => {
+      releaseFn = resolve;
+    });
+    let calls = 0;
+    const fn = async () => {
+      calls++;
+      await fnHold;
+    };
+
+    const p1 = runIfDue(overlappingDb, 'job:race', intervalMs, t0, fn);
+    const p2 = runIfDue(overlappingDb, 'job:race', intervalMs, t0, fn);
+    // Defer release to a macrotask so the second caller finishes its claim attempt
+    // while the first caller is still inside fn().
+    setTimeout(releaseFn, 0);
+    const results = await Promise.all([p1, p2]);
+    expect(results.filter(Boolean).length).toBe(1);
+    expect(results.filter(r => !r).length).toBe(1);
+    expect(calls).toBe(1);
+
+    // 2. Failed callback releases reservation (missing key and existing key) for immediate retry.
+    await expect(
+      runIfDue(db, 'job:fail-missing', intervalMs, t0, async () => {
+        throw new Error('fail missing');
+      }),
+    ).rejects.toThrow('fail missing');
+    let retriedMissing = 0;
+    expect(
+      await runIfDue(db, 'job:fail-missing', intervalMs, t0 + 1_000, async () => {
+        retriedMissing++;
+      }),
+    ).toBe(true);
+    expect(retriedMissing).toBe(1);
+    const missingRow = await db
+      .prepare('SELECT last_run_at FROM cron_state WHERE key = ?1')
+      .bind('job:fail-missing')
+      .first<{ last_run_at: number }>();
+    expect(missingRow?.last_run_at).toBe(t0 + 1_000);
+
+    await runIfDue(db, 'job:fail-existing', intervalMs, t0, async () => {});
+    await expect(
+      runIfDue(db, 'job:fail-existing', intervalMs, t0 + intervalMs, async () => {
+        throw new Error('fail existing');
+      }),
+    ).rejects.toThrow('fail existing');
+    let retriedExisting = 0;
+    expect(
+      await runIfDue(db, 'job:fail-existing', intervalMs, t0 + intervalMs + 1_000, async () => {
+        retriedExisting++;
+      }),
+    ).toBe(true);
+    expect(retriedExisting).toBe(1);
+    const existingRow = await db
+      .prepare('SELECT last_run_at FROM cron_state WHERE key = ?1')
+      .bind('job:fail-existing')
+      .first<{ last_run_at: number }>();
+    expect(existingRow?.last_run_at).toBe(t0 + intervalMs + 1_000);
+  });
 });
 
 function assertIndexedNoTempBTree(plan: { detail: string }[], expectedIndexPatterns: RegExp[]): void {

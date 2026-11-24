@@ -236,6 +236,7 @@ export async function seedKnownDomains(
   try {
     await Promise.all(chunks);
   } finally {
+    knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
     knownDomainsCache.delete(db);
   }
   return entries.length;
@@ -253,6 +254,7 @@ export interface KnownDomainsLoaded {
 export const KNOWN_DOMAINS_TTL_MS = 5 * 60_000;
 
 const knownDomainsCache = new WeakMap<D1Database, { value: KnownDomainsLoaded; expiresAt: number }>();
+const knownDomainsGen = new WeakMap<D1Database, number>();
 
 export async function loadKnownDomains(db: D1Database, nowMs = Date.now()): Promise<KnownDomainsLoaded> {
   const cached = knownDomainsCache.get(db);
@@ -260,6 +262,7 @@ export async function loadKnownDomains(db: D1Database, nowMs = Date.now()): Prom
     return cached.value;
   }
 
+  const gen = knownDomainsGen.get(db) ?? 0;
   const res = await db.prepare('SELECT domain, project, origin FROM known_domains').all<{
     domain: string;
     project: string;
@@ -278,6 +281,8 @@ export async function loadKnownDomains(db: D1Database, nowMs = Date.now()): Prom
     }
   }
   const value: KnownDomainsLoaded = { projectDomains, allKnownDomains, platformDomains };
-  knownDomainsCache.set(db, { value, expiresAt: nowMs + KNOWN_DOMAINS_TTL_MS });
+  if ((knownDomainsGen.get(db) ?? 0) === gen) {
+    knownDomainsCache.set(db, { value, expiresAt: nowMs + KNOWN_DOMAINS_TTL_MS });
+  }
   return value;
 }

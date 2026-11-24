@@ -887,5 +887,132 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     await badDb.exec('DROP TABLE known_domains');
     await expect(loadKnownDomains(badDb, t0)).rejects.toThrow();
     await expect(loadKnownDomains(badDb, t0)).rejects.toThrow();
+
+    // Concurrent seedKnownDomains finishing mid-SELECT must prevent caching stale rows.
+    const { db: raceBaseDb, queries: raceQueries } = createTestD1();
+    let interceptNextLoad = false;
+    let notifySelectStarted!: () => void;
+    let releaseSelect!: () => void;
+    const selectStarted = new Promise<void>(resolve => {
+      notifySelectStarted = resolve;
+    });
+    const selectGate = new Promise<void>(resolve => {
+      releaseSelect = resolve;
+    });
+    const raceDb = {
+      ...raceBaseDb,
+      prepare(sql: string) {
+        const stmt = raceBaseDb.prepare(sql);
+        if (interceptNextLoad && /SELECT\s+domain,\s+project,\s+origin\s+FROM\s+known_domains/i.test(sql)) {
+          interceptNextLoad = false;
+          return {
+            async all<T>() {
+              const res = await stmt.all<T>();
+              notifySelectStarted();
+              await selectGate;
+              return res;
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await seedKnownDomains(raceDb, null, makeDefi([['Alpha', 'https://alpha.xyz']], t0));
+    interceptNextLoad = true;
+    const inflightLoad = loadKnownDomains(raceDb, t0);
+    await selectStarted;
+
+    await seedKnownDomains(
+      raceDb,
+      null,
+      makeDefi(
+        [
+          ['Alpha', 'https://alpha.xyz'],
+          ['Beta', 'https://beta.xyz'],
+        ],
+        t0 + 1_000,
+      ),
+    );
+    releaseSelect();
+    const staleResult = await inflightLoad;
+    expect(staleResult.projectDomains.has('beta.xyz')).toBe(false);
+
+    const beforeFresh = raceQueries.length;
+    const freshResult = await loadKnownDomains(raceDb, t0 + 2_000);
+    expect(raceQueries.slice(beforeFresh).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(1);
+    expect(freshResult.projectDomains.get('beta.xyz')).toBe('Beta');
+
+    const beforeCached = raceQueries.length;
+    const cachedResult = await loadKnownDomains(raceDb, t0 + 3_000);
+    expect(raceQueries.slice(beforeCached).filter(q => /FROM\s+known_domains/i.test(q)).length).toBe(0);
+    expect(cachedResult).toBe(freshResult);
+  });
+
+  test('pruneOldPosts retries pending orphan-cluster cleanup when zero posts expire after a failed cluster delete', async () => {
+    const { db, queries } = createTestD1();
+    const now = 1_795_200_000_000;
+    const DAY = 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-fresh', 'FreshProto', '[]', '["quest"]', 'Fresh', 'rule', 'ok', '[]', 1.0, 1, ?1, ?1),
+                ('c-orphan', 'OrphanProto', '[]', '["quest"]', 'Orphan', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-fresh', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'fresh post', '[]', 'c-fresh', ?1),
+                ('p-old', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c-orphan', ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+
+    let failClusterDelete = true;
+    const flakyDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (failClusterDelete && /DELETE\s+FROM\s+clusters/i.test(sql)) {
+          return {
+            async run() {
+              failClusterDelete = false;
+              throw new Error('D1 clusters delete error');
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyDb, now)).rejects.toThrow('D1 clusters delete error');
+
+    const oldPost = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old'`).first<{ id: string }>();
+    expect(oldPost).toBeNull();
+    const orphanStillThere = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan'`).first<{ id: string }>();
+    expect(orphanStillThere?.id).toBe('c-orphan');
+    const pendingMarker = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(pendingMarker?.key).toBe('prune:orphans');
+
+    // Next call deletes 0 expired posts, yet sees pending marker and removes the orphan cluster.
+    const retryRes = await pruneOldPosts(db, now + 60_000);
+    expect(retryRes).toEqual({ deletedPosts: 0, deletedClusters: 1 });
+    const remaining = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
+    expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
+    const clearedMarker = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(clearedMarker).toBeNull();
+
+    // Subsequent call with 0 expired posts restores the short-circuit (no cluster DELETE).
+    const beforeSteady = queries.length;
+    const steadyRes = await pruneOldPosts(db, now + 120_000);
+    expect(steadyRes).toEqual({ deletedPosts: 0, deletedClusters: 0 });
+    expect(queries.slice(beforeSteady).some(q => /DELETE\s+FROM\s+clusters/i.test(q))).toBe(false);
   });
 });

@@ -301,7 +301,11 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   // Best-effort X polling (never throws unhandled errors)
   const xBatch = Math.max(1, Number.parseInt(env.X_BATCH_SIZE ?? '3', 10) || 3);
   const xSummary = await pollXBatch(env.DB, xBatch, nowMs, surf);
-  await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+  try {
+    await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+  } catch (err) {
+    console.error('cron-error:postProcessIngest', err);
+  }
 
   await runIfDue(env.DB, 'prune', SIXTY_MIN_MS, nowMs, async () => {
     await pruneOldPosts(env.DB, nowMs);

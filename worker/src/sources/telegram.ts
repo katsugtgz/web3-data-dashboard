@@ -362,15 +362,44 @@ export interface PruneOldPostsResult {
   deletedClusters: number;
 }
 
+const PRUNE_ORPHANS_STATE_KEY = 'prune:orphans';
+
 export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise<PruneOldPostsResult> {
   const cutoff = nowMs - THIRTY_DAYS_MS;
   const del = await db.prepare('DELETE FROM posts WHERE posted_at < ?1').bind(cutoff).run();
   const deletedPosts = del.meta?.changes ?? 0;
   if (deletedPosts === 0) {
-    return { deletedPosts: 0, deletedClusters: 0 };
+    const pending = await db
+      .prepare('SELECT 1 AS pending FROM cron_state WHERE key = ?1')
+      .bind(PRUNE_ORPHANS_STATE_KEY)
+      .first<{ pending: number }>();
+    if (!pending) {
+      return { deletedPosts: 0, deletedClusters: 0 };
+    }
   }
-  const clDel = await db
-    .prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)')
-    .run();
+
+  let clDel: D1Result;
+  try {
+    clDel = await db
+      .prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)')
+      .run();
+  } catch (err) {
+    if (deletedPosts > 0) {
+      try {
+        await db
+          .prepare(
+            `INSERT INTO cron_state (key, last_run_at) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at`,
+          )
+          .bind(PRUNE_ORPHANS_STATE_KEY, nowMs)
+          .run();
+      } catch (markerErr) {
+        console.error('prune-orphans-marker-error', markerErr);
+      }
+    }
+    throw err;
+  }
+
+  await db.prepare('DELETE FROM cron_state WHERE key = ?1').bind(PRUNE_ORPHANS_STATE_KEY).run();
   return { deletedPosts, deletedClusters: clDel.meta?.changes ?? 0 };
 }

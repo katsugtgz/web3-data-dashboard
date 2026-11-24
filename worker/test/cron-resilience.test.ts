@@ -666,4 +666,90 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
       },
     );
   });
+
+  test('scheduled */5 * * * * still runs prune and decay when postProcessIngest throws', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    const oldPostedAt = t0 - 31 * 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c:active', 'ActiveProto', '[]', '["quest"]', 'rule', 'rule', 'ok', '[]', 999, 1, ?1, ?1),
+                ('c:old1', 'OldProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?2, ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:active', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'active post', '[]', 'c:active', ?1),
+                ('p:old1', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c:old1', ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+
+    const failingAiDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/\bai_usage\b/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async first() {
+                  throw new Error('D1 ai_usage failure');
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    const env: Env = {
+      DB: failingAiDb,
+      AI: {
+        async run() {
+          return JSON.stringify({ summary: 'Unused', taskTypes: ['quest'], chains: [] });
+        },
+      },
+      X_BATCH_SIZE: '1',
+    };
+
+    const origErr = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      await withStubbedFetch(
+        () => new Response('offline', { status: 503 }),
+        async () => {
+          await worker.scheduled(
+            { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+            env,
+            makeExecCtx(),
+          );
+        },
+      );
+    } finally {
+      console.error = origErr;
+    }
+
+    expect(logged.some(args => args[0] === 'cron-error:postProcessIngest')).toBe(true);
+
+    const old1 = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old1'`).first<{ id: string }>();
+    expect(old1).toBeNull();
+    const active = await db.prepare(`SELECT score FROM clusters WHERE id = 'c:active'`).first<{ score: number }>();
+    expect(active?.score).toBeLessThan(999);
+    const states = await db
+      .prepare('SELECT key, last_run_at FROM cron_state ORDER BY key ASC')
+      .all<{ key: string; last_run_at: number }>();
+    expect(states.results).toEqual([
+      { key: 'decay', last_run_at: t0 },
+      { key: 'prune', last_run_at: t0 },
+    ]);
+  });
 });

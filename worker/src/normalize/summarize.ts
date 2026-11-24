@@ -27,8 +27,9 @@ export function extractAiTextResponse(raw: unknown): string | null {
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>;
     if (typeof obj.response === 'string') return obj.response;
-    const choices = obj.choices as { message?: { content?: string } }[] | undefined;
-    if (choices?.[0]?.message?.content) return choices[0].message.content;
+    const choices = obj.choices as { message?: { content?: unknown } }[] | undefined;
+    const content = choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content) return content;
   }
   return null;
 }

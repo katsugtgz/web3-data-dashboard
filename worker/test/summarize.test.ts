@@ -555,4 +555,88 @@ describe('Workers AI summary normalization & budget guard', () => {
       ai_retry_after: 0,
     });
   });
+
+  test('non-string choices[0].message.content returns null and triggers backoff instead of throwing', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_obj', 'rule');
+
+    const now = 1_795_240_000_000;
+    const sixHours = 6 * 3_600_000;
+    const oneDay = 24 * 3_600_000;
+
+    const objectContentAi: AiBindingLike = {
+      async run() {
+        return { choices: [{ message: { content: { summary: 'object payload' } } }] };
+      },
+    };
+    const r1 = await summarizeClusterWithAi(objectContentAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now,
+    });
+    expect(r1).toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: now + sixHours,
+    });
+
+    const numericContentAi: AiBindingLike = {
+      async run() {
+        return { choices: [{ message: { content: 12345 } }] };
+      },
+    };
+    const r2 = await summarizeClusterWithAi(numericContentAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now + 5_000,
+    });
+    expect(r2).toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 2,
+      ai_retry_after: now + 5_000 + oneDay,
+    });
+
+    const validChoicesAi: AiBindingLike = {
+      async run() {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summary: 'Complete KiteAI quests via choices string response.',
+                  taskTypes: ['quest'],
+                  chains: ['Base'],
+                }),
+              },
+            },
+          ],
+        };
+      },
+    };
+    const r3 = await summarizeClusterWithAi(validChoicesAi, db, {
+      clusterId: 'c_obj',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: now + 10_000,
+    });
+    expect(r3).not.toBeNull();
+    expect(readAttemptState(sqlite, 'c_obj')).toEqual({
+      summary_source: 'ai',
+      ai_attempts: 0,
+      ai_retry_after: 0,
+    });
+  });
 });
