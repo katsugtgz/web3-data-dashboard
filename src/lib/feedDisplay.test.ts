@@ -592,16 +592,21 @@ describe('formatFeedSummary', () => {
     });
   });
 
-  test('strips bilingual Turkish duplicate segments (both newline and inline wire asterisk formats)', () => {
+  test('strips bilingual Turkish duplicate segments (newline and wire formats) only when marked or content-equivalent', () => {
     const huang = formatFeedSummary(
       "*HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED\n\nNvidia CEO Huang, FT'ye yapt\u0131\u011f\u0131 a\u00e7\u0131klamada yapay zeka talebinin g\u00fc\u00e7l\u00fc kald\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
     );
     expect(huang.lead).toBe('HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED');
 
-    const nvidia = formatFeedSummary(
-      "*NVIDIA BOARD IS NOT CONSIDERING A SPLIT *Bir kaynak CNBC'ye bunun g\u00fcndemde olmad\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
+    const huangInline = formatFeedSummary(
+      "*HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED *Nvidia CEO Huang, FT'ye yapt\u0131\u011f\u0131 a\u00e7\u0131klamada yapay zeka talebinin g\u00fc\u00e7l\u00fc kald\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
     );
-    expect(nvidia.lead).toBe('NVIDIA BOARD IS NOT CONSIDERING A SPLIT');
+    expect(huangInline.lead).toBe('HUANG: NVIDIA CEO TELLS FT AI DEMAND REMAINS UNPRECEDENTED');
+
+    const wireExplicitMarker = formatFeedSummary(
+      "*CLAIM OPENS ON NOVEMBER 30 *TR: Talep 30 Kas\u0131m'da a\u00e7\u0131l\u0131yor.",
+    );
+    expect(wireExplicitMarker.lead).toBe('CLAIM OPENS ON NOVEMBER 30');
 
     const explicitMarker = formatFeedSummary(
       'Claim opens on May 15.\nTR: Talep 15 May\u0131s tarihinde a\u00e7\u0131l\u0131yor.',
@@ -621,6 +626,18 @@ describe('formatFeedSummary', () => {
     );
     expect(sentenceMixed.lead).toContain('Claim opens on November 30.');
     expect(sentenceMixed.lead).toContain('200 puan');
+
+    const wireMixed = formatFeedSummary(
+      '*CLAIM OPENS ON NOVEMBER 30 *Sadece KYC do\u011frulamas\u0131 yapan c\u00fczdanlar hak kazan\u0131r.',
+    );
+    expect(wireMixed.lead).toContain('CLAIM OPENS ON NOVEMBER 30');
+    expect(wireMixed.lead).toContain('Sadece KYC');
+
+    const wireWithUniqueEntity = formatFeedSummary(
+      "*NVIDIA BOARD IS NOT CONSIDERING A SPLIT *Bir kaynak CNBC'ye bunun g\u00fcndemde olmad\u0131\u011f\u0131n\u0131 s\u00f6yledi.",
+    );
+    expect(wireWithUniqueEntity.lead).toContain('NVIDIA BOARD IS NOT CONSIDERING A SPLIT');
+    expect(wireWithUniqueEntity.lead).toContain('CNBC');
   });
 
   test('collapses excessive repeated alert emojis and keeps clean prose untouched', () => {

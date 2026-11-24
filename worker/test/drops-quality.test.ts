@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import worker from '../src/index';
-import { createTestD1 } from './helpers';
+import { applyMigrations, createTestD1, MIGRATION_FILES } from './helpers';
 import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import {
   cleanUrl,
@@ -269,6 +269,20 @@ describe('Domain classification & URL hygiene', () => {
       { projectDomain: 'example.com' },
     );
     expect(joinWithClean).toEqual(['https://example.com/join']);
+
+    const distinctRefActions = selectFeedLinks(
+      [
+        'https://example.com/r/AB12',
+        'https://example.com/ref/XY99',
+        'https://example.com/join/CD34',
+        'https://example.com/join/EF56',
+      ],
+      { projectDomain: 'example.com' },
+    );
+    expect(distinctRefActions).toEqual([
+      'https://example.com/join/CD34',
+      'https://example.com/r/AB12',
+    ]);
   });
 });
 
@@ -1283,6 +1297,93 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     expect(betaFollow.clusterId).toBe(betaBase.clusterId);
   });
 
+  test('normalizes full non-alphanumeric project keys in migration 0006 and merges non-base candidates behind 200 fillers', async () => {
+    const { db, sqlite } = createTestD1(MIGRATION_FILES.slice(0, 5));
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    // Legacy pre-0006 in-window non-base cluster (ticker-derived ID) with punctuation in project name.
+    const legacyTickerClusterId = await computeClusterId(undefined, 'ABT', 'Alpha+Beta', 'p_legacy', now - 3_600_000);
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES (?1, 'Alpha+Beta', 'ABT', NULL, '[]', '["testnet"]', 'Alpha+Beta testnet live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+      )
+      .bind(legacyTickerClusterId, now - 3_600_000)
+      .run();
+
+    applyMigrations(sqlite, [MIGRATION_FILES[5]]);
+
+    const migratedRow = await db
+      .prepare('SELECT project_key FROM clusters WHERE id = ?1')
+      .bind(legacyTickerClusterId)
+      .first<{ project_key: string | null }>();
+    expect(migratedRow?.project_key).toBe('alphabeta');
+
+    // Non-base cluster still with project_key = NULL (e.g. legacy unmigrated row inserted raw).
+    const nullKeyClusterId = 'win_plus_proto_nonbase';
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop, project_key)
+         VALUES (?1, 'Plus+Proto', NULL, NULL, '[]', '["quest"]', 'Plus+Proto quest live', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2, 1, NULL)`,
+      )
+      .bind(nullKeyClusterId, now - 3_600_000)
+      .run();
+
+    // Seed 205 newer unrelated domainless filler clusters within the 3d window.
+    for (let i = 0; i < 205; i++) {
+      const ts = now - i * 1_000;
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop, project_key)
+           VALUES (?1, ?2, NULL, NULL, '[]', '["testnet"]', 'Unrelated testnet', 'rule', 'ok', '[]', 0.5, 1, ?3, ?3, 1, ?4)`,
+        )
+        .bind(`filler_nonbase_${i}`, `FillerNonBase${i}`, ts, `fillernonbase${i}`)
+        .run();
+    }
+
+    // Domainless, tickerless AlphaBeta post has base ID proj:alphabeta (!= tick:$ABT),
+    // so only full non-alphanumeric project_key normalization can locate the non-base cluster.
+    const alphaFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:ab_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/ab_follow',
+        postedAt: now,
+        text: 'AlphaBeta testnet campaign live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(alphaFollow.clusterId).toBe(legacyTickerClusterId);
+
+    const plusFollow = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:pp_follow',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/pp_follow',
+        postedAt: now,
+        text: 'PlusProto airdrop quest live now',
+      },
+      { knownDomains: new Map() },
+      surfIndex,
+      new Map(),
+      new Set(),
+      now,
+    );
+    expect(plusFollow.clusterId).toBe(nullKeyClusterId);
+  });
+
   test('concurrent fallback ingests reserve targets atomically for both project and ticker clusters (in-process & cross-isolate)', async () => {
     const { db, sqlite } = createTestD1();
     const now = 1_795_364_909_000;
@@ -1502,6 +1603,297 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .query(`SELECT COUNT(*) AS n FROM clusters WHERE project = 'CrossIsoProto'`)
       .get() as { n: number };
     expect(isoCount.n).toBe(2);
+  });
+
+  test('enforces window checks on the UPDATE path and coordinates concurrent new-window creation across isolates (project & ticker)', async () => {
+    const { db, sqlite } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
+                ('x:ch2', 'x', 'ch2', 'en', 0.8, 1)`,
+      )
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const scenarios = [
+      {
+        kind: 'project' as const,
+        project: 'UpdateRaceProj',
+        oldProject: 'UpdateRaceProj',
+        text1: 'UpdateRaceProj testnet campaign live',
+        text2: 'UpdateRaceProj Season 2 airdrop claim open',
+        s2Project: 'WinRaceProj',
+        s2OldText: 'WinRaceProj v1 testnet live',
+        s2TextA: 'WinRaceProj Season 2 testnet live',
+        s2TextB: 'WinRaceProj Season 2 claim open',
+        windowMs: 3 * 86_400_000,
+      },
+      {
+        kind: 'ticker' as const,
+        project: 'UpdateRaceTick',
+        oldProject: 'UpdateRaceTick',
+        text1: 'UpdateRaceTick $URTK testnet campaign live',
+        text2: 'UpdateRaceTick $URTK Season 2 claim open',
+        s2Project: 'WinRaceTick',
+        s2OldText: 'WinRaceTick $WRTK v1 testnet live',
+        s2TextA: 'WinRaceTick $WRTK Season 2 testnet live',
+        s2TextB: 'WinRaceTick $WRTK Season 2 claim open',
+        windowMs: 7 * 86_400_000,
+      },
+    ];
+
+    for (const s of scenarios) {
+      // Schedule 1A: Isolate B selects empty base ID, then Isolate A inserts out-of-window base row
+      // BEFORE Isolate B reads `existing`, forcing Isolate B into the `if (existing)` UPDATE path.
+      const baseId = await computeClusterId(
+        undefined,
+        s.kind === 'ticker' ? (s.project === 'UpdateRaceTick' ? 'URTK' : undefined) : undefined,
+        s.project,
+        `s1a_${s.kind}`,
+        now,
+      );
+      let injectedOld = false;
+      const updateRaceDb = {
+        ...db,
+        prepare(sql: string) {
+          const stmt = db.prepare(sql);
+          if (/SELECT id, project, ticker, domain, chains.*FROM clusters WHERE id = \?1/is.test(sql)) {
+            return {
+              bind(...args: unknown[]) {
+                const bound = stmt.bind(...args);
+                return {
+                  ...bound,
+                  async first<T>() {
+                    if (!injectedOld && args[0] === baseId) {
+                      injectedOld = true;
+                      const oldTs = now - s.windowMs - 86_400_000;
+                      await db
+                        .prepare(
+                          `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+                           VALUES (?1, ?2, ?3, NULL, '[]', '["testnet"]', 'Old season', 'rule', 'ok', '[]', 0.5, 1, ?4, ?4, 1)`,
+                        )
+                        .bind(baseId, s.project, s.kind === 'ticker' ? 'URTK' : null, oldTs)
+                        .run();
+                    }
+                    return bound.first<T>();
+                  },
+                };
+              },
+            };
+          }
+          return stmt;
+        },
+      } as unknown as D1Database;
+
+      const s1aRes = await ingestPostIntoCluster(
+        updateRaceDb,
+        {
+          postId: `telegram:ch1:s1a_${s.kind}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/s1a_${s.kind}`,
+          postedAt: now,
+          text: s.text2,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      );
+      expect(injectedOld).toBe(true);
+      expect(s1aRes.clusterId).not.toBe(baseId);
+      const oldBaseRow = await db
+        .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+        .bind(baseId)
+        .first<{ source_count: number }>();
+      expect(oldBaseRow?.source_count).toBe(1);
+
+      // Schedule 1B: Isolate B reads in-window `existing`, then another isolate shifts `last_seen`
+      // out-of-window right before `UPDATE clusters` executes; SQL WHERE guard rejects & retries cleanly.
+      const s1bProj = `${s.project}Moved`;
+      const s1bOldRes = await ingestPostIntoCluster(
+        db,
+        {
+          postId: `telegram:ch1:s1b_old_${s.kind}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/s1b_old_${s.kind}`,
+          postedAt: now - 3_600_000,
+          text:
+            s.kind === 'ticker'
+              ? `${s1bProj} $M${s.kind[0].toUpperCase()}1B testnet live`
+              : `${s1bProj} testnet live`,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now - 3_600_000,
+      );
+      let shiftedBeforeUpdate = false;
+      const movedWindowDb = {
+        ...db,
+        prepare(sql: string) {
+          const stmt = db.prepare(sql);
+          if (/^\s*UPDATE\s+clusters/i.test(sql)) {
+            return {
+              bind(...args: unknown[]) {
+                const bound = stmt.bind(...args);
+                return {
+                  ...bound,
+                  async run() {
+                    if (!shiftedBeforeUpdate && args[0] === s1bOldRes.clusterId) {
+                      shiftedBeforeUpdate = true;
+                      const outTs = now - s.windowMs - 86_400_000;
+                      await db
+                        .prepare('UPDATE clusters SET first_seen = ?2, last_seen = ?2 WHERE id = ?1')
+                        .bind(s1bOldRes.clusterId, outTs)
+                        .run();
+                    }
+                    return bound.run();
+                  },
+                };
+              },
+            };
+          }
+          return stmt;
+        },
+      } as unknown as D1Database;
+
+      const s1bNewRes = await ingestPostIntoCluster(
+        movedWindowDb,
+        {
+          postId: `x:ch2:s1b_new_${s.kind}`,
+          sourceId: 'x:ch2',
+          sourceTrust: 0.8,
+          postUrl: `https://x.com/ch2/status/s1b_new_${s.kind}`,
+          postedAt: now,
+          text:
+            s.kind === 'ticker'
+              ? `${s1bProj} $M${s.kind[0].toUpperCase()}1B airdrop claim open`
+              : `${s1bProj} airdrop claim open`,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      );
+      expect(shiftedBeforeUpdate).toBe(true);
+      expect(s1bNewRes.clusterId).not.toBe(s1bOldRes.clusterId);
+      const untouchedRow = await db
+        .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+        .bind(s1bOldRes.clusterId)
+        .first<{ source_count: number }>();
+      expect(untouchedRow?.source_count).toBe(1);
+
+      // Schedule 2: Occupied old base cluster exists; two nearby isolates concurrently finish
+      // querying `clusters` before either creates the new window, and both MUST converge onto
+      // the SAME newly created windowed cluster ID.
+      const oldBase = await ingestPostIntoCluster(
+        db,
+        {
+          postId: `telegram:ch1:s2_old_${s.kind}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/s2_old_${s.kind}`,
+          postedAt: now - s.windowMs - 2 * 86_400_000,
+          text: s.s2OldText,
+        },
+        { knownDomains: new Map() },
+        surfIndex,
+        new Map(),
+        new Set(),
+        now,
+      );
+
+      let resolveBarrierHits = 0;
+      let releaseResolveBarrier!: () => void;
+      const resolveBarrier = new Promise<void>(resolve => {
+        releaseResolveBarrier = resolve;
+      });
+      const makeResolveRacingDb = (): D1Database =>
+        ({
+          ...db,
+          prepare(sql: string) {
+            const stmt = db.prepare(sql);
+            if (/SELECT id, project, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql) ||
+                /SELECT id, project, ticker, first_seen, last_seen FROM clusters WHERE id = \?1/i.test(sql)) {
+              return {
+                bind(...args: unknown[]) {
+                  const bound = stmt.bind(...args);
+                  return {
+                    ...bound,
+                    async first<T>() {
+                      const row = await bound.first<T>();
+                      if (args[0] === oldBase.clusterId) {
+                        resolveBarrierHits += 1;
+                        if (resolveBarrierHits === 2) {
+                          releaseResolveBarrier();
+                        } else if (resolveBarrierHits < 2) {
+                          await resolveBarrier;
+                        }
+                      }
+                      return row;
+                    },
+                  };
+                },
+              };
+            }
+            return stmt;
+          },
+        }) as unknown as D1Database;
+
+      const [winA, winB] = await Promise.all([
+        ingestPostIntoCluster(
+          makeResolveRacingDb(),
+          {
+            postId: `telegram:ch1:s2_a_${s.kind}`,
+            sourceId: 'telegram:ch1',
+            sourceTrust: 0.8,
+            postUrl: `https://t.me/ch1/s2_a_${s.kind}`,
+            postedAt: now - 7_200_000,
+            text: s.s2TextA,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          now,
+        ),
+        ingestPostIntoCluster(
+          makeResolveRacingDb(),
+          {
+            postId: `x:ch2:s2_b_${s.kind}`,
+            sourceId: 'x:ch2',
+            sourceTrust: 0.8,
+            postUrl: `https://x.com/ch2/status/s2_b_${s.kind}`,
+            postedAt: now,
+            text: s.s2TextB,
+          },
+          { knownDomains: new Map() },
+          surfIndex,
+          new Map(),
+          new Set(),
+          now,
+        ),
+      ]);
+      expect(resolveBarrierHits).toBeGreaterThanOrEqual(2);
+      expect(winA.clusterId).toBe(winB.clusterId);
+      expect(winA.clusterId).not.toBe(oldBase.clusterId);
+      const s2Count = sqlite
+        .query(`SELECT COUNT(*) AS n FROM clusters WHERE project = ?1`)
+        .get(s.s2Project) as { n: number };
+      expect(s2Count.n).toBe(2);
+      const mergedNewRow = await db
+        .prepare('SELECT source_count FROM clusters WHERE id = ?1')
+        .bind(winA.clusterId)
+        .first<{ source_count: number }>();
+      expect(mergedNewRow?.source_count).toBe(2);
+    }
   });
 
   test('reuses stored posts.cluster_id on retry and completes missing cluster row without touching competing cluster', async () => {

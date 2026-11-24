@@ -630,7 +630,6 @@ function hasSubstantialAscii(segment: string): boolean {
 }
 
 const EXPLICIT_TR_MARKER_RE = /^(?:\[?\s*(?:TR|T\u00fcrk\u00e7e|Turkish)\s*\]?\s*[:\-\u2013\u2014])/i;
-const WIRE_CAPS_HEADER_RE = /^\*[A-Z][A-Z0-9\s:,'"$%.-]{10,}/;
 const ANCHOR_STOP_WORDS = new Set([
   'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out',
   'with', 'that', 'this', 'from', 'they', 'have', 'has', 'had', 'will', 'been', 'into', 'than',
@@ -714,20 +713,17 @@ function isTurkishContentEquivalent(englishText: string, turkishSegment: string)
   return shared >= 3 && shared / minLen >= 0.35 && shared / trAnchors.length >= 0.25;
 }
 
-function filterTurkishSegments(parts: string[], allowWireMirror = false): string[] | null {
+function filterTurkishSegments(parts: string[]): string[] | null {
   const nonTurkish = parts.filter(p => !hasTurkishSignal(p));
   if (nonTurkish.length === 0 || nonTurkish.length >= parts.length || !nonTurkish.some(hasSubstantialAscii)) {
     return null;
   }
   const englishContext = nonTurkish.join(' ');
-  const isWireMirror = allowWireMirror && WIRE_CAPS_HEADER_RE.test(parts[0] ?? '');
   let droppedAny = false;
-  const kept = parts.filter((part, idx) => {
+  const kept = parts.filter(part => {
     if (!hasTurkishSignal(part)) return true;
     const isTranslation =
-      EXPLICIT_TR_MARKER_RE.test(part) ||
-      (isWireMirror && idx > 0) ||
-      isTurkishContentEquivalent(englishContext, part);
+      EXPLICIT_TR_MARKER_RE.test(part) || isTurkishContentEquivalent(englishContext, part);
     if (isTranslation) {
       droppedAny = true;
       return false;
@@ -752,7 +748,7 @@ function stripBilingualTurkishDuplicate(input: string): string {
     .map(p => p.trim())
     .filter(Boolean);
   if (wireParts.length >= 2) {
-    const kept = filterTurkishSegments(wireParts, true);
+    const kept = filterTurkishSegments(wireParts);
     if (kept) return kept.join(' ');
   }
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedResponse } from '../../shared/types';
 import { API_BASE } from '../lib/api';
-import { fetchFeedPages } from '../lib/feedFetch';
+import { createFeedSession } from '../lib/feedFetch';
 import { mergeVisibleUpdates, selectPending } from '../lib/feedMerge';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
@@ -36,7 +36,7 @@ export function useFeed(): FeedState {
   const [failed, setFailed] = useState(false);
 
   const [poll] = useState(createPollLifecycle);
-  const etagRef = useRef<string | null>(null);
+  const [session] = useState(() => createFeedSession());
   const knownIdsRef = useRef<Set<string> | null>(null);
   if (knownIdsRef.current === null) {
     knownIdsRef.current = new Set(initial?.items.map(it => it.id) ?? []);
@@ -56,7 +56,8 @@ export function useFeed(): FeedState {
     const { signal, skipped } = poll.beginRequest(mode);
     if (skipped) return;
 
-    fetchFeedPages(etagRef.current, signal)
+    session
+      .fetch(signal, { resetResume: mode === 'manual' })
       .then(res => {
         if (signal.aborted) return;
         poll.settle();
@@ -68,7 +69,6 @@ export function useFeed(): FeedState {
           }
           hasLiveRef.current = res.source === 'api';
           setIsLiveApi(hasLiveRef.current);
-          etagRef.current = res.etag;
           setGeneratedAt(res.body.generatedAt);
           if (mode !== 'background') {
             knownIdsRef.current = new Set(res.body.items.map(it => it.id));
@@ -105,7 +105,7 @@ export function useFeed(): FeedState {
         setFailed(true);
         setLoading(false);
       });
-  }, [poll]);
+  }, [poll, session]);
 
   const fetchNowRef = useRef(fetchNow);
   useEffect(() => {

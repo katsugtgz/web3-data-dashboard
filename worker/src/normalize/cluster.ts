@@ -202,17 +202,67 @@ function mintWindowedClusterId(baseClusterId: string, postedAt: number, postId: 
 }
 
 /**
+ * Atomically reserves or joins the active window cluster ID for a fallback
+ * ticker/project identity in D1 so concurrent isolates creating a new window
+ * converge on the same ID while out-of-window ingests start a separate window.
+ */
+async function reserveFallbackWindow(
+  db: D1Database,
+  identity: FallbackIdentity,
+  preferredClusterId: string,
+  windowedClusterId: string,
+  postedAt: number,
+  rejectedClusterId: string | null,
+): Promise<string> {
+  const row = await db
+    .prepare(
+      `INSERT INTO fallback_windows (identity_key, cluster_id, first_seen, last_seen)
+       VALUES (?1, ?2, ?3, ?3)
+       ON CONFLICT(identity_key) DO UPDATE SET
+         cluster_id = CASE
+           WHEN ?3 >= fallback_windows.first_seen - ?4
+            AND ?3 <= fallback_windows.last_seen + ?4
+            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
+           THEN fallback_windows.cluster_id
+           WHEN excluded.cluster_id = fallback_windows.cluster_id
+           THEN ?5
+           ELSE excluded.cluster_id
+         END,
+         first_seen = CASE
+           WHEN ?3 >= fallback_windows.first_seen - ?4
+            AND ?3 <= fallback_windows.last_seen + ?4
+            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
+           THEN MIN(fallback_windows.first_seen, ?3)
+           ELSE ?3
+         END,
+         last_seen = CASE
+           WHEN ?3 >= fallback_windows.first_seen - ?4
+            AND ?3 <= fallback_windows.last_seen + ?4
+            AND (?6 IS NULL OR fallback_windows.cluster_id != ?6)
+           THEN MAX(fallback_windows.last_seen, ?3)
+           ELSE ?3
+         END
+       RETURNING cluster_id`,
+    )
+    .bind(identity.key, preferredClusterId, postedAt, identity.windowMs, windowedClusterId, rejectedClusterId)
+    .first<{ cluster_id: string }>();
+
+  return row?.cluster_id ?? preferredClusterId;
+}
+
+/**
  * Resolves the target cluster ID using sliding time windows for fallback
  * ticker (7d) and project (3d) clusters when no canonical project domain is
  * present. Checks `baseClusterId` occupancy via PK lookup outside any LIMITed
- * candidate query and filters project candidates by normalized `project_key`
- * before limiting.
+ * candidate query, normalizes legacy `project_key IS NULL` rows identically to
+ * `normalizeProjectKey`, and coordinates new-window IDs in `fallback_windows`.
  */
 async function resolveClusterId(
   db: D1Database,
   parsed: ParsedDrop,
   input: IngestPostInput,
   attempt = 0,
+  rejectedClusterId: string | null = null,
 ): Promise<string> {
   const baseClusterId = await computeClusterId(
     parsed.projectDomain,
@@ -230,6 +280,7 @@ async function resolveClusterId(
   const tickerUpper = parsed.ticker?.toUpperCase();
   if (tickerUpper && !MAJOR_TICKERS.has(tickerUpper)) {
     const windowMs = SEVEN_DAYS_MS;
+    const identity: FallbackIdentity = { key: `tick:${tickerUpper}`, windowMs };
     const [baseRow, res] = await Promise.all([
       db
         .prepare('SELECT id, project, ticker, first_seen, last_seen FROM clusters WHERE id = ?1')
@@ -256,19 +307,19 @@ async function resolveClusterId(
       candidates,
       input.postedAt,
       windowMs,
-      r => r.id === baseClusterId || r.ticker?.toUpperCase() === tickerUpper,
+      r => r.id !== rejectedClusterId && (r.id === baseClusterId || r.ticker?.toUpperCase() === tickerUpper),
     );
     if (match) return match.id;
-    if (baseRow) {
-      return mintWindowedClusterId(baseClusterId, input.postedAt, input.postId, attempt);
-    }
-    return baseClusterId;
+    const windowedId = await mintWindowedClusterId(baseClusterId, input.postedAt, input.postId, attempt);
+    const preferredId = baseRow || rejectedClusterId === baseClusterId ? windowedId : baseClusterId;
+    return reserveFallbackWindow(db, identity, preferredId, windowedId, input.postedAt, rejectedClusterId);
   }
 
   if (isValidProjectClusterKey(parsed.project)) {
     const normProj = normalizeProjectKey(parsed.project);
     const windowMs = THREE_DAYS_MS;
-    const [baseRow, res] = await Promise.all([
+    const identity: FallbackIdentity = { key: `proj:${normProj}`, windowMs };
+    const [baseRow, indexedRes, nullKeyRes] = await Promise.all([
       db
         .prepare('SELECT id, project, first_seen, last_seen FROM clusters WHERE id = ?1')
         .bind(baseClusterId)
@@ -278,34 +329,56 @@ async function resolveClusterId(
           `SELECT id, project, first_seen, last_seen
            FROM clusters
            WHERE domain IS NULL
+             AND project_key = ?1
              AND last_seen >= ?2
              AND first_seen <= ?3
-             AND (
-               project_key = ?1
-               OR (
-                 project_key IS NULL
-                 AND lower(replace(replace(replace(replace(replace(replace(project, ' ', ''), '-', ''), '_', ''), '.', ''), ':', ''), '/', '')) = ?1
-               )
-             )
            ORDER BY last_seen DESC, id ASC
            LIMIT 200`,
         )
         .bind(normProj, input.postedAt - windowMs, input.postedAt + windowMs)
         .all<WindowCandidateRow & { project: string }>(),
+      db
+        .prepare(
+          `WITH RECURSIVE legacy_null(id, project, first_seen, last_seen, rest, acc) AS (
+             SELECT id, project, first_seen, last_seen, lower(project), ''
+             FROM clusters
+             WHERE domain IS NULL
+               AND project_key IS NULL
+               AND last_seen >= ?2
+               AND first_seen <= ?3
+             UNION ALL
+             SELECT
+               id, project, first_seen, last_seen,
+               substr(rest, 2),
+               acc || CASE WHEN substr(rest, 1, 1) GLOB '[a-z0-9]' THEN substr(rest, 1, 1) ELSE '' END
+             FROM legacy_null
+             WHERE length(rest) > 0
+           )
+           SELECT id, project, first_seen, last_seen
+           FROM legacy_null
+           WHERE length(rest) = 0 AND acc = ?1
+           ORDER BY last_seen DESC, id ASC
+           LIMIT 50`,
+        )
+        .bind(normProj, input.postedAt - windowMs, input.postedAt + windowMs)
+        .all<WindowCandidateRow & { project: string }>(),
     ]);
 
-    const candidates = baseRow ? [baseRow, ...(res.results ?? [])] : (res.results ?? []);
+    const candidates = [
+      ...(baseRow ? [baseRow] : []),
+      ...(indexedRes.results ?? []),
+      ...(nullKeyRes.results ?? []),
+    ];
     const match = pickBestWindowCandidate(
       candidates,
       input.postedAt,
       windowMs,
-      r => r.id === baseClusterId || normalizeProjectKey(r.project) === normProj,
+      r => r.id !== rejectedClusterId && (r.id === baseClusterId || normalizeProjectKey(r.project) === normProj),
     );
     if (match) return match.id;
-    if (baseRow) {
-      return mintWindowedClusterId(baseClusterId, input.postedAt, input.postId, attempt);
-    }
-    return baseClusterId;
+    const windowedId = await mintWindowedClusterId(baseClusterId, input.postedAt, input.postId, attempt);
+    const preferredId = baseRow || rejectedClusterId === baseClusterId ? windowedId : baseClusterId;
+    return reserveFallbackWindow(db, identity, preferredId, windowedId, input.postedAt, rejectedClusterId);
   }
 
   return baseClusterId;
@@ -367,10 +440,12 @@ export async function ingestPostIntoCluster(
   const fallbackIdentity = replayedClusterId ? null : getFallbackIdentity(parsed, input.postedAt);
 
   return withFallbackLock(db, fallbackIdentity?.key ?? null, async () => {
-    const maxAttempts = fallbackIdentity ? 4 : 1;
+    const maxAttempts = fallbackIdentity ? 6 : 1;
+    let rejectedClusterId: string | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const clusterId = replayedClusterId ?? (await resolveClusterId(db, parsed, input, attempt));
+      const clusterId: string =
+        replayedClusterId ?? (await resolveClusterId(db, parsed, input, attempt, rejectedClusterId));
 
       const [existing, prevAgg] = await Promise.all([
         db
@@ -502,10 +577,21 @@ export async function ingestPostIntoCluster(
       const isDropFlag = parsed.isRelevantDrop ? 1 : 0;
 
       if (existing) {
+        if (
+          fallbackIdentity &&
+          (input.postedAt < existing.first_seen - fallbackIdentity.windowMs ||
+            input.postedAt > existing.last_seen + fallbackIdentity.windowMs)
+        ) {
+          rejectedClusterId = clusterId;
+          if (attempt < maxAttempts - 1) continue;
+          throw new Error(`Fallback cluster window conflict exhausted for ${clusterId}`);
+        }
+
         // Merge against the STORED row, not the stale in-memory `existing` read:
         // a concurrent ingest may have escalated risk between our SELECT and this
         // UPDATE, and a plain `risk_level = ?9` would silently downgrade it.
-        await db
+        // Also enforce sliding-window bounds when updating fallback clusters.
+        const updateRes = await db
           .prepare(
             `UPDATE clusters SET
                chains = (
@@ -570,7 +656,8 @@ export async function ingestPostIntoCluster(
                project = ?2, ticker = COALESCE(?3, clusters.ticker), domain = COALESCE(?4, clusters.domain),
                is_drop = CASE WHEN clusters.is_drop = 1 OR ?19 = 1 THEN 1 ELSE COALESCE(clusters.is_drop, ?19) END,
                project_key = COALESCE(clusters.project_key, ?21)
-             WHERE id = ?1`,
+             WHERE id = ?1
+               AND (?22 IS NULL OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22))`,
           )
           .bind(
             clusterId,
@@ -594,8 +681,16 @@ export async function ingestPostIntoCluster(
             isDropFlag,
             trustMax,
             projectKey,
+            fallbackIdentity?.windowMs ?? null,
+            Number.isFinite(input.postedAt) ? input.postedAt : null,
           )
           .run();
+
+        if (fallbackIdentity && (updateRes.meta?.changes ?? 1) === 0) {
+          rejectedClusterId = clusterId;
+          if (attempt < maxAttempts - 1) continue;
+          throw new Error(`Fallback cluster window conflict exhausted for ${clusterId}`);
+        }
       } else {
         const upsertRes = await db
           .prepare(
@@ -695,8 +790,10 @@ export async function ingestPostIntoCluster(
           )
           .run();
 
-        if (fallbackIdentity && (upsertRes.meta?.changes ?? 1) === 0 && attempt < maxAttempts - 1) {
-          continue;
+        if (fallbackIdentity && (upsertRes.meta?.changes ?? 1) === 0) {
+          rejectedClusterId = clusterId;
+          if (attempt < maxAttempts - 1) continue;
+          throw new Error(`Fallback cluster window conflict exhausted for ${clusterId}`);
         }
       }
 

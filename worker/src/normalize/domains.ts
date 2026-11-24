@@ -817,23 +817,28 @@ export function selectFeedLinks(rawUrls: string[], opts: SelectFeedLinksOptions 
 
   // Collapse path-based referral links (`/r/<code>`, `/join/<code>`, `/invite/<code>`)
   // ONLY when a retained non-referral URL provides the clean equivalent action on the same host.
-  const seenRefHosts = new Set<string>();
-  const ranked: { url: string; rank: number; reg: string }[] = [];
+  const ranked: {
+    url: string;
+    rank: number;
+    reg: string;
+    host: string;
+    refKind: ReferralPathKind | null;
+  }[] = [];
 
   for (const entry of deduped.values()) {
     const { parts, rank, refKind } = entry;
-    if (refKind) {
-      if (cleanPathsByHost.get(parts.host)?.has(cleanEquivalentPath(refKind))) continue;
-      if (seenRefHosts.has(parts.host)) continue;
-      seenRefHosts.add(parts.host);
+    if (refKind && cleanPathsByHost.get(parts.host)?.has(cleanEquivalentPath(refKind))) {
+      continue;
     }
-    ranked.push({ url: parts.href, rank, reg: parts.reg });
+    ranked.push({ url: parts.href, rank, reg: parts.reg, host: parts.host, refKind });
   }
 
   ranked.sort((a, b) => b.rank - a.rank || a.url.localeCompare(b.url));
 
-  // Cap per-host repetition so one domain never monopolizes all visible pills.
+  // Cap per-host repetition so one domain never monopolizes all visible pills,
+  // and keep at most one referral link per (host, refKind) action.
   const hostCounts = new Map<string, number>();
+  const seenRefActions = new Set<string>();
   const out: string[] = [];
   for (const item of ranked) {
     const hostKey = item.reg || item.url;
@@ -841,6 +846,11 @@ export function selectFeedLinks(rawUrls: string[], opts: SelectFeedLinksOptions 
     const limitForHost = isSocial ? 1 : 2;
     const count = hostCounts.get(hostKey) ?? 0;
     if (count >= limitForHost) continue;
+    if (item.refKind) {
+      const refActionKey = `${item.host}:${item.refKind}`;
+      if (seenRefActions.has(refActionKey)) continue;
+      seenRefActions.add(refActionKey);
+    }
     hostCounts.set(hostKey, count + 1);
     out.push(item.url);
     if (out.length >= maxLinks) break;
