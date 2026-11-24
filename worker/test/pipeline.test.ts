@@ -1015,4 +1015,117 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(steadyRes).toEqual({ deletedPosts: 0, deletedClusters: 0 });
     expect(queries.slice(beforeSteady).some(q => /DELETE\s+FROM\s+clusters/i.test(q))).toBe(false);
   });
+
+  test('pruneOldPosts persists orphan marker atomically with posts delete so failed marker or posts writes leave no leaked orphans', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_200_000_000;
+    const DAY = 86_400_000;
+
+    // Scenario A: marker write fails alongside failing clusters delete -> posts DELETE must roll back.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-fresh', 'FreshProto', '[]', '["quest"]', 'Fresh', 'rule', 'ok', '[]', 1.0, 1, ?1, ?1),
+                ('c-orphan', 'OrphanProto', '[]', '["quest"]', 'Orphan', 'rule', 'ok', '[]', 0.5, 1, ?2, ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-fresh', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'fresh post', '[]', 'c-fresh', ?1),
+                ('p-old', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c-orphan', ?2)`,
+      )
+      .bind(now - 5 * DAY, now - 31 * DAY)
+      .run();
+
+    const flakyMarkerDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/INSERT\s+INTO\s+cron_state/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async run() {
+                  throw new Error('D1 marker write error');
+                },
+              };
+            },
+          };
+        }
+        if (/DELETE\s+FROM\s+clusters/i.test(sql)) {
+          return {
+            async run() {
+              throw new Error('D1 clusters delete error');
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyMarkerDb, now)).rejects.toThrow();
+
+    const oldPostAfterMarkerFail = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old'`).first<{ id: string }>();
+    expect(oldPostAfterMarkerFail?.id).toBe('p-old');
+    const orphanAfterMarkerFail = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan'`).first<{ id: string }>();
+    expect(orphanAfterMarkerFail?.id).toBe('c-orphan');
+    const markerAfterMarkerFail = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(markerAfterMarkerFail).toBeNull();
+
+    expect(await pruneOldPosts(db, now + 60_000)).toEqual({ deletedPosts: 1, deletedClusters: 1 });
+
+    // Scenario B: posts DELETE fails after marker statement in the same batch -> marker rolls back cleanly.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c-orphan2', 'OrphanProto2', '[]', '["quest"]', 'Orphan2', 'rule', 'ok', '[]', 0.5, 1, ?1, ?1)`,
+      )
+      .bind(now - 31 * DAY)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-old2', 'telegram:ch1', 'https://t.me/ch1/3', ?1, 'old post 2', '[]', 'c-orphan2', ?1)`,
+      )
+      .bind(now - 31 * DAY)
+      .run();
+
+    const flakyPostsDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/DELETE\s+FROM\s+posts/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async run() {
+                  throw new Error('D1 posts delete error');
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await expect(pruneOldPosts(flakyPostsDb, now)).rejects.toThrow('D1 posts delete error');
+
+    const markerAfterPostsFail = await db
+      .prepare(`SELECT key FROM cron_state WHERE key = 'prune:orphans'`)
+      .first<{ key: string }>();
+    expect(markerAfterPostsFail).toBeNull();
+    const oldPost2AfterFail = await db.prepare(`SELECT id FROM posts WHERE id = 'p-old2'`).first<{ id: string }>();
+    expect(oldPost2AfterFail?.id).toBe('p-old2');
+    const orphan2AfterFail = await db.prepare(`SELECT id FROM clusters WHERE id = 'c-orphan2'`).first<{ id: string }>();
+    expect(orphan2AfterFail?.id).toBe('c-orphan2');
+
+    expect(await pruneOldPosts(db, now + 60_000)).toEqual({ deletedPosts: 1, deletedClusters: 1 });
+    const remaining = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
+    expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
+  });
 });

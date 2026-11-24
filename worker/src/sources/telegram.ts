@@ -366,7 +366,20 @@ const PRUNE_ORPHANS_STATE_KEY = 'prune:orphans';
 
 export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise<PruneOldPostsResult> {
   const cutoff = nowMs - THIRTY_DAYS_MS;
-  const del = await db.prepare('DELETE FROM posts WHERE posted_at < ?1').bind(cutoff).run();
+  // Persist the pending-orphan marker in the same D1 batch transaction as the
+  // posts DELETE (guarded by EXISTS on covering index posts_posted so 0-row
+  // runs perform zero marker writes).
+  const [, del] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO cron_state (key, last_run_at)
+         SELECT ?1, ?2
+         WHERE EXISTS (SELECT 1 FROM posts WHERE posted_at < ?3)
+         ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at`,
+      )
+      .bind(PRUNE_ORPHANS_STATE_KEY, nowMs, cutoff),
+    db.prepare('DELETE FROM posts WHERE posted_at < ?1').bind(cutoff),
+  ]);
   const deletedPosts = del.meta?.changes ?? 0;
   if (deletedPosts === 0) {
     const pending = await db
@@ -378,28 +391,9 @@ export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise
     }
   }
 
-  let clDel: D1Result;
-  try {
-    clDel = await db
-      .prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)')
-      .run();
-  } catch (err) {
-    if (deletedPosts > 0) {
-      try {
-        await db
-          .prepare(
-            `INSERT INTO cron_state (key, last_run_at) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at`,
-          )
-          .bind(PRUNE_ORPHANS_STATE_KEY, nowMs)
-          .run();
-      } catch (markerErr) {
-        console.error('prune-orphans-marker-error', markerErr);
-      }
-    }
-    throw err;
-  }
-
-  await db.prepare('DELETE FROM cron_state WHERE key = ?1').bind(PRUNE_ORPHANS_STATE_KEY).run();
+  const [clDel] = await db.batch([
+    db.prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)'),
+    db.prepare('DELETE FROM cron_state WHERE key = ?1').bind(PRUNE_ORPHANS_STATE_KEY),
+  ]);
   return { deletedPosts, deletedClusters: clDel.meta?.changes ?? 0 };
 }

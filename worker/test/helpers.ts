@@ -65,14 +65,32 @@ export function createTestD1(migrations: readonly string[] = MIGRATION_FILES): T
     },
   });
 
+  let batchQueue: Promise<void> = Promise.resolve();
+
   const db = {
     prepare(sql: string) {
       return makeStmt(sql);
     },
     async batch(stmts: ReturnType<typeof makeStmt>[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
+      if (stmts.length === 0) return [];
+      const runBatch = async () => {
+        sqlite.exec('BEGIN');
+        try {
+          const out = [];
+          for (const s of stmts) out.push(await s.run());
+          sqlite.exec('COMMIT');
+          return out;
+        } catch (err) {
+          sqlite.exec('ROLLBACK');
+          throw err;
+        }
+      };
+      const next = batchQueue.then(runBatch, runBatch);
+      batchQueue = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return next;
     },
     async exec(sql: string) {
       queries.push(sql);
