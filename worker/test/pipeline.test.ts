@@ -14,10 +14,12 @@ function createSqliteD1(): D1Database {
   const m2 = readFileSync(new URL('../migrations/0002_feed.sql', import.meta.url), 'utf8');
   const m3 = readFileSync(new URL('../migrations/0003_p4.sql', import.meta.url), 'utf8');
   const m4 = readFileSync(new URL('../migrations/0004_tags.sql', import.meta.url), 'utf8');
+  const m5 = readFileSync(new URL('../migrations/0005_drop_verdict.sql', import.meta.url), 'utf8');
   sqlite.exec(m1);
   sqlite.exec(m2);
   sqlite.exec(m3);
   sqlite.exec(m4);
+  sqlite.exec(m5);
 
   const makeStmt = (sql: string, params: unknown[] = []) => ({
     bind(...args: unknown[]) {
@@ -182,7 +184,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
         sourceTrust: 0.8,
         postUrl: 'https://t.me/ch2/55',
         postedAt: now - 600_000,
-        text: '测试网空投任务：Nova Protocol $NOVA on Monad https://novaprotocol.xyz',
+        text: '\u6d4b\u8bd5\u7f51\u7a7a\u6295\u4efb\u52a1\uff1aNova Protocol $NOVA on Monad https://novaprotocol.xyz',
       },
       { knownDomains: known },
       surfIndex,
@@ -232,7 +234,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
 
   test('a $TICKER pointing at a different surf card never renames a domain-identified post', () => {
     // Adjacent Latin tokens around a CJK run stay separate after strip.
-    expect(stripOrTranslateCjk('Galxe任务Zealy')).toBe('Galxe Zealy');
+    expect(stripOrTranslateCjk('Galxe\u4efb\u52a1Zealy')).toBe('Galxe Zealy');
 
     const surfByDomain = new Map([['novaprotocol.xyz', { name: 'Nova Protocol', tier: 'B' as const }]]);
     const surfByTicker = new Map([['SCAM', { name: 'ScamCoin', tier: 'C' as const }]]);

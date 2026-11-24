@@ -1,6 +1,6 @@
 import type { TaskType } from '../../../shared/types';
 import { TASK_TYPES } from '../../../shared/constants';
-import { HAN_RE } from './i18n';
+import { FORBIDDEN_CJK_RE, HAN_RE } from './i18n';
 
 export const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
 
@@ -14,7 +14,8 @@ export interface AiBindingLike {
 // Single source of truth: shared/constants TASK_TYPES tuple.
 const VALID_TASKS = new Set<TaskType>(TASK_TYPES);
 
-const NON_LATIN_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Thai}]/u;
+const NON_LATIN_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Thai}]/u;
 
 export interface AiSummaryPayload {
   summary: string;
@@ -61,7 +62,7 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     if (typeof parsed.summary !== 'string') return null;
     const summary = parsed.summary.replace(/\s+/g, ' ').trim();
     if (!summary || summary.length > 180) return null;
-    if (HAN_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
+    if (HAN_RE.test(summary) || FORBIDDEN_CJK_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
     // The model sees untrusted post text. A crafted post can steer the summary
     // into links, wallet addresses, or drain instructions — never store those.
     if (unsafeContentRe(summary)) return null;
@@ -77,9 +78,7 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
       ? parsed.chains
           .filter((c): c is string => typeof c === 'string')
           .map(c => c.trim())
-          .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !NON_LATIN_RE.test(c))
-          // Chains render into feed + agent briefs: same unsafe-content bar
-          // as the summary (no URLs, no addresses).
+          .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !FORBIDDEN_CJK_RE.test(c) && !NON_LATIN_RE.test(c))
           .filter(c => !unsafeContentRe(c))
           .slice(0, 8)
       : [];
@@ -114,12 +113,6 @@ export async function summarizeClusterWithAi(
 
   if (dailyMax <= 0) return null;
 
-  // Atomically reserve one call. The conditional upsert commits the increment
-  // only while the counter is strictly under the cap, so parallel callers
-  // (6 concurrent summaries per cron tick) cannot exceed AI_DAILY_MAX. The
-  // losing caller's guarded upsert matches zero rows and RETURNING yields
-  // nothing → no AI call. The `dailyMax <= 0` check above closes the
-  // first-insert-of-the-day path (the upsert's WHERE only guards conflicts).
   const reserved = await db
     .prepare(
       `INSERT INTO ai_usage (day, calls) VALUES (?1, 1)
@@ -142,7 +135,7 @@ export async function summarizeClusterWithAi(
         {
           role: 'system',
           content:
-            'Summarize Web3 airdrop tasks in concise English. Reply with strict JSON only: {"summary":"<=180 chars English","taskTypes":[...],"chains":[...]}. Valid taskTypes: testnet,faucet,quest,waitlist,bridge,stake,mint,points,trade,social,node,other.',
+            'Translate and summarize Web3 airdrop/testnet/quest tasks into concise natural English (never Indonesian, Turkish, or CJK; no URLs, referral codes, or channel signatures). Reply with strict JSON only: {"summary":"<=180 chars English","taskTypes":[...],"chains":[...]}. Valid taskTypes: testnet,faucet,quest,waitlist,bridge,stake,mint,points,trade,social,node,other.',
         },
         {
           role: 'user',
@@ -169,10 +162,6 @@ export async function summarizeClusterWithAi(
   const mergedTasksRaw = [...new Set([...prevTasks, ...validated.taskTypes])];
   const mergedTasks = mergedTasksRaw.length > 1 ? mergedTasksRaw.filter(t => t !== 'other') : mergedTasksRaw;
 
-  // SQL-side merge against the CURRENT columns: a concurrent ingest may have
-  // extended chains/tasks between our SELECT and this UPDATE — replacing the
-  // arrays wholesale would drop those entries. Cap: same 8-entry bound the
-  // model output gets, or steered merge lists grow unbounded.
   await db
     .prepare(
       `UPDATE clusters

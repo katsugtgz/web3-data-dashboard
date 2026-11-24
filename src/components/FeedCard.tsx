@@ -1,15 +1,29 @@
 import { useState } from 'react';
 import type { FeedItem } from '../../shared/types';
-import { formatRelativeTime, hostnameLabel, isHttpUrl } from '../lib/format';
+import {
+  dedupeFeedSources,
+  formatFeedSummary,
+  formatProjectTitle,
+  formatRiskReasons,
+  prepareFeedLinks,
+  type DisplayLink,
+  type DisplayRiskNote,
+  type FormattedSummary,
+} from '../lib/feedDisplay';
+import { formatRelativeTime } from '../lib/format';
+
+const MAX_VISIBLE_RISK_NOTES = 2;
 
 interface Props {
   item: FeedItem;
   onCopyBrief: (item: FeedItem) => void;
 }
 
-function RiskBadge({ level, reasons }: { level: FeedItem['risk']['level']; reasons: string[] }) {
+function RiskBadge({ level, notes }: { level: FeedItem['risk']['level']; notes: DisplayRiskNote[] }) {
   if (level === 'ok') return null;
-  const title = reasons.join(' · ') || (level === 'risk' ? 'High risk signals detected' : 'Caution advised');
+  const title =
+    notes.map(n => n.text).join(' · ') ||
+    (level === 'risk' ? 'High risk signals detected' : 'Caution advised');
   return (
     <span className={`badge ${level === 'risk' ? 'badge-risk' : 'badge-warn'}`} title={title}>
       {level === 'risk' ? '⚠ RISK' : '! Warn'}
@@ -17,15 +31,101 @@ function RiskBadge({ level, reasons }: { level: FeedItem['risk']['level']; reaso
   );
 }
 
+function FeedSummaryBlock({ summary }: { summary: FormattedSummary }) {
+  if (!summary.lead && summary.bullets.length === 0) return null;
+  return (
+    <div className="feed-summary-wrap">
+      {summary.lead && <p className="feed-summary">{summary.lead}</p>}
+      {summary.bullets.length > 0 && (
+        <ul className="feed-bullets" aria-label="Task steps">
+          {summary.bullets.map(bullet => (
+            <li key={bullet}>{bullet}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SafetyNotes({ level, notes }: { level: FeedItem['risk']['level']; notes: DisplayRiskNote[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (notes.length === 0) return null;
+
+  const hiddenCount = Math.max(0, notes.length - MAX_VISIBLE_RISK_NOTES);
+  const visible = expanded ? notes : notes.slice(0, MAX_VISIBLE_RISK_NOTES);
+  const toneClass = level === 'risk' ? 'is-risk' : 'is-warn';
+
+  return (
+    <div className={`risk-box ${toneClass}`}>
+      <ul className="risk-reasons" aria-label="Safety notes">
+        {visible.map(note => (
+          <li key={note.id}>{note.text}</li>
+        ))}
+      </ul>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className="risk-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(v => !v)}
+        >
+          {expanded ? 'Show fewer notes' : `+${hiddenCount} more safety ${hiddenCount === 1 ? 'note' : 'notes'}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectTitle: string }) {
+  if (links.length === 0) return null;
+  return (
+    <div className="feed-links">
+      {links.map(link => (
+        <a
+          key={link.url}
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={link.url}
+          className={`feed-link${link.known ? ' is-known' : ''}`}
+        >
+          {link.known && <span aria-hidden="true">✓</span>}
+          <span className="feed-link-label">{link.label}</span>
+          <span className="sr"> — {projectTitle} (opens in a new tab)</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
 export function FeedCard({ item, onCopyBrief }: Props) {
   const [showSources, setShowSources] = useState(false);
   const isRisk = item.risk.level === 'risk';
+  const title = formatProjectTitle(item.project);
+  const summary = formatFeedSummary(item.summary, title);
+  const riskNotes = formatRiskReasons(item);
+  const displayLinks = prepareFeedLinks(item, { max: 3 });
+  const chains = dedupeStrings(item.chains);
+  const taskTypes = dedupeStrings(item.taskTypes);
+  const sources = dedupeFeedSources(item.sources);
 
   return (
-    <article className={`cardx feed-card${item.risk.level === 'risk' ? ' is-risk' : ''}`}>
+    <article className={`cardx feed-card${isRisk ? ' is-risk' : ''}`}>
       <div className="feed-head">
         <div className="feed-title-wrap">
-          <h3 className="feed-title">{item.project}</h3>
+          <h3 className="feed-title">{title}</h3>
           <p className="ticker">
             <span className="mono">{item.ticker ? `$${item.ticker}` : 'Pre-token'}</span>
             {item.domain && (
@@ -48,53 +148,30 @@ export function FeedCard({ item, onCopyBrief }: Props) {
               {item.surf.tier}
             </span>
           )}
-          <RiskBadge level={item.risk.level} reasons={item.risk.reasons} />
+          <RiskBadge level={item.risk.level} notes={riskNotes} />
         </div>
       </div>
 
-      <p className="feed-summary">{item.summary}</p>
+      <FeedSummaryBlock summary={summary} />
 
-      {item.risk.reasons.length > 0 && (
-        <ul className="risk-reasons" aria-label="Safety notes">
-          {item.risk.reasons.map(reason => (
-            <li key={reason}>{reason}</li>
+      <SafetyNotes level={item.risk.level} notes={riskNotes} />
+
+      {(chains.length > 0 || taskTypes.length > 0) && (
+        <div className="chipline">
+          {chains.map(c => (
+            <span key={c} className="typetip">
+              {c}
+            </span>
           ))}
-        </ul>
-      )}
-
-      <div className="chipline">
-        {item.chains.map(c => (
-          <span key={c} className="typetip">
-            {c}
-          </span>
-        ))}
-        {item.taskTypes.map(t => (
-          <span key={t} className="badge">
-            {t}
-          </span>
-        ))}
-      </div>
-
-      {item.links.length > 0 && (
-        <div className="feed-links">
-          {item.links.slice(0, 3).map(link =>
-            isHttpUrl(link.url) ? (
-              <a
-                key={link.url}
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`feed-link${link.known ? ' is-known' : ''}`}
-              >
-                {link.known ? '✓ ' : ''}
-                {hostnameLabel(link.url)}
-                <span className="sr"> — {item.project} (opens in a new tab)</span>
-                <span aria-hidden="true"> ↗</span>
-              </a>
-            ) : null,
-          )}
+          {taskTypes.map(t => (
+            <span key={t} className="badge">
+              {t}
+            </span>
+          ))}
         </div>
       )}
+
+      <FeedLinkPills links={displayLinks} projectTitle={title} />
 
       <div className="feed-foot">
         <div className="feed-foot-left">
@@ -115,14 +192,14 @@ export function FeedCard({ item, onCopyBrief }: Props) {
         ) : (
           <button type="button" className="chip" onClick={() => onCopyBrief(item)}>
             Copy agent brief
-            <span className="sr"> for {item.project}</span>
+            <span className="sr"> for {title}</span>
           </button>
         )}
       </div>
 
-      {showSources && item.sources.length > 0 && (
+      {showSources && sources.length > 0 && (
         <ul className="source-refs" aria-label="Source posts">
-          {item.sources.map(src => (
+          {sources.map(src => (
             <li key={src.postUrl}>
               <a href={src.postUrl} target="_blank" rel="noopener noreferrer">
                 @{src.handle} ({src.platform})

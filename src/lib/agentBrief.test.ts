@@ -124,6 +124,71 @@ describe('agentBrief generator', () => {
     expect(md).toContain('⛔ HUMAN-REQUIRED:');
     expect(HAN_RE.test(md)).toBe(false);
   });
+
+  test('deduplicates referral/http-twin/self-t.me links and cleans wire title and WARN reasons', () => {
+    const messyItem: FeedItem = {
+      id: 'm1',
+      project: '*Getclocked',
+      domain: 'getclocked.com',
+      chains: ['Solana'],
+      taskTypes: ['testnet', 'waitlist'],
+      summary: 'Clocked Waitlist • Login with x/email • Claim Username',
+      links: [
+        { url: 'https://t.me/airdropfind/129876', known: false },
+        { url: 'https://getclocked.com/?ref=RDJ9H8', known: false },
+        { url: 'http://getclocked.com/?ref=HQAKP9', known: false },
+        { url: 'https://getclocked.com/', known: false },
+        { url: 'https://x.com/getclocked/status/2120575879177032073?a=abc&s=20', known: false },
+      ],
+      sources: [
+        { platform: 'telegram', handle: 'airdropfind', postUrl: 'https://t.me/airdropfind/129876', postedAt: Date.now() },
+      ],
+      sourceCount: 1,
+      score: 0.7,
+      risk: {
+        level: 'warn',
+        reasons: [
+          'Domain not in verified registry: getclocked.com',
+          'Insecure transport (plain http): http://getclocked.com/?ref=75372W',
+          'Insecure transport (plain http): http://getclocked.com/?ref=HQAKP9',
+        ],
+      },
+      firstSeen: Date.now(),
+      lastSeen: Date.now(),
+    };
+
+    const md = buildBrief(messyItem, profile)!;
+    expect(md).toContain('# Task: Getclocked — testnet, waitlist');
+    expect(md).toContain('Plain HTTP links detected: getclocked.com (2 links)');
+    const unverifiedSection = md.split('### Unverified, do NOT open')[1].split('## Steps')[0];
+    expect(unverifiedSection).toContain('- https://getclocked.com/');
+    expect(unverifiedSection).toContain('- https://x.com/getclocked/status/2120575879177032073');
+    expect(unverifiedSection).not.toContain('ref=RDJ9H8');
+    expect(unverifiedSection).not.toContain('http://getclocked.com');
+    expect(unverifiedSection).not.toContain('t.me/airdropfind');
+  });
+
+  test('normalizes scheme-less Card URLs into https under Unverified section', () => {
+    const card: Card = {
+      r: 31,
+      n: 'Doodles',
+      t: null,
+      g: 'B',
+      b: ['live'],
+      f: '$54.00M',
+      tk: '1/1',
+      h: 400,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Open Telegram mini app', ty: 'social', c: 'Free', m: '2 min' },
+      sc: 60,
+      sub: [6, 6, null],
+      url: 't.me/DoodlesUP_bot',
+    };
+    const md = buildBrief(card, profile)!;
+    const unverifiedSection = md.split('### Unverified, do NOT open')[1].split('## Steps')[0];
+    expect(unverifiedSection).toContain('- https://t.me/DoodlesUP_bot');
+  });
 });
 
 describe('agentBrief prompt-injection hardening', () => {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
 import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
-import { orDash } from '../lib/format';
+import { normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
@@ -86,6 +86,7 @@ function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
   const showStatus = normStatus === 'OPEN' || isClosed;
   const costLabel = t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
   const timeLabel = t.timeMinutes ? ` · ${t.timeMinutes} min` : '';
+  const href = normalizeExternalUrl(t.url);
 
   return (
     <li className={`task-item${checked ? ' is-done' : ''}${isClosed ? ' is-closed' : ''}`}>
@@ -107,8 +108,8 @@ function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
           </span>
         </span>
       </label>
-      {t.url && (
-        <a className="task-link" href={t.url} target="_blank" rel="noopener noreferrer">
+      {href && (
+        <a className="task-link" href={href} target="_blank" rel="noopener noreferrer">
           Open
           <span className="sr"> {t.title} (opens in a new tab)</span>
           <span aria-hidden="true"> ↗</span>

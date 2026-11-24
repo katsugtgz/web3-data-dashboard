@@ -5,7 +5,13 @@ import { computeXBackoff, parseCdnSyndication, parseNextDataTimeline, pollXBatch
 
 function createSqliteD1(): D1Database {
   const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
+  for (const file of [
+    '../migrations/0001_init.sql',
+    '../migrations/0002_feed.sql',
+    '../migrations/0003_p4.sql',
+    '../migrations/0004_tags.sql',
+    '../migrations/0005_drop_verdict.sql',
+  ]) {
     sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
   }
   const makeStmt = (sql: string, params: unknown[] = []) => ({
@@ -128,7 +134,7 @@ describe('X best-effort syndication parser & backoff', () => {
     expect(row?.fail_count).toBe(1);
   });
 
-  test('pollXBatch success: last_seen_id advances and fail_count resets to 0', async () => {
+  test('pollXBatch success: ingests drop tweets, skips non-drop chatter, advances last_seen_id, resets fail_count', async () => {
     const now = 1_795_240_000_000;
     const db = createSqliteD1();
     await db
@@ -145,15 +151,23 @@ describe('X best-effort syndication parser & backoff', () => {
         idStr: '18880009',
         postUrl: `https://x.com/${handle}/status/18880009`,
         postedAt,
-        text: 'Fresh update from the team https://example.com/post',
-        urls: ['https://example.com/post'],
+        text: 'Fresh testnet airdrop quest live https://novaproto.xyz/quest',
+        urls: ['https://novaproto.xyz/quest'],
+      },
+      // Newer non-drop chatter: skipped from ingest, but cursor still advances past it.
+      {
+        idStr: '18880010',
+        postUrl: `https://x.com/${handle}/status/18880010`,
+        postedAt,
+        text: 'Good morning everyone, grabbing coffee before checking charts!',
+        urls: [],
       },
       // Older than last_seen_id: filtered out by the cursor, not by cutoff.
       {
         idStr: '18880001',
         postUrl: `https://x.com/${handle}/status/18880001`,
         postedAt,
-        text: 'old seeded post',
+        text: 'old seeded airdrop post',
         urls: [],
       },
     ]);
@@ -169,7 +183,7 @@ describe('X best-effort syndication parser & backoff', () => {
     expect(row?.status).toBe('ok');
     expect(row?.fail_count).toBe(0);
     expect(row?.first_fail_at).toBeNull();
-    expect(row?.last_seen_id).toBe('18880009');
+    expect(row?.last_seen_id).toBe('18880010');
   });
 
   test('pollXBatch degrades the whole batch when loadKnownDomains fails (cron survives)', async () => {

@@ -478,10 +478,9 @@ h1.pagetitle {
   position: sticky;
   top: 0;
   z-index: 30;
-  background: color-mix(in srgb, var(--card) 90%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--card);
   border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .tabstrip {
@@ -729,6 +728,11 @@ h2.section {
   color: var(--fg);
   width: 225px;
   transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.search-wide input {
+  width: clamp(270px, 34vw, 340px);
+  max-width: 100%;
 }
 
 .search input:focus {
@@ -1982,6 +1986,7 @@ footer {
 
 .feed-title-wrap {
   min-width: 0;
+  flex: 1;
 }
 
 .feed-title {
@@ -1990,6 +1995,13 @@ footer {
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.feed-summary-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .feed-summary {
@@ -1997,6 +2009,22 @@ footer {
   font-size: 13.5px;
   line-height: 1.48;
   color: var(--fg);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.feed-bullets {
+  margin: 0;
+  padding-left: 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  line-height: 1.42;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -2006,11 +2034,52 @@ footer {
   border-color: color-mix(in srgb, var(--tier-s-fg) 25%, transparent);
 }
 
+.risk-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.risk-box.is-warn {
+  border-color: color-mix(in srgb, var(--tier-s-fg) 28%, var(--border));
+  background: color-mix(in srgb, var(--tier-s-bg) 42%, var(--card));
+  color: var(--tier-s-fg);
+}
+
+.risk-box.is-risk {
+  border-color: color-mix(in srgb, var(--dn) 35%, var(--border));
+  background: color-mix(in srgb, var(--dn-soft) 55%, var(--card));
+  color: var(--dn);
+}
+
 .risk-reasons {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 12px;
-  color: var(--dn);
+  line-height: 1.4;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.risk-toggle {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .feed-links {
@@ -2023,6 +2092,8 @@ footer {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
+  min-width: 0;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -2030,6 +2101,21 @@ footer {
   color: var(--fg);
   font-size: 12px;
   font-weight: 500;
+  text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.feed-link:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+
+.feed-link-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feed-link.is-known {
@@ -2038,6 +2124,7 @@ footer {
 
 .feed-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -2062,6 +2149,13 @@ footer {
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
+}
+
+.source-refs a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sources-health {
@@ -2328,7 +2422,8 @@ footer a {
   .grid {
     grid-template-columns: 1fr;
   }
-  .search input {
+  .search input,
+  .search-wide input {
     width: 100%;
     min-width: 0;
   }

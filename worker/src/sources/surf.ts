@@ -74,6 +74,25 @@ const TASK_TYPE: Record<string, string> = {
   hold: 'staking',
 };
 
+const BARE_DOMAIN_URL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)+\.[a-z]{2,}(?:[/?#].*)?$/i;
+const SIMPLE_BARE_DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,}(?:[/?#].*)?$/i;
+
+/**
+ * Normalizes upstream task links: upgrades scheme-less links like
+ * `t.me/DoodlesUP_bot` to `https://t.me/DoodlesUP_bot` while rejecting
+ * non-http(s) schemes (`javascript:`, `data:`).
+ */
+export function normalizeExternalUrl(raw?: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (BARE_DOMAIN_URL_RE.test(trimmed) || SIMPLE_BARE_DOMAIN_RE.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return null;
+}
+
 function normalizeGrade(tier?: string): Grade {
   if (tier === 'S' || tier === 'A' || tier === 'B' || tier === 'C') return tier;
   return 'B';
@@ -141,7 +160,7 @@ function mapTasks(tasks?: UpstreamTask[]): CardTask[] | undefined {
     status: stripOrTranslateCjk(t.status || 'OPEN') || 'OPEN',
     cost: safeNum(t.cost, 0),
     timeMinutes: typeof t.time_minutes === 'number' && t.time_minutes > 0 ? t.time_minutes : null,
-    url: t.external_link || null,
+    url: normalizeExternalUrl(t.external_link),
     isExclusive: Boolean(t.is_exclusive),
   }));
 }
@@ -182,9 +201,6 @@ function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
   const bestTitle = stripOrTranslateCjk(bt.title ?? '') || '—';
   const name = stripOrTranslateCjk(p.project_name) || 'Unknown project';
   const symbol = p.coin_symbol ? stripOrTranslateCjk(p.coin_symbol) || null : null;
-  // Stable upstream identity: `n` doubles as watchlist/done-task key but CJK
-  // stripping makes it non-unique (distinct projects collide; all-CJK names
-  // collapse to 'Unknown project'). Expose project_id as the stable `id`.
   const id = typeof p.project_id === 'string' && p.project_id ? p.project_id : null;
 
   return {
@@ -218,7 +234,7 @@ function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
     riskLabel: extractRiskLabel(p.tags),
     sc: safeNum(p.score, 0),
     sub: [safeNum(p.token_launch_score, 0), safeNum(p.cost_perf_score, 0), null],
-    url: bt.external_link || null,
+    url: normalizeExternalUrl(bt.external_link),
   };
 }
 
@@ -233,7 +249,7 @@ function mapTge(p: UpstreamProject): Tge {
     logo: sanitizeLogo(p.logo_url) || null,
     tier: normalizeGrade(p.tier),
     raise: raise > 0 ? fmtUsd(raise) : undefined,
-    url: p.best_task?.external_link ?? p.tasks?.find(t => t.external_link)?.external_link ?? null,
+    url: normalizeExternalUrl(p.best_task?.external_link ?? p.tasks?.find(t => t.external_link)?.external_link),
   };
 }
 

@@ -1,5 +1,6 @@
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
-import { formatRelativeTime, isHttpUrl, parseCost } from './format';
+import { formatProjectTitle, formatRiskReasons, prepareFeedLinks } from './feedDisplay';
+import { formatRelativeTime, isHttpUrl, normalizeExternalUrl, parseCost } from './format';
 
 const HUMAN_REQUIRED_RE =
   /captcha|turnstile|verify (?:you are )?human|kyc|identity|selfie|passport|sign (?:the )?message|signature|approve|permit|allowance|connect (?:your )?wallet|wallet connection|login|oauth|phone (?:number|verification)|sms|withdraw|transfer|send (?:funds|tokens|eth|btc|usdc|usdt)|buy|purchase|lend|borrow|repay|claim|redeem|seed phrase|private key|mnemonic/i;
@@ -165,26 +166,35 @@ function sharedTailLines(chains: string, profile: AgentProfile): string[] {
 export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string | null {
   if (isFeedItem(item)) {
     if (item.risk.level === 'risk') return null;
-    const project = sanitizeEnglish(item.project) || 'Web3 Project';
+    const project = sanitizeEnglish(formatProjectTitle(item.project)) || 'Web3 Project';
     const taskTypes = item.taskTypes.join(', ') || 'other';
     const chains = item.chains.map(sanitizeEnglish).filter(Boolean).join(', ') || 'Not specified';
+    const cleanedLinks = prepareFeedLinks(item, { max: 8 });
     const verifiedLinks: string[] = [];
     const unverifiedLinks: string[] = [];
-    for (const link of item.links) {
+    for (const link of cleanedLinks) {
       const vetted = link.known === true ? vettedUrl(link.url) : null;
       if (vetted) verifiedLinks.push(`- ${vetted}`);
       else if (isHttpUrl(link.url)) unverifiedLinks.push(`- ${link.url}`);
     }
     const steps = buildStepsForFeedItem(item);
-    const sources = item.sources.map(
-      s => `- @${s.handle} (${s.platform}) — ${s.postUrl} (${formatRelativeTime(s.postedAt)})`,
-    );
+    const seenSources = new Set<string>();
+    const sources: string[] = [];
+    for (const s of item.sources) {
+      if (seenSources.has(s.postUrl)) continue;
+      seenSources.add(s.postUrl);
+      sources.push(`- @${s.handle} (${s.platform}) — ${s.postUrl} (${formatRelativeTime(s.postedAt)})`);
+    }
+    const warnNotes = formatRiskReasons(item)
+      .map(n => sanitizeEnglish(n.text))
+      .filter(Boolean)
+      .join('; ');
 
     const lines: string[] = sharedHeaderLines(
       project,
       taskTypes,
       item.risk.level === 'warn'
-        ? `Marked WARN (${item.risk.reasons.map(sanitizeEnglish).join('; ') || 'unverified source'}). Proceed carefully and verify official links first.`
+        ? `Marked WARN (${warnNotes || 'unverified source'}). Proceed carefully and verify official links first.`
         : null,
       profile,
     );
@@ -225,9 +235,11 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
       .filter(Boolean)
       .join(', ') || 'Not specified';
   const linkSet = new Set<string>();
-  if (item.url && isHttpUrl(item.url)) linkSet.add(item.url);
+  const normalizedCardUrl = normalizeExternalUrl(item.url);
+  if (normalizedCardUrl) linkSet.add(normalizedCardUrl);
   for (const t of item.tasks ?? []) {
-    if (t.url && isHttpUrl(t.url)) linkSet.add(t.url);
+    const normalizedTaskUrl = normalizeExternalUrl(t.url);
+    if (normalizedTaskUrl) linkSet.add(normalizedTaskUrl);
   }
   const unverifiedLinks = [...linkSet].map(u => `- ${u}`);
   const steps = buildStepsForCard(item);

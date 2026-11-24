@@ -6,7 +6,13 @@ import { summarizeClusterWithAi, unsafeContentRe, type AiBindingLike } from '../
 
 function createSqliteD1(): D1Database {
   const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
+  for (const file of [
+    '../migrations/0001_init.sql',
+    '../migrations/0002_feed.sql',
+    '../migrations/0003_p4.sql',
+    '../migrations/0004_tags.sql',
+    '../migrations/0005_drop_verdict.sql',
+  ]) {
     sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
   }
   sqlite.exec(

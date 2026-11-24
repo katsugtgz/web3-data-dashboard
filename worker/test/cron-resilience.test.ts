@@ -9,7 +9,13 @@ import type { IngestPostResult } from '../src/normalize/cluster';
 
 function createSqliteD1(): D1Database {
   const sqlite = new Database(':memory:');
-  for (const file of ['../migrations/0001_init.sql', '../migrations/0002_feed.sql', '../migrations/0003_p4.sql', '../migrations/0004_tags.sql']) {
+  for (const file of [
+    '../migrations/0001_init.sql',
+    '../migrations/0002_feed.sql',
+    '../migrations/0003_p4.sql',
+    '../migrations/0004_tags.sql',
+    '../migrations/0005_drop_verdict.sql',
+  ]) {
     sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
   }
   const makeStmt = (sql: string, params: unknown[] = []) => ({
@@ -89,7 +95,7 @@ describe('safety additions', () => {
     // Ordinary announcement: no wallet step anywhere in the window.
     expect(DRAINER_RE.test('The airdrop is live! Claim your allocation before Friday.')).toBe(false);
     // Same phrasing WITH a wallet-connect step still flags.
-    expect(DRAINER_RE.test('Airdrop is live — claim now via connect your wallet at the portal')).toBe(true);
+    expect(DRAINER_RE.test('Airdrop is live \u2014 claim now via connect your wallet at the portal')).toBe(true);
     expect(
       DRAINER_RE.test('Airdrop is live for eligible users. Claim your share, then connect your wallet to receive.'),
     ).toBe(true);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
 import { buildBrief, isFeedItem } from '../lib/agentBrief';
 import { copyText } from '../lib/clipboard';
+import { formatProjectTitle } from '../lib/feedDisplay';
 
 export type CopyRegion = 'page' | 'detail' | 'profile';
 
@@ -41,7 +42,8 @@ export interface CopyController {
 const COPY_STATUS_MS = 4500;
 const SESSION_PROFILE_MESSAGE = 'Profile saved for this session only. Browser storage is unavailable.';
 
-const nameOf = (target: FeedItem | Card): string => (isFeedItem(target) ? target.project : target.n);
+const nameOf = (target: FeedItem | Card): string =>
+  isFeedItem(target) ? formatProjectTitle(target.project) : target.n;
 
 /**
  * Owns the entire copy-agent-brief flow: clipboard execution, region-scoped
