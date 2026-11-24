@@ -3,7 +3,7 @@ import type { MarketsResponse } from '../../shared/types';
 import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
-const POLL_MS = 60_000;
+const POLL_MS = 120_000;
 
 export interface MarketsState {
   markets: MarketsResponse | null;

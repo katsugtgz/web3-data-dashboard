@@ -1,55 +1,9 @@
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { createTestD1 } from './helpers';
 import { queryFeed } from '../src/normalize/cluster';
 
 function createSqliteD1(): D1Database {
-  const sqlite = new Database(':memory:');
-  for (const file of [
-    '../migrations/0001_init.sql',
-    '../migrations/0002_feed.sql',
-    '../migrations/0003_p4.sql',
-    '../migrations/0004_tags.sql',
-    '../migrations/0005_drop_verdict.sql',
-  ]) {
-    sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
-  }
-  const makeStmt = (sql: string, params: unknown[] = []) => ({
-    bind(...args: unknown[]) {
-      return makeStmt(sql, args);
-    },
-    async first<T = unknown>(): Promise<T | null> {
-      const row = sqlite.query(sql).get(...(params as [])) as T | undefined;
-      return row ?? null;
-    },
-    async all<T = unknown>() {
-      const results = sqlite.query(sql).all(...(params as [])) as T[];
-      return { results, success: true, meta: { changes: 0 } };
-    },
-    async run() {
-      const info = sqlite.query(sql).run(...(params as []));
-      return { success: true, meta: { changes: info.changes } };
-    },
-  });
-  return {
-    prepare(sql: string) {
-      return makeStmt(sql);
-    },
-    async batch(stmts: TestStmt[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql: string) {
-      sqlite.exec(sql);
-      return { count: 1, duration: 0 };
-    },
-  } as unknown as D1Database;
-}
-
-interface TestStmt {
-  bind(...args: unknown[]): TestStmt;
-  run(): Promise<unknown>;
+  return createTestD1().db;
 }
 
 async function seedCluster(db: D1Database, id: string, score: number, lastSeen: number): Promise<void> {

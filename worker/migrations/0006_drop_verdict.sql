@@ -1,0 +1,1 @@
+ALTER TABLE clusters ADD COLUMN is_drop INTEGER;

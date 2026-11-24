@@ -3,7 +3,7 @@ import type { SourceHealth } from '../../shared/types';
 import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
-const SOURCES_POLL_MS = 120_000;
+const SOURCES_POLL_MS = 180_000;
 
 export function useSourcesHealth() {
   const [sources, setSources] = useState<SourceHealth[]>([]);

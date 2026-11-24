@@ -73,6 +73,18 @@ export async function listSnapshots(db: D1Database): Promise<SnapshotRow[]> {
   return res.results ?? [];
 }
 
+export async function listSnapshotsByPrefix(db: D1Database, prefix: string): Promise<SnapshotRow[]> {
+  if (!prefix) {
+    return listSnapshots(db);
+  }
+  const end = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+  const res = await db
+    .prepare('SELECT key, body, etag, fetched_at, ok, error FROM snapshots WHERE key >= ?1 AND key < ?2 ORDER BY key ASC')
+    .bind(prefix, end)
+    .all<SnapshotRow>();
+  return res.results ?? [];
+}
+
 export interface SnapshotMetaRow {
   key: string;
   fetched_at: number;

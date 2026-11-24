@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { applyMigrations } from './helpers';
 import { SEED_SOURCES, syncSources, validateSources } from '../src/sources/registry';
 
 /**
@@ -14,15 +14,7 @@ function createCountingD1(): {
   staleReadOnce(patch: (rows: object[]) => void): void;
 } {
   const sqlite = new Database(':memory:');
-  for (const file of [
-    '../migrations/0001_init.sql',
-    '../migrations/0002_feed.sql',
-    '../migrations/0003_p4.sql',
-    '../migrations/0004_tags.sql',
-    '../migrations/0005_drop_verdict.sql',
-  ]) {
-    sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
-  }
+  applyMigrations(sqlite);
   let writes = 0;
   let staleNext: ((rows: object[]) => void) | null = null;
   const makeStmt = (sql: string, params: unknown[] = []) => ({

@@ -7,9 +7,10 @@ import type {
   MarketSector,
   MarketsResponse,
 } from '../../shared/types';
+import { runIfDue } from './lib/cronGate';
 import {
   listSnapshotMeta,
-  listSnapshots,
+  listSnapshotsByPrefix,
   markSnapshotError,
   readSnapshot,
   sha1Hex,
@@ -19,7 +20,12 @@ import {
 } from './lib/db';
 import { queryFeed, querySourcesHealth, type IngestPostResult } from './normalize/cluster';
 import { decayClusterScores } from './normalize/score';
-import { summarizeClusterWithAi, type AiBindingLike } from './normalize/summarize';
+import {
+  AI_MAX_ATTEMPTS,
+  hasAiQuotaRemaining,
+  summarizeClusterWithAi,
+  type AiBindingLike,
+} from './normalize/summarize';
 import { loadKnownDomains, seedKnownDomains } from './safety';
 import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
 import {
@@ -56,8 +62,18 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 const THIRTY_MIN_MS = 30 * 60_000;
+const SIXTY_MIN_MS = 60 * 60_000;
 const FIVE_MIN_STALE_MS = 15 * 60_000;
 const THIRTY_MIN_STALE_MS = 90 * 60_000;
+
+const syncedDbs = new WeakSet<D1Database>();
+
+/** Syncs static seed sources once per D1 instance; retries on transient failure. */
+export async function ensureSourcesSynced(db: D1Database): Promise<void> {
+  if (syncedDbs.has(db)) return;
+  await syncSources(db, SEED_SOURCES);
+  syncedDbs.add(db);
+}
 
 const REGISTERED_TG_HANDLES = new Set(
   SEED_SOURCES.filter(s => s.platform === 'telegram').map(s => s.handle.toLowerCase()),
@@ -177,103 +193,64 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
   }
 
   // 2. Workers AI summaries for eligible non-RISK clusters.
-  // Group by cluster first: several posts of one cluster in the same tick must
-  // produce ONE summary call (one quota slot, no concurrent writes racing on
-  // the same cluster row), not one call per post.
-  //
-  // Deferred clusters: the clusters table itself is the queue — a cluster
-  // still on its rule summary (summary_source = 'rule', non-risk, has posts)
-  // is pending, so beyond this tick's AI_SUMMARY_CHUNK bound the remainder
-  // stays queued and the next tick drains the oldest first (FIFO by
-  // first_seen). New clusters are therefore always reconsidered later (the
-  // one-off isNewCluster flag no longer gates them out), with no extra queue
-  // table or migration.
+  // The clusters table itself is the single-source-of-truth priority queue:
+  // a cluster still on its rule summary (summary_source = 'rule', non-risk,
+  // below AI_MAX_ATTEMPTS, past ai_retry_after, has posts) is eligible, and
+  // each tick drains up to AI_SUMMARY_CHUNK highest-priority clusters first
+  // (score DESC, last_seen DESC) while persisting the remainder.
   const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
-  const chunk = Math.max(1, Number.parseInt(env.AI_SUMMARY_CHUNK ?? '6', 10) || 6);
-  const byCluster = new Map<string, IngestPostResult[]>();
-  for (const r of ingested) {
-    if (r.riskLevel === 'risk') continue;
-    const group = byCluster.get(r.clusterId);
-    if (group) group.push(r);
-    else byCluster.set(r.clusterId, [r]);
-  }
+  if (!env.AI || dailyMax <= 0) return;
+  if (!(await hasAiQuotaRemaining(env.DB, dailyMax, nowMs))) return;
 
-  // Backlog first (oldest rule-only clusters), then this tick's new groups;
-  // only the first `chunk` jobs run, the rest persist as pending.
+  const chunk = Math.max(1, Number.parseInt(env.AI_SUMMARY_CHUNK ?? '6', 10) || 6);
+
+  // Priority by score DESC, last_seen DESC; literal attempt cap matches
+  // partial index clusters_ai_backlog.
   const backlog = await env.DB.prepare(
     `SELECT c.id, c.project, c.risk_level FROM clusters c
-     WHERE c.summary_source = 'rule' AND c.risk_level != 'risk'
+     WHERE c.summary_source = 'rule'
+       AND c.risk_level != 'risk'
+       AND c.ai_attempts < ${AI_MAX_ATTEMPTS}
+       AND c.ai_retry_after <= ?1
        AND EXISTS (SELECT 1 FROM posts p WHERE p.cluster_id = c.id)
-     ORDER BY c.first_seen ASC
-     LIMIT ?1`,
+     ORDER BY c.score DESC, c.last_seen DESC
+     LIMIT ?2`,
   )
-    .bind(chunk)
+    .bind(nowMs, chunk)
     .all<{ id: string; project: string; risk_level: 'ok' | 'warn' | 'risk' }>();
 
-  const jobs: {
-    clusterId: string;
-    project: string;
-    riskLevel: 'ok' | 'warn' | 'risk';
-    rawTexts: string[];
-    isNewCluster: boolean;
-    isNonLatinSource: boolean;
-  }[] = [];
-  const claimed = new Set<string>();
-  if (backlog.results?.length) {
-    // One windowed fetch instead of one query per backlog cluster (N+1):
-    // results partitioned in JS preserves the 3-newest-per-cluster cap while
-    // issuing a single D1 round trip.
-    const placeholders = backlog.results.map((_, i) => `?${i + 1}`).join(', ');
-    const texts = await env.DB.prepare(
-      `SELECT cluster_id, text,
-              ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY posted_at DESC) AS rn
-       FROM posts WHERE cluster_id IN (${placeholders})`,
-    )
-      .bind(...backlog.results.map(r => r.id))
-      .all<{ cluster_id: string; text: string; rn: number }>();
-    const textsByCluster = new Map<string, string[]>();
-    for (const t of texts.results ?? []) {
-      if (t.rn > 3) continue;
-      let arr = textsByCluster.get(t.cluster_id);
-      if (!arr) textsByCluster.set(t.cluster_id, (arr = []));
-      arr.push(t.text);
-    }
-    for (const row of backlog.results) {
-      claimed.add(row.id);
-      jobs.push({
-        clusterId: row.id,
-        project: row.project,
-        riskLevel: row.risk_level,
-        rawTexts: (textsByCluster.get(row.id) ?? []).slice(0, 3),
-        // Eligibility was already decided by the summary_source = 'rule' filter;
-        // these flags only open the quota gate inside summarizeClusterWithAi.
-        isNewCluster: true,
-        isNonLatinSource: true,
-      });
-    }
-  }
-  for (const [clusterId, group] of byCluster) {
-    if (claimed.has(clusterId)) continue;
-    claimed.add(clusterId);
-    jobs.push({
-      clusterId,
-      project: group[0].parsed.project,
-      riskLevel: group[0].riskLevel,
-      rawTexts: group.map(g => g.rawText),
-      isNewCluster: group[0].isNewCluster,
-      isNonLatinSource: group[0].isNonLatinSource,
-    });
+  if (!backlog.results?.length) return;
+
+  // One windowed fetch instead of one query per backlog cluster (N+1):
+  // results partitioned in JS preserves the 3-newest-per-cluster cap while
+  // issuing a single D1 round trip.
+  const placeholders = backlog.results.map((_, i) => `?${i + 1}`).join(', ');
+  const texts = await env.DB.prepare(
+    `SELECT cluster_id, text,
+            ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY posted_at DESC) AS rn
+     FROM posts WHERE cluster_id IN (${placeholders})`,
+  )
+    .bind(...backlog.results.map(r => r.id))
+    .all<{ cluster_id: string; text: string; rn: number }>();
+  const textsByCluster = new Map<string, string[]>();
+  for (const t of texts.results ?? []) {
+    if (t.rn > 3) continue;
+    let arr = textsByCluster.get(t.cluster_id);
+    if (!arr) textsByCluster.set(t.cluster_id, (arr = []));
+    arr.push(t.text);
   }
 
   await Promise.all(
-    jobs.slice(0, chunk).map(job =>
+    backlog.results.map(row =>
       summarizeClusterWithAi(env.AI, env.DB, {
-        clusterId: job.clusterId,
-        project: job.project,
-        rawTexts: job.rawTexts,
-        isNewCluster: job.isNewCluster,
-        isNonLatinSource: job.isNonLatinSource,
-        riskLevel: job.riskLevel,
+        clusterId: row.id,
+        project: row.project,
+        rawTexts: (textsByCluster.get(row.id) ?? []).slice(0, 3),
+        // Eligibility was already decided by the backlog filter; these flags
+        // only open the gate inside summarizeClusterWithAi.
+        isNewCluster: true,
+        isNonLatinSource: true,
+        riskLevel: row.risk_level,
         dailyMax,
         nowMs,
       }),
@@ -282,7 +259,7 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
 }
 
 async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
-  await syncSources(env.DB, SEED_SOURCES);
+  await ensureSourcesSynced(env.DB);
   const { surf } = await loadCachedSurfAndDefi(env.DB);
   const batchSize = Math.max(1, Number.parseInt(env.TG_BATCH_SIZE ?? '4', 10) || 4);
   const summary = await pollTelegramBatch(env.DB, batchSize, nowMs, surf);
@@ -290,7 +267,7 @@ async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
 }
 
 async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
-  await syncSources(env.DB, SEED_SOURCES);
+  await ensureSourcesSynced(env.DB);
   const urls: MarketUrls = {
     coingeckoMarkets: env.COINGECKO_MARKETS_URL,
     polymarket: env.POLYMARKET_URL,
@@ -324,10 +301,16 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   // Best-effort X polling (never throws unhandled errors)
   const xBatch = Math.max(1, Number.parseInt(env.X_BATCH_SIZE ?? '3', 10) || 3);
   const xSummary = await pollXBatch(env.DB, xBatch, nowMs, surf);
-  await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+  try {
+    await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+  } catch (err) {
+    console.error('cron-error:postProcessIngest', err);
+  }
 
-  await pruneOldPosts(env.DB, nowMs);
-  await decayClusterScores(env.DB, nowMs);
+  await runIfDue(env.DB, 'prune', SIXTY_MIN_MS, nowMs, async () => {
+    await pruneOldPosts(env.DB, nowMs);
+  });
+  await runIfDue(env.DB, 'decay', SIXTY_MIN_MS, nowMs, () => decayClusterScores(env.DB, nowMs));
 }
 
 function isSectionStale(id: MarketSectionId, ok: number, fetchedAt: number, nowMs: number): boolean {
@@ -337,7 +320,7 @@ function isSectionStale(id: MarketSectionId, ok: number, fetchedAt: number, nowM
 }
 
 async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag?: string } | null> {
-  const rows = await listSnapshots(db);
+  const rows = await listSnapshotsByPrefix(db, 'markets:');
   const byKey = new Map(rows.map(r => [r.key, r]));
   const sections: MarketSection[] = [];
   let sectors: MarketSector[] = [];
@@ -414,7 +397,7 @@ async function handleCachedJson(
 export default {
   async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     const nowMs = controller.scheduledTime || Date.now();
-    if (controller.cron === '* * * * *') {
+    if (controller.cron !== '*/5 * * * *') {
       await runOneMinCron(env, nowMs);
       return;
     }
@@ -433,7 +416,7 @@ export default {
       request.method === 'HEAD' && res.status !== 304 ? new Response(null, { status: res.status, headers: res.headers }) : res;
 
     const url = new URL(request.url);
-    const cacheControl = 'public, max-age=15, s-maxage=30';
+    const cacheControl = 'public, max-age=60, s-maxage=120';
 
     if (url.pathname === '/health') {
       // Metadata-only: /health is no-store and must not read full snapshot bodies.
@@ -463,7 +446,7 @@ export default {
 
     if (url.pathname === '/feed.json') {
       return stripBodyIfHead(
-        await handleCachedJson(request, ctx, 'public, max-age=15, s-maxage=15', async () => {
+        await handleCachedJson(request, ctx, 'public, max-age=30, s-maxage=60', async () => {
           const sinceParam = url.searchParams.get('since');
           const limitParam = url.searchParams.get('limit');
           const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';

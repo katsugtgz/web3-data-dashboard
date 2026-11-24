@@ -4,7 +4,7 @@ import { API_BASE, getJson } from '../lib/api';
 import { mergeVisibleUpdates, selectPending } from '../lib/feedMerge';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
-const FEED_POLL_MS = 30_000;
+const FEED_POLL_MS = 60_000;
 
 export interface FeedState {
   items: FeedItem[];

@@ -1,54 +1,13 @@
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { createTestD1 } from './helpers';
 import { evaluateSafety } from '../src/safety';
 import { DRAINER_RE, URL_SHORTENERS } from '../src/safety/index';
 import { markSnapshotError, upsertSnapshot, readSnapshot } from '../src/lib/db';
-import { postProcessIngest, type Env } from '../src/index';
+import worker, { ensureSourcesSynced, postProcessIngest, type Env } from '../src/index';
 import type { IngestPostResult } from '../src/normalize/cluster';
 
 function createSqliteD1(): D1Database {
-  const sqlite = new Database(':memory:');
-  for (const file of [
-    '../migrations/0001_init.sql',
-    '../migrations/0002_feed.sql',
-    '../migrations/0003_p4.sql',
-    '../migrations/0004_tags.sql',
-    '../migrations/0005_drop_verdict.sql',
-  ]) {
-    sqlite.exec(readFileSync(new URL(file, import.meta.url), 'utf8'));
-  }
-  const makeStmt = (sql: string, params: unknown[] = []) => ({
-    bind(...args: unknown[]) {
-      return makeStmt(sql, args);
-    },
-    async first<T = unknown>(): Promise<T | null> {
-      const row = sqlite.query(sql).get(...(params as [])) as T | undefined;
-      return row ?? null;
-    },
-    async all<T = unknown>() {
-      const results = sqlite.query(sql).all(...(params as [])) as T[];
-      return { results, success: true, meta: { changes: 0 } };
-    },
-    async run() {
-      const info = sqlite.query(sql).run(...(params as []));
-      return { success: true, meta: { changes: info.changes } };
-    },
-  });
-  return {
-    prepare(sql: string) {
-      return makeStmt(sql);
-    },
-    async batch(stmts: ReturnType<typeof makeStmt>[]) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql: string) {
-      sqlite.exec(sql);
-      return { count: 1, duration: 0 };
-    },
-  } as unknown as D1Database;
+  return createTestD1().db;
 }
 
 const NOW = 1_795_240_000_000;
@@ -95,7 +54,7 @@ describe('safety additions', () => {
     // Ordinary announcement: no wallet step anywhere in the window.
     expect(DRAINER_RE.test('The airdrop is live! Claim your allocation before Friday.')).toBe(false);
     // Same phrasing WITH a wallet-connect step still flags.
-    expect(DRAINER_RE.test('Airdrop is live \u2014 claim now via connect your wallet at the portal')).toBe(true);
+    expect(DRAINER_RE.test('Airdrop is live — claim now via connect your wallet at the portal')).toBe(true);
     expect(
       DRAINER_RE.test('Airdrop is live for eligible users. Claim your share, then connect your wallet to receive.'),
     ).toBe(true);
@@ -143,21 +102,28 @@ function ingestedFor(clusterId: string, text: string): IngestPostResult[] {
 }
 
 describe('AI summary chunking with persisted backlog', () => {
-  test('processes at most AI_SUMMARY_CHUNK clusters per tick and drains the rest later', async () => {
+  test('processes highest score then newest last_seen up to AI_SUMMARY_CHUNK per tick and drains the rest later', async () => {
     const db = createSqliteD1();
-    // Seed 4 backlog clusters (rule summary, non-risk, with posts).
-    for (let i = 0; i < 4; i++) {
+    // Seed 4 backlog clusters (rule summary, non-risk, with posts) whose
+    // priority order (score DESC, last_seen DESC) differs from FIFO first_seen.
+    const rows = [
+      { id: 'backlog:low', project: 'ProjLow', score: 0.5, firstSeen: NOW - 400_000, lastSeen: NOW - 400_000 },
+      { id: 'backlog:mid-old', project: 'ProjMidOld', score: 2.0, firstSeen: NOW - 300_000, lastSeen: NOW - 300_000 },
+      { id: 'backlog:mid-new', project: 'ProjMidNew', score: 2.0, firstSeen: NOW - 200_000, lastSeen: NOW - 100_000 },
+      { id: 'backlog:top', project: 'ProjTop', score: 5.0, firstSeen: NOW - 100_000, lastSeen: NOW - 200_000 },
+    ];
+    for (const row of rows) {
       await db
         .prepare(
           `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
-           VALUES (?1, ?2, '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?3, ?3)`,
+           VALUES (?1, ?2, '[]', '["other"]', 'rule', 'rule', 'ok', '[]', ?3, 1, ?4, ?5)`,
         )
-        .bind(`backlog:${i}`, `Proj${i}`, NOW - (100 - i) * 1_000)
+        .bind(row.id, row.project, row.score, row.firstSeen, row.lastSeen)
         .run();
       await db
         .prepare(`INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
                   VALUES (?1, 'telegram:ch1', 'https://t.me/ch1/1', ?2, 'backlog text', '[]', ?1, ?2)`)
-        .bind(`backlog:${i}`, NOW - 5_000)
+        .bind(row.id, row.lastSeen)
         .run();
     }
 
@@ -179,11 +145,11 @@ describe('AI summary chunking with persisted backlog', () => {
       .prepare(`SELECT COUNT(*) AS n FROM clusters WHERE summary_source = 'ai'`)
       .first<{ n: number }>();
     expect(drained?.n).toBe(2);
-    // Oldest first (FIFO by first_seen).
+    // Highest score first, then newest last_seen on tie.
     const done = await db
       .prepare(`SELECT id FROM clusters WHERE summary_source = 'ai' ORDER BY id`)
       .all<{ id: string }>();
-    expect(done.results.map(r => r.id)).toEqual(['backlog:0', 'backlog:1']);
+    expect(done.results.map(r => r.id)).toEqual(['backlog:mid-new', 'backlog:top']);
 
     // Tick 2: the remaining backlog drains; deferred clusters ARE reconsidered.
     await postProcessIngest(env, [], NOW + 1);
@@ -213,5 +179,577 @@ describe('AI summary chunking with persisted backlog', () => {
 
     // Chunk bound holds across all ticks: never more than 2 calls per tick.
     expect(aiCalls.length).toBe(5);
+  });
+
+  test('poison-pill failure backs off for 6h then permanently excludes after 3 attempts', async () => {
+    const { db, queries, explain } = createTestD1();
+    const t0 = NOW;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('poison', 'PoisonProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 10, 1, ?1, ?1),
+                ('healthy', 'HealthyProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?2, ?2)`,
+      )
+      .bind(t0 - 1_000, t0 - 2_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:poison', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'poison post', '[]', 'poison', ?1),
+                ('p:healthy', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'healthy post', '[]', 'healthy', ?2)`,
+      )
+      .bind(t0 - 1_000, t0 - 2_000)
+      .run();
+
+    const aiPrompts: string[] = [];
+    const env = makeEnv(
+      db,
+      {
+        async run(_model, input) {
+          const prompt = (input as { messages: { content: string }[] }).messages[1].content;
+          aiPrompts.push(prompt);
+          if (prompt.includes('PoisonProto')) {
+            return 'not valid json';
+          }
+          return JSON.stringify({ summary: 'Healthy AI summary.', taskTypes: ['quest'], chains: [] });
+        },
+      },
+      '1',
+    );
+
+    // Tick 1: poison runs first, fails -> ai_attempts=1, ai_retry_after = t0 + 6h.
+    const beforeTick1 = queries.length;
+    await postProcessIngest(env, [], t0);
+    expect(aiPrompts.length).toBe(1);
+    expect(aiPrompts[0]).toContain('PoisonProto');
+
+    const backlogSql = queries.slice(beforeTick1).find(q => q.includes('FROM clusters'));
+    expect(backlogSql).toBeDefined();
+    expect(backlogSql).toContain('c.ai_attempts < 3');
+    const plan = explain(backlogSql!, [t0, 1]).map(s => s.detail).join('\n');
+    expect(plan).toContain('clusters_ai_backlog');
+    expect(plan).not.toMatch(/TEMP B-TREE/i);
+
+    const poisonAfter1 = await db
+      .prepare('SELECT summary_source, ai_attempts, ai_retry_after FROM clusters WHERE id = ?1')
+      .bind('poison')
+      .first<{ summary_source: string; ai_attempts: number; ai_retry_after: number }>();
+    expect(poisonAfter1).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: t0 + 6 * 3_600_000,
+    });
+
+    // Tick 2 inside 6h backoff: skips poison and summarizes healthy.
+    await postProcessIngest(env, [], t0 + 60_000);
+    expect(aiPrompts.length).toBe(2);
+    expect(aiPrompts[1]).toContain('HealthyProto');
+    const healthy = await db
+      .prepare('SELECT summary_source FROM clusters WHERE id = ?1')
+      .bind('healthy')
+      .first<{ summary_source: string }>();
+    expect(healthy?.summary_source).toBe('ai');
+
+    // Tick 3 at t0 + 6h: poison retried and fails again -> ai_attempts=2, ai_retry_after = t1 + 24h.
+    const t1 = t0 + 6 * 3_600_000;
+    await postProcessIngest(env, [], t1);
+    expect(aiPrompts.length).toBe(3);
+    const poisonAfter2 = await db
+      .prepare('SELECT ai_attempts, ai_retry_after FROM clusters WHERE id = ?1')
+      .bind('poison')
+      .first<{ ai_attempts: number; ai_retry_after: number }>();
+    expect(poisonAfter2).toEqual({
+      ai_attempts: 2,
+      ai_retry_after: t1 + 24 * 3_600_000,
+    });
+
+    // Tick 4 at t1 + 24h: poison retried a 3rd time and fails -> ai_attempts=3.
+    const t2 = t1 + 24 * 3_600_000;
+    await postProcessIngest(env, [], t2);
+    expect(aiPrompts.length).toBe(4);
+    const poisonAfter3 = await db
+      .prepare('SELECT ai_attempts, ai_retry_after FROM clusters WHERE id = ?1')
+      .bind('poison')
+      .first<{ ai_attempts: number; ai_retry_after: number }>();
+    expect(poisonAfter3).toEqual({
+      ai_attempts: 3,
+      ai_retry_after: t2 + 24 * 3_600_000,
+    });
+
+    // Tick 5 well past ai_retry_after: permanently excluded (0 AI calls).
+    await postProcessIngest(env, [], t2 + 48 * 3_600_000);
+    expect(aiPrompts.length).toBe(4);
+  });
+
+  test('exits immediately with zero cluster/post queries when quota is exhausted or AI is disabled', async () => {
+    const { db, queries } = createTestD1();
+    const day = new Date(NOW).toISOString().slice(0, 10);
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c:pending', 'PendingProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 5, 1, ?1, ?1)`,
+      )
+      .bind(NOW - 1_000)
+      .run();
+    await db
+      .prepare(`INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+                VALUES ('p:pending', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'pending text', '[]', 'c:pending', ?1)`)
+      .bind(NOW - 1_000)
+      .run();
+    await db.prepare('INSERT INTO ai_usage (day, calls) VALUES (?1, 5)').bind(day).run();
+
+    let aiCalls = 0;
+    const spyAi = {
+      async run() {
+        aiCalls++;
+        return JSON.stringify({ summary: 'Should not run', taskTypes: ['quest'], chains: [] });
+      },
+    };
+
+    // Case 1: quota exhausted (ai_usage.calls >= dailyMax).
+    const beforeExhausted = queries.length;
+    await postProcessIngest({ DB: db, AI: spyAi, AI_DAILY_MAX: '5', AI_SUMMARY_CHUNK: '2' }, [], NOW);
+    expect(aiCalls).toBe(0);
+    const exhaustedQueries = queries.slice(beforeExhausted);
+    expect(exhaustedQueries.some(q => /\b(?:clusters|posts)\b/i.test(q))).toBe(false);
+
+    // Case 2: AI_DAILY_MAX = '0' -> zero queries at all.
+    const beforeZeroMax = queries.length;
+    await postProcessIngest({ DB: db, AI: spyAi, AI_DAILY_MAX: '0', AI_SUMMARY_CHUNK: '2' }, [], NOW);
+    expect(aiCalls).toBe(0);
+    expect(queries.slice(beforeZeroMax)).toEqual([]);
+
+    // Case 3: missing env.AI -> zero queries at all.
+    const beforeNoAi = queries.length;
+    await postProcessIngest({ DB: db, AI_DAILY_MAX: '5', AI_SUMMARY_CHUNK: '2' }, [], NOW);
+    expect(queries.slice(beforeNoAi)).toEqual([]);
+  });
+
+  test('non-Latin ingested follow-ups never bypass ai_retry_after backoff, ai_attempts cap, or summary_source=ai', async () => {
+    const db = createSqliteD1();
+    const t0 = NOW;
+    const day = new Date(t0).toISOString().slice(0, 10);
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, ai_attempts, ai_retry_after)
+         VALUES ('c:backoff', 'BackoffProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 9, 1, ?1, ?1, 1, ?2),
+                ('c:capped', 'CappedProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 8, 1, ?1, ?1, 3, 0),
+                ('c:done', 'DoneProto', '[]', '["other"]', 'Already AI.', 'ai', 'ok', '[]', 7, 1, ?1, ?1, 0, 0)`,
+      )
+      .bind(t0 - 1_000, t0 + 6 * 3_600_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:backoff', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'non-latin follow-up', '[]', 'c:backoff', ?1),
+                ('p:capped', 'telegram:ch1', 'https://t.me/ch1/2', ?1, 'non-latin follow-up', '[]', 'c:capped', ?1),
+                ('p:done', 'telegram:ch1', 'https://t.me/ch1/3', ?1, 'non-latin follow-up', '[]', 'c:done', ?1)`,
+      )
+      .bind(t0)
+      .run();
+
+    let aiCalls = 0;
+    const env = makeEnv(
+      db,
+      {
+        async run() {
+          aiCalls++;
+          return JSON.stringify({ summary: 'Should never run.', taskTypes: ['quest'], chains: [] });
+        },
+      },
+      '6',
+    );
+
+    const followUps: IngestPostResult[] = ['c:backoff', 'c:capped', 'c:done'].map(clusterId => ({
+      ...ingestedFor(clusterId, 'non-latin follow-up')[0],
+      isNewCluster: false,
+      isNonLatinSource: true,
+    }));
+
+    await postProcessIngest(env, followUps, t0);
+
+    expect(aiCalls).toBe(0);
+    const usage = await db.prepare('SELECT calls FROM ai_usage WHERE day = ?1').bind(day).first<{ calls: number }>();
+    expect(usage).toBeNull();
+    const backoffRow = await db
+      .prepare('SELECT ai_attempts FROM clusters WHERE id = ?1')
+      .bind('c:backoff')
+      .first<{ ai_attempts: number }>();
+    const cappedRow = await db
+      .prepare('SELECT ai_attempts FROM clusters WHERE id = ?1')
+      .bind('c:capped')
+      .first<{ ai_attempts: number }>();
+    expect(backoffRow?.ai_attempts).toBe(1);
+    expect(cappedRow?.ai_attempts).toBe(3);
+  });
+});
+
+function makeExecCtx(): ExecutionContext {
+  return {
+    waitUntil() {},
+    passThroughOnException() {},
+  } as unknown as ExecutionContext;
+}
+
+async function withStubbedCaches<T>(fn: () => Promise<T>): Promise<T> {
+  const g = globalThis as unknown as { caches?: CacheStorage };
+  const hadCaches = 'caches' in g;
+  const prevCaches = g.caches;
+  const store = new Map<string, Response>();
+  const defaultCache = {
+    async match(req: RequestInfo | URL) {
+      const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+      return store.get(key)?.clone();
+    },
+    async put(req: RequestInfo | URL, res: Response) {
+      const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+      store.set(key, res.clone());
+    },
+  };
+  g.caches = { default: defaultCache } as unknown as CacheStorage;
+  try {
+    return await fn();
+  } finally {
+    if (hadCaches) {
+      g.caches = prevCaches;
+    } else {
+      delete g.caches;
+    }
+  }
+}
+
+describe('HTTP cache headers and prefix snapshot reads', () => {
+  test('/markets.json queries only markets:* prefix and endpoints emit expected Cache-Control headers', async () => {
+    const { db, queries } = createTestD1();
+    await upsertSnapshot(db, 'airdrops', { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }, NOW);
+    await upsertSnapshot(
+      db,
+      'markets:crypto',
+      {
+        section: {
+          id: 'crypto',
+          title: 'Crypto Market',
+          blurb: '',
+          cols: ['Coin'],
+          rows: [],
+          source: 'CoinGecko',
+          sourceUrl: 'https://www.coingecko.com',
+          fetchedAt: NOW,
+          stale: false,
+        },
+        sectors: [],
+      },
+      NOW,
+    );
+
+    await withStubbedCaches(async () => {
+      const beforeMarkets = queries.length;
+      const marketsRes = await worker.fetch(new Request('https://radar.test/markets.json'), { DB: db }, makeExecCtx());
+      expect(marketsRes.status).toBe(200);
+      expect(marketsRes.headers.get('Cache-Control')).toBe('public, max-age=60, s-maxage=120');
+
+      const marketsQueries = queries.slice(beforeMarkets).filter(q => q.includes('snapshots'));
+      expect(marketsQueries.length).toBe(1);
+      expect(marketsQueries[0]).toContain('WHERE key >= ?1 AND key < ?2');
+      expect(marketsQueries[0]).not.toMatch(/FROM\s+snapshots\s+ORDER\s+BY/i);
+
+      const feedRes = await worker.fetch(new Request('https://radar.test/feed.json'), { DB: db }, makeExecCtx());
+      expect(feedRes.status).toBe(200);
+      expect(feedRes.headers.get('Cache-Control')).toBe('public, max-age=30, s-maxage=60');
+
+      for (const path of ['/airdrops.json', '/sources.json', '/sources/candidates.json']) {
+        const res = await worker.fetch(new Request(`https://radar.test${path}`), { DB: db }, makeExecCtx());
+        expect(res.status).toBe(200);
+        expect(res.headers.get('Cache-Control')).toBe('public, max-age=60, s-maxage=120');
+      }
+    });
+  });
+});
+
+async function withStubbedFetch<T>(
+  handler: (url: string) => Response | Promise<Response>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) =>
+    handler(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url)) as unknown as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+}
+
+describe('ensureSourcesSynced and scheduled cron resilience', () => {
+  test('ensureSourcesSynced syncs once per DB instance and retries after transient error', async () => {
+    const { db: db1, queries: queries1 } = createTestD1();
+    await ensureSourcesSynced(db1);
+    const count1 = await db1.prepare('SELECT COUNT(*) AS n FROM sources').first<{ n: number }>();
+    expect(count1?.n).toBeGreaterThan(0);
+
+    const afterFirst = queries1.length;
+    await ensureSourcesSynced(db1);
+    expect(queries1.length).toBe(afterFirst);
+
+    const { db: db2 } = createTestD1();
+    await ensureSourcesSynced(db2);
+    const count2 = await db2.prepare('SELECT COUNT(*) AS n FROM sources').first<{ n: number }>();
+    expect(count2?.n).toBe(count1?.n);
+
+    const { db: realDb, queries: flakyQueries } = createTestD1();
+    let failOnce = true;
+    const flakyDb = {
+      prepare(sql: string) {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('transient D1 error');
+        }
+        return realDb.prepare(sql);
+      },
+      batch(stmts: D1PreparedStatement[]) {
+        return realDb.batch(stmts);
+      },
+      exec(sql: string) {
+        return realDb.exec(sql);
+      },
+    } as unknown as D1Database;
+
+    await expect(ensureSourcesSynced(flakyDb)).rejects.toThrow('transient D1 error');
+    await ensureSourcesSynced(flakyDb);
+    const flakyCount = await realDb.prepare('SELECT COUNT(*) AS n FROM sources').first<{ n: number }>();
+    expect(flakyCount?.n).toBe(count1?.n);
+
+    const afterFlakySuccess = flakyQueries.length;
+    await ensureSourcesSynced(flakyDb);
+    expect(flakyQueries.length).toBe(afterFlakySuccess);
+  });
+
+  test('scheduled dispatches */2 * * * * and * * * * * to Telegram cron without touching markets or cron_state', async () => {
+    for (const cronExpr of ['*/2 * * * *', '* * * * *']) {
+      const { db } = createTestD1();
+      const requestedUrls: string[] = [];
+
+      await withStubbedFetch(
+        url => {
+          requestedUrls.push(url);
+          return new Response('offline', { status: 503 });
+        },
+        async () => {
+          await worker.scheduled(
+            { cron: cronExpr, scheduledTime: NOW, noRetry() {} } as ScheduledController,
+            { DB: db, TG_BATCH_SIZE: '1' },
+            makeExecCtx(),
+          );
+        },
+      );
+
+      expect(requestedUrls.length).toBeGreaterThan(0);
+      expect(requestedUrls.every(u => u.startsWith('https://t.me/s/'))).toBe(true);
+
+      const markets = await db
+        .prepare(`SELECT key FROM snapshots WHERE key LIKE 'markets:%'`)
+        .all<{ key: string }>();
+      expect(markets.results).toEqual([]);
+
+      const gates = await db.prepare('SELECT key FROM cron_state').all<{ key: string }>();
+      expect(gates.results).toEqual([]);
+    }
+  });
+
+  test('scheduled with */5 * * * * throttles prune and decay to 60 minutes via cron_state', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = NOW;
+    const oldPostedAt = t0 - 31 * 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c:active', 'ActiveProto', '[]', '["quest"]', 'rule', 'rule', 'ok', '[]', 999, 1, ?1, ?1),
+                ('c:old1', 'OldProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?2, ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:active', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'active post', '[]', 'c:active', ?1),
+                ('p:old1', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c:old1', ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+
+    const env: Env = { DB: db, X_BATCH_SIZE: '1' };
+
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        // Tick 1 at T0: runs both prune and decay and records cron_state.
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          env,
+          makeExecCtx(),
+        );
+
+        const state1 = await db
+          .prepare('SELECT key, last_run_at FROM cron_state ORDER BY key ASC')
+          .all<{ key: string; last_run_at: number }>();
+        expect(state1.results).toEqual([
+          { key: 'decay', last_run_at: t0 },
+          { key: 'prune', last_run_at: t0 },
+        ]);
+
+        const old1 = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old1'`).first<{ id: string }>();
+        expect(old1).toBeNull();
+        const active1 = await db.prepare(`SELECT score FROM clusters WHERE id = 'c:active'`).first<{ score: number }>();
+        expect(active1?.score).toBeLessThan(999);
+
+        // Tick 2 at T0 + 5m (inside 60m gate): skips both prune and decay.
+        const t1 = t0 + 5 * 60_000;
+        const old2PostedAt = t1 - 31 * 86_400_000;
+        await db
+          .prepare(
+            `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+             VALUES ('p:old2', 'telegram:ch1', 'https://t.me/ch1/3', ?1, 'old post 2', '[]', 'c:active', ?1)`,
+          )
+          .bind(old2PostedAt)
+          .run();
+        await db.prepare(`UPDATE clusters SET score = 999 WHERE id = 'c:active'`).run();
+
+        const beforeTick2 = queries.length;
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t1, noRetry() {} } as ScheduledController,
+          env,
+          makeExecCtx(),
+        );
+        const tick2Queries = queries.slice(beforeTick2);
+        expect(tick2Queries.some(q => q.includes('DELETE FROM posts'))).toBe(false);
+        expect(
+          tick2Queries.some(q => q.includes('SELECT id, source_count, last_seen, surf_tier, risk_level, score, trust_max')),
+        ).toBe(false);
+
+        const state2 = await db
+          .prepare('SELECT key, last_run_at FROM cron_state ORDER BY key ASC')
+          .all<{ key: string; last_run_at: number }>();
+        expect(state2.results).toEqual([
+          { key: 'decay', last_run_at: t0 },
+          { key: 'prune', last_run_at: t0 },
+        ]);
+
+        const old2StillThere = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old2'`).first<{ id: string }>();
+        expect(old2StillThere?.id).toBe('p:old2');
+        const active2 = await db.prepare(`SELECT score FROM clusters WHERE id = 'c:active'`).first<{ score: number }>();
+        expect(active2?.score).toBe(999);
+
+        // Tick 3 at T0 + 60m (exact boundary): runs both prune and decay again.
+        const t2 = t0 + 60 * 60_000;
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t2, noRetry() {} } as ScheduledController,
+          env,
+          makeExecCtx(),
+        );
+
+        const state3 = await db
+          .prepare('SELECT key, last_run_at FROM cron_state ORDER BY key ASC')
+          .all<{ key: string; last_run_at: number }>();
+        expect(state3.results).toEqual([
+          { key: 'decay', last_run_at: t2 },
+          { key: 'prune', last_run_at: t2 },
+        ]);
+
+        const old2Deleted = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old2'`).first<{ id: string }>();
+        expect(old2Deleted).toBeNull();
+        const active3 = await db.prepare(`SELECT score FROM clusters WHERE id = 'c:active'`).first<{ score: number }>();
+        expect(active3?.score).toBeLessThan(999);
+      },
+    );
+  });
+
+  test('scheduled */5 * * * * still runs prune and decay when postProcessIngest throws', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    const oldPostedAt = t0 - 31 * 86_400_000;
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c:active', 'ActiveProto', '[]', '["quest"]', 'rule', 'rule', 'ok', '[]', 999, 1, ?1, ?1),
+                ('c:old1', 'OldProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?2, ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:active', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'active post', '[]', 'c:active', ?1),
+                ('p:old1', 'telegram:ch1', 'https://t.me/ch1/2', ?2, 'old post', '[]', 'c:old1', ?2)`,
+      )
+      .bind(t0 - 3_600_000, oldPostedAt)
+      .run();
+
+    const failingAiDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/\bai_usage\b/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async first() {
+                  throw new Error('D1 ai_usage failure');
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    const env: Env = {
+      DB: failingAiDb,
+      AI: {
+        async run() {
+          return JSON.stringify({ summary: 'Unused', taskTypes: ['quest'], chains: [] });
+        },
+      },
+      X_BATCH_SIZE: '1',
+    };
+
+    const origErr = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      await withStubbedFetch(
+        () => new Response('offline', { status: 503 }),
+        async () => {
+          await worker.scheduled(
+            { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+            env,
+            makeExecCtx(),
+          );
+        },
+      );
+    } finally {
+      console.error = origErr;
+    }
+
+    expect(logged.some(args => args[0] === 'cron-error:postProcessIngest')).toBe(true);
+
+    const old1 = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old1'`).first<{ id: string }>();
+    expect(old1).toBeNull();
+    const active = await db.prepare(`SELECT score FROM clusters WHERE id = 'c:active'`).first<{ score: number }>();
+    expect(active?.score).toBeLessThan(999);
+    const states = await db
+      .prepare('SELECT key, last_run_at FROM cron_state ORDER BY key ASC')
+      .all<{ key: string; last_run_at: number }>();
+    expect(states.results).toEqual([
+      { key: 'decay', last_run_at: t0 },
+      { key: 'prune', last_run_at: t0 },
+    ]);
   });
 });
