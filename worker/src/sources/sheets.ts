@@ -161,6 +161,10 @@ function computeSheetBaseId(prefix: 'asso7878' | 'arndxt', name: string): string
   return nameKey === slug ? `${prefix}:${slug}` : `${prefix}:${slug}-${fnv1a32Hex(nameKey)}`;
 }
 
+function sheetCardUrlIdentity(card: Card): string {
+  return `${card.n.trim().toLowerCase()}\u001e${(card.url ?? '').trim()}`;
+}
+
 function sheetCardDisambiguator(card: Card): string {
   const taskSig = (card.tasks ?? [])
     .map(t => `${t.title.trim().toLowerCase()}\u0000${t.type.trim().toLowerCase()}\u0000${(t.url ?? '').trim()}`)
@@ -178,8 +182,10 @@ function sheetCardDisambiguator(card: Card): string {
 /**
  * Assigns deterministic, CSV row-order-independent IDs to sheet cards.
  * Canonical lowercase-slug names keep `<prefix>:<slug>`; non-canonical names get
- * `<prefix>:<slug>-<hash(nameKey)>`; identical-nameKey rows within the same sheet
- * are disambiguated deterministically from stable row fields rather than row order.
+ * `<prefix>:<slug>-<hash(nameKey)>`; duplicate-baseId rows within the same sheet
+ * are disambiguated with `~<hash>` (preferring stable name+URL identity so task
+ * and fundraising edits do not churn IDs, falling back to full row fields only
+ * when duplicate rows share the same URL).
  */
 function assignDeterministicSheetCardIds(prefix: 'asso7878' | 'arndxt', cards: Card[]): void {
   const baseIds = cards.map(card => computeSheetBaseId(prefix, card.n));
@@ -188,13 +194,24 @@ function assignDeterministicSheetCardIds(prefix: 'asso7878' | 'arndxt', cards: C
     baseCounts.set(baseId, (baseCounts.get(baseId) ?? 0) + 1);
   }
 
+  const urlIdentityCounts = new Map<string, number>();
+  const urlIdentities: (string | null)[] = cards.map((card, i) => {
+    if ((baseCounts.get(baseIds[i]) ?? 0) <= 1) return null;
+    const key = `${baseIds[i]}\u001d${sheetCardUrlIdentity(card)}`;
+    urlIdentityCounts.set(key, (urlIdentityCounts.get(key) ?? 0) + 1);
+    return key;
+  });
+
   const seenIds = new Set<string>();
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     const baseId = baseIds[i];
+    const urlIdentity = urlIdentities[i];
     const candidate =
-      (baseCounts.get(baseId) ?? 0) > 1
-        ? `${baseId}-${fnv1a32Hex(sheetCardDisambiguator(card))}`
+      urlIdentity !== null
+        ? (urlIdentityCounts.get(urlIdentity) ?? 0) === 1
+          ? `${baseId}~${fnv1a32Hex(sheetCardUrlIdentity(card))}`
+          : `${baseId}~${fnv1a32Hex(sheetCardDisambiguator(card))}`
         : baseId;
     let cardId = candidate;
     let suffix = 2;

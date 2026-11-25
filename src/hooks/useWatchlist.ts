@@ -5,6 +5,7 @@ import { parseCost, parseMinutes } from '../lib/format';
 const SAVED_KEY = 'icq:saved-projects';
 const TASKS_KEY = 'icq:done-tasks';
 const LEGACY_SHEET_ID_RE = /^(asso7878|arndxt|pendle|merkl):([a-z0-9]+(?:-[a-z0-9]+)*)$/;
+const DISAMBIGUATED_SHEET_ID_RE = /^(asso7878|arndxt):([^~]+)~([0-9a-f]{8}(?:-\d+)?)$/;
 const HASHED_SHEET_SUFFIX_RE = /^[0-9a-f]{8}(?:[0-9a-f]{8})?(?:-[0-9a-f]{8}|-\d+)*$/;
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
 
@@ -64,8 +65,24 @@ function resolveLegacySheetId(
   exactIds: ReadonlySet<string>,
   candidates: readonly LegacyCandidate[],
 ): string {
+  if (exactIds.has(legacyId)) return legacyId;
+
+  // Explicit disambiguated-to-base sheet migration: when a duplicate sibling row
+  // disappears from an ASSO7878/arndxt sheet, `<baseId>~<hash>[-n]` maps cleanly
+  // to the sole surviving `<baseId>` card (never applied to Pendle/Merkl `~` IDs).
+  const disambigMatch = DISAMBIGUATED_SHEET_ID_RE.exec(legacyId);
+  if (disambigMatch) {
+    const baseId = `${disambigMatch[1]}:${disambigMatch[2]}`;
+    if (!exactIds.has(baseId)) return legacyId;
+    const siblingPrefix = `${baseId}~`;
+    for (const entry of candidates) {
+      if (entry.id.startsWith(siblingPrefix)) return legacyId;
+    }
+    return baseId;
+  }
+
   const match = LEGACY_SHEET_ID_RE.exec(legacyId);
-  if (!match || exactIds.has(legacyId)) return legacyId;
+  if (!match) return legacyId;
   const prefix = match[1];
   const legacySlug = match[2];
   let matchedId: string | null = null;

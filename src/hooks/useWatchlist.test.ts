@@ -236,6 +236,56 @@ describe('migrateLegacySheetIds (PRRT_kwDOV0YtbM67w6DY)', () => {
     );
   });
 
+  test('migrates disambiguated sheet keys back to the surviving base ID when a duplicate sibling disappears without hijacking unrelated or Pendle/Merkl keys', () => {
+    const cards: Pick<Card, 'id' | 'n'>[] = [
+      { id: 'asso7878:dupproto', n: 'DupProto' },
+      { id: 'arndxt:acme-labs-1a2b3c4d', n: 'Acme Labs' },
+      { id: 'asso7878:stilldup~bbbb2222', n: 'StillDup' },
+      { id: 'asso7878:stilldup~cccc3333', n: 'StillDup' },
+      { id: 'asso7878:foo', n: 'Foo' },
+      { id: 'pendle:a-b', n: 'A-B' },
+      { id: 'merkl:a-b', n: 'A-B' },
+    ];
+
+    const saved = new Set([
+      'asso7878:dupproto~aaaa1111',
+      'asso7878:dupproto~aaaa1111-2',
+      'arndxt:acme-labs-1a2b3c4d~eeee2222',
+      // Still duplicated (no base ID present) -> must stay untouched
+      'asso7878:stilldup~aaaa1111',
+      // Unrelated removed hex-ending project (no `~`) -> must NOT hijack `asso7878:foo`
+      'asso7878:foo-12345678',
+      // Removed non-canonical Pendle/Merkl card (`A+B`) -> must NOT hijack canonical `A-B`
+      'pendle:a-b~9c0d1e2f',
+      'merkl:a-b~9c0d1e2f',
+    ]);
+    const doneTasks = new Set([
+      taskStorageKey('asso7878:dupproto~aaaa1111', 'Stake ETH', 'staking', 0),
+      taskStorageKey('arndxt:acme-labs-1a2b3c4d~eeee2222', 'Bridge', 'bridge', 0),
+      taskStorageKey('pendle:a-b~9c0d1e2f', 'Supply YT', 'liquidity', 0),
+    ]);
+
+    const res = migrateLegacySheetIds(saved, doneTasks, cards);
+    expect(res.changed).toBe(true);
+    expect(res.saved).toEqual(
+      new Set([
+        'asso7878:dupproto',
+        'arndxt:acme-labs-1a2b3c4d',
+        'asso7878:stilldup~aaaa1111',
+        'asso7878:foo-12345678',
+        'pendle:a-b~9c0d1e2f',
+        'merkl:a-b~9c0d1e2f',
+      ]),
+    );
+    expect(res.doneTasks).toEqual(
+      new Set([
+        taskStorageKey('asso7878:dupproto', 'Stake ETH', 'staking', 0),
+        taskStorageKey('arndxt:acme-labs-1a2b3c4d', 'Bridge', 'bridge', 0),
+        taskStorageKey('pendle:a-b~9c0d1e2f', 'Supply YT', 'liquidity', 0),
+      ]),
+    );
+  });
+
   test('is a no-op when cards list is empty', () => {
     const saved = new Set(['asso7878:acme-labs']);
     const doneTasks = new Set([taskStorageKey('asso7878:acme-labs', 'Task', 'other', 0)]);
