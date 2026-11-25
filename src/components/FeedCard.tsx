@@ -11,7 +11,7 @@ import {
   type DisplayRiskNote,
   type FormattedSummary,
 } from '../lib/feedDisplay';
-import { formatRelativeTime } from '../lib/format';
+import { formatRelativeTime, isHttpUrl } from '../lib/format';
 
 const MAX_VISIBLE_RISK_NOTES = 2;
 
@@ -200,16 +200,24 @@ export function FeedCard({ item, onCopyBrief }: Props) {
 
       {showSources && sources.length > 0 && (
         <ul className="source-refs" aria-label="Source posts">
-          {sources.map(src => (
-            <li key={src.postUrl}>
-              <a href={src.postUrl} target="_blank" rel="noopener noreferrer">
-                {formatSourceHandle(src.platform, src.handle) || src.platform} ({src.platform})
-                <span className="sr"> post (opens in a new tab)</span>
-                <span aria-hidden="true"> ↗</span>
-              </a>
-              <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
-            </li>
-          ))}
+          {sources.map(src => {
+            const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
+            const label = `${formatSourceHandle(src.platform, src.handle) || src.platform} (${src.platform})`;
+            return (
+              <li key={src.postUrl}>
+                {safePostUrl ? (
+                  <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
+                    {label}
+                    <span className="sr"> post (opens in a new tab)</span>
+                    <span aria-hidden="true"> ↗</span>
+                  </a>
+                ) : (
+                  <span>{label}</span>
+                )}
+                <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </article>

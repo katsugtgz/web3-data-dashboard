@@ -124,10 +124,14 @@
 
 :root:has(> head > meta[name="color-scheme"][content="dark"]) {
   color-scheme: dark;
+  --shadow-sm: var(--shadow-sm-dark);
+  --shadow-md: var(--shadow-md-dark);
 }
 
 :root:has(> head > meta[name="color-scheme"][content="light"]) {
   color-scheme: light;
+  --shadow-sm: var(--shadow-sm-light);
+  --shadow-md: var(--shadow-md-light);
 }
 
 @supports not (color: light-dark(white, black)) {
@@ -154,8 +158,6 @@
     --tier-a-fg: var(--tier-a-fg-dark);
     --tier-b-bg: var(--tier-b-bg-dark);
     --tier-b-fg: var(--tier-b-fg-dark);
-    --shadow-sm: var(--shadow-sm-dark);
-    --shadow-md: var(--shadow-md-dark);
   }
 
   :root:has(> head > meta[name="color-scheme"][content="light"]) {
@@ -181,8 +183,6 @@
     --tier-a-fg: var(--tier-a-fg-light);
     --tier-b-bg: var(--tier-b-bg-light);
     --tier-b-fg: var(--tier-b-fg-light);
-    --shadow-sm: var(--shadow-sm-light);
-    --shadow-md: var(--shadow-md-light);
   }
 }
 
@@ -210,8 +210,6 @@
     --tier-a-fg: light-dark(var(--tier-a-fg-light), var(--tier-a-fg-dark));
     --tier-b-bg: light-dark(var(--tier-b-bg-light), var(--tier-b-bg-dark));
     --tier-b-fg: light-dark(var(--tier-b-fg-light), var(--tier-b-fg-dark));
-    --shadow-sm: light-dark(var(--shadow-sm-light), var(--shadow-sm-dark));
-    --shadow-md: light-dark(var(--shadow-md-light), var(--shadow-md-dark));
   }
 }
 
@@ -267,7 +265,8 @@ a:hover {
   left: 0;
 }
 
-.sr {
+.sr,
+.sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -304,6 +303,17 @@ a:hover {
 
 .copy-status-warn {
   border-color: var(--tier-s-fg);
+}
+
+.stale-banner {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--tier-s-fg) 35%, var(--border));
+  background: color-mix(in srgb, var(--tier-s-bg) 50%, var(--card));
+  color: var(--tier-s-fg);
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
 .container {
@@ -796,7 +806,8 @@ h2.section {
   border-color: var(--border-strong);
 }
 
-.chip[aria-pressed="true"] {
+.chip[aria-pressed="true"],
+.chip.is-active {
   background: var(--fg);
   color: var(--bg);
   border-color: var(--fg);
@@ -1408,6 +1419,7 @@ h2.section {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .paneltitle {
@@ -1448,7 +1460,10 @@ h2.section {
 }
 
 .table-wrap {
+  position: relative;
   overflow: auto;
+  width: 100%;
+  min-width: 0;
   max-inline-size: 100%;
   max-block-size: min(640px, 74vh);
   border: 1px solid var(--border);
@@ -1479,6 +1494,14 @@ table.demo thead {
   z-index: 2;
 }
 
+table.demo thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
 table.demo th[scope="col"] {
   font-size: 11px;
   font-weight: 700;
@@ -1504,6 +1527,7 @@ table.demo tbody th[scope="row"] {
   padding: 10px 14px;
   text-align: left;
   max-width: 280px;
+  overflow-wrap: anywhere;
 }
 
 table.demo td {
@@ -1512,6 +1536,7 @@ table.demo td {
   text-align: left;
   vertical-align: middle;
   max-width: 320px;
+  overflow-wrap: anywhere;
 }
 
 table.demo tbody tr:last-child th,
@@ -1536,6 +1561,9 @@ table.demo tbody tr:hover th[scope="row"] {
 
 .table-link {
   font-weight: 600;
+}
+
+table.demo td .table-link {
   white-space: nowrap;
 }
 
@@ -2164,9 +2192,11 @@ footer {
 
 .sources-popover {
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   bottom: calc(100% + 8px);
-  width: min(360px, 90vw);
+  width: min(360px, calc(100vw - 28px));
+  max-width: calc(100vw - 28px);
   max-height: 320px;
   overflow: auto;
   background: var(--card);
@@ -2447,5 +2477,8 @@ footer a {
     border-bottom: 1px solid var(--border);
     padding-right: 0;
     padding-bottom: 10px;
+  }
+  table.demo tbody th[scope="row"] {
+    max-width: min(200px, 52vw);
   }
 }

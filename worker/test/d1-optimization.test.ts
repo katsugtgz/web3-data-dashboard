@@ -308,6 +308,63 @@ describe('cronGate runIfDue', () => {
       .first<{ last_run_at: number }>();
     expect(existingRow?.last_run_at).toBe(t0 + intervalMs + 1_000);
   });
+
+  test('claims a short 5m in-flight execution lease so a hard crash recovers in 5m instead of locking out for 60m', async () => {
+    const { db } = createTestD1();
+    const intervalMs = 60 * 60_000;
+    const leaseMs = 5 * 60_000;
+    const t0 = 1_795_240_000_000;
+
+    // Observe cron_state *while* fn() is in flight: must hold a short lease stamp, not the full 60m t0 stamp.
+    const observed: { inFlightStamp: number | null; blockedDuringLease: boolean } = {
+      inFlightStamp: null,
+      blockedDuringLease: false,
+    };
+    const ran1 = await runIfDue(db, 'job:lease', intervalMs, t0, async () => {
+      const row = await db
+        .prepare('SELECT last_run_at FROM cron_state WHERE key = ?1')
+        .bind('job:lease')
+        .first<{ last_run_at: number }>();
+      observed.inFlightStamp = row?.last_run_at ?? null;
+      // Overlapping tick 1m later is blocked during the 5m lease.
+      observed.blockedDuringLease = !(await runIfDue(db, 'job:lease', intervalMs, t0 + 60_000, async () => {}));
+    });
+    expect(ran1).toBe(true);
+    expect(observed.inFlightStamp).toBe(t0 - intervalMs + leaseMs);
+    expect(observed.blockedDuringLease).toBe(true);
+
+    // After fn() succeeds, cron_state is committed to full t0 so it skips until t0 + 60m.
+    const committed = await db
+      .prepare('SELECT last_run_at FROM cron_state WHERE key = ?1')
+      .bind('job:lease')
+      .first<{ last_run_at: number }>();
+    expect(committed?.last_run_at).toBe(t0);
+    expect(await runIfDue(db, 'job:lease', intervalMs, t0 + leaseMs, async () => {})).toBe(false);
+
+    // Simulate a hard crash (isolate killed mid-fn, no catch rollback): only leaseStamp persisted.
+    const tCrash = t0 + intervalMs;
+    await db
+      .prepare('UPDATE cron_state SET last_run_at = ?2 WHERE key = ?1')
+      .bind('job:lease', tCrash - intervalMs + leaseMs)
+      .run();
+
+    // Still locked at tCrash + 4m59s.
+    expect(await runIfDue(db, 'job:lease', intervalMs, tCrash + leaseMs - 1, async () => {})).toBe(false);
+
+    // Recovers at tCrash + 5m when lease expires!
+    let recovered = 0;
+    expect(
+      await runIfDue(db, 'job:lease', intervalMs, tCrash + leaseMs, async () => {
+        recovered++;
+      }),
+    ).toBe(true);
+    expect(recovered).toBe(1);
+    const afterRecovery = await db
+      .prepare('SELECT last_run_at FROM cron_state WHERE key = ?1')
+      .bind('job:lease')
+      .first<{ last_run_at: number }>();
+    expect(afterRecovery?.last_run_at).toBe(tCrash + leaseMs);
+  });
 });
 
 function assertIndexedNoTempBTree(plan: { detail: string }[], expectedIndexPatterns: RegExp[]): void {
@@ -454,6 +511,76 @@ describe('migration 0005 query plans', () => {
         ['markets:', 'markets;'],
       ),
       [/sqlite_autoindex_snapshots_1/],
+    );
+  });
+});
+
+describe('migration 0007 hardening and indexes', () => {
+  test('applies idempotently and gives indexed plans without TEMP B-TREE for backlog, ticker lookup, posts window, and top candidates', async () => {
+    const migration0007 = '../migrations/0007_hardening_and_indexes.sql';
+    const { sqlite, explain } = createTestD1([...MIGRATION_FILES, migration0007]);
+
+    // Strictly idempotent: re-applying 0007 must not fail.
+    applyMigrations(sqlite, [migration0007]);
+
+    // 1. Hardened AI backlog query (excludes non-drop & disabled sources)
+    assertIndexedNoTempBTree(
+      explain(
+        `SELECT c.id, c.project, c.risk_level
+         FROM clusters c
+         WHERE c.summary_source = 'rule'
+           AND c.risk_level != 'risk'
+           AND c.ai_attempts < 3
+           AND c.ai_retry_after <= ?1
+           AND (c.is_drop IS NULL OR c.is_drop = 1)
+           AND EXISTS (SELECT 1 FROM posts p JOIN sources s ON s.id = p.source_id WHERE p.cluster_id = c.id AND s.enabled = 1)
+         ORDER BY c.score DESC, c.last_seen DESC
+         LIMIT ?2`,
+        [1000, 10],
+      ),
+      [/clusters_ai_backlog/, /posts_cluster/],
+    );
+
+    // 2. Fallback ticker lookup (resolveClusterId)
+    assertIndexedNoTempBTree(
+      explain(
+        `SELECT id, project, ticker, first_seen, last_seen
+         FROM clusters
+         WHERE domain IS NULL
+           AND ticker IS NOT NULL
+           AND UPPER(ticker) = ?1
+           AND last_seen >= ?2
+           AND first_seen <= ?3
+         ORDER BY last_seen DESC, id ASC
+         LIMIT 50`,
+        ['ARB', 100, 200],
+      ),
+      [/clusters_ticker_lookup/],
+    );
+
+    // 3. Posts per cluster ordered by posted_at DESC (windowed AI fetch + feed post load)
+    assertIndexedNoTempBTree(
+      explain(
+        `SELECT cluster_id, text,
+                ROW_NUMBER() OVER (PARTITION BY cluster_id ORDER BY posted_at DESC) AS rn
+         FROM posts
+         WHERE cluster_id IN (?1, ?2)`,
+        ['c1', 'c2'],
+      ),
+      [/posts_cluster_posted/],
+    );
+
+    // 4. Top source candidates (getTopCandidates)
+    assertIndexedNoTempBTree(
+      explain(
+        `SELECT handle, mentions, first_seen, last_seen, from_sources
+         FROM source_candidates
+         WHERE json_array_length(from_sources) >= 2
+         ORDER BY mentions DESC, last_seen DESC, handle ASC
+         LIMIT ?1`,
+        [50],
+      ),
+      [/source_candidates_top/],
     );
   });
 });

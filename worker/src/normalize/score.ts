@@ -19,7 +19,7 @@ export interface ScoreInput {
 export function computeScore(input: ScoreInput): number {
   const nowMs = input.nowMs ?? Date.now();
   const ageHours = Math.max(0, (nowMs - input.lastSeen) / 3_600_000);
-  const tierBonus = input.surfTier ? TIER_BONUS[input.surfTier] : 0;
+  const tierBonus = input.surfTier ? (TIER_BONUS[input.surfTier] ?? 0) : 0;
   const raw =
     Math.max(0.1, input.trustMax) *
     Math.log(1 + Math.max(1, input.sourceCount)) *
@@ -79,11 +79,9 @@ export async function decayClusterScores(db: D1Database, nowMs = Date.now()): Pr
         .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND score = ?3 AND risk_level = ?4')
         .bind(x.r.id, x.nextScore, x.r.score, x.r.risk_level));
 
-    const chunks = [];
-    for (let i = 0; i < stmts.length; i += 40) {
-      chunks.push(db.batch(stmts.slice(i, i + 40)));
+    if (stmts.length > 0) {
+      await db.batch(stmts);
     }
-    await Promise.all(chunks);
 
     lastId = rows[rows.length - 1].id;
     if (rows.length < PAGE) break;

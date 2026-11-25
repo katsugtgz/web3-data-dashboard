@@ -18,30 +18,50 @@ import { useFeed } from './hooks/useFeed';
 import { useMarkets } from './hooks/useMarkets';
 import { useSourcesHealth } from './hooks/useSourcesHealth';
 import { useTheme } from './hooks/useTheme';
-import { cardStorageKey, useWatchlist } from './hooks/useWatchlist';
+import { isCardSaved, useWatchlist } from './hooks/useWatchlist';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
 
 export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed();
-  const { markets, loading: marketsLoading, failed: marketsFailed, refresh: refreshMarkets } = useMarkets();
+  const { markets, loading: marketsLoading, failed: marketsFailed, isLiveApi: marketsIsLiveApi, refresh: refreshMarkets } = useMarkets();
   const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
 
-  const [detail, setDetail] = useState<Card | null>(null);
+  const [detailRef, setDetailRef] = useState<{ id: string | null; name: string } | null>(null);
 
   // Entire copy-agent-brief flow (region-scoped outcome reporting, first-copy
-  // profile gate, risk revalidation vs. the live feed) lives in this hook.
+  // profile gate, risk revalidation vs. the live feeds) lives in this hook.
   const copyFlow = useCopyBriefController({
     hasConfigured,
     profile,
     saveProfile,
     getVisibleItems: drops.getVisibleItems,
+    getVisibleCards: airdrops.getVisibleCards,
   });
-  const { handleCopyBrief, copyStatus, toast, dismissToast } = copyFlow;
+  const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
+
+  const cards = airdrops.feed?.cards ?? [];
+  const tgeItems = airdrops.feed?.tge ?? [];
+  const detail = detailRef
+    ? (cards.find(c => (detailRef.id ? c.id === detailRef.id : c.n === detailRef.name)) ?? null)
+    : null;
+
+  const handleSelectDetail = useCallback(
+    (card: Card) => {
+      clearCopyStatus();
+      setDetailRef({ id: card.id ?? null, name: card.n });
+    },
+    [clearCopyStatus],
+  );
+
+  const handleCloseDetail = useCallback(() => {
+    clearCopyStatus();
+    setDetailRef(null);
+  }, [clearCopyStatus]);
 
   const dropsSearchRef = useRef<HTMLInputElement>(null);
   const airdropSearchRef = useRef<HTMLInputElement>(null);
@@ -51,8 +71,6 @@ export default function App() {
     isModalOpen: () => Boolean(detail) || copyFlow.profileOpen,
   });
 
-  const cards = airdrops.feed?.cards ?? [];
-  const tgeItems = airdrops.feed?.tge ?? [];
   const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
   const dropsFilters = useDropsFilters(drops.items);
 
@@ -65,17 +83,23 @@ export default function App() {
     refreshSources();
   }, [drops, airdrops, refreshMarkets, refreshSources]);
 
-  const { xUnavailable, mountedMarkets, totalCount, headerFetchedAt } = useDashboardDerived({
+  const { xUnavailable, mountedMarkets, totalCount, headerFetchedAt, headerFailed, headerIsLiveApi } = useDashboardDerived({
     sources,
     marketSections: markets?.sections ?? null,
+    marketsGeneratedAt: markets?.generatedAt ?? null,
+    marketsFailed,
+    marketsIsLiveApi,
     visitedTabs,
     tab,
     dropsCount: drops.items.length,
     dropsGeneratedAt: drops.generatedAt,
+    dropsFailed: drops.failed,
+    dropsIsLiveApi: drops.isLiveApi,
     airdropsFetchedAt: airdrops.feed?.fetchedAt ?? null,
+    airdropsFailed: airdrops.failed,
+    airdropsIsLiveApi: airdrops.isLiveApi,
     cardsCount: cards.length,
   });
-  const headerFeed = tab === 'drops' ? drops : airdrops;
 
   return (
     <>
@@ -87,8 +111,8 @@ export default function App() {
         cardCount={totalCount}
         fetchedAt={headerFetchedAt}
         loading={drops.loading || airdrops.loading || marketsLoading}
-        failed={headerFeed.failed}
-        isLiveApi={headerFeed.isLiveApi}
+        failed={headerFailed}
+        isLiveApi={headerIsLiveApi}
         resolvedTheme={theme.resolved}
         onRefresh={handleRefresh}
         onOpenProfile={copyFlow.openProfile}
@@ -123,6 +147,7 @@ export default function App() {
           filters: airdropFilters,
           cardCount: cards.length,
           tgeItems,
+          fetchedAt: airdrops.feed?.fetchedAt ?? null,
           hasFeed: airdrops.feed !== null,
           loading: airdrops.loading,
           failed: airdrops.failed,
@@ -131,7 +156,7 @@ export default function App() {
           doneTasks,
           searchRef: airdropSearchRef,
           onToggleSaved: toggleSaved,
-          onSelectDetail: setDetail,
+          onSelectDetail: handleSelectDetail,
           onCopyBrief: (card: Card) => handleCopyBrief(card, 'page'),
         }}
         mountedMarkets={mountedMarkets}
@@ -154,19 +179,19 @@ export default function App() {
       />
 
       {detail && (
-        <ChunkErrorBoundary label="project details">
+        <ChunkErrorBoundary label="project details" onReset={handleCloseDetail}>
           <Suspense fallback={null}>
             <DetailDialog
               card={detail}
               fit={FIT}
               profile={profile}
-              saved={saved.has(cardStorageKey(detail))}
+              saved={isCardSaved(saved, detail)}
               doneTasks={doneTasks}
               onToggleSaved={toggleSaved}
               onToggleTask={toggleTaskDone}
               copyStatus={copyStatus?.target === 'detail' ? copyStatus : null}
               onCopyBrief={(card: Card) => handleCopyBrief(card, 'detail')}
-              onClose={() => setDetail(null)}
+              onClose={handleCloseDetail}
             />
           </Suspense>
         </ChunkErrorBoundary>

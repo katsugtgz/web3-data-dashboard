@@ -12,29 +12,49 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.5
+      - name: Install ripgrep
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update -q && sudo apt-get install -yq ripgrep)
       - run: bun install --frozen-lockfile
-      - run: bun run build:pages
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Unit tests
+        run: bun test
+      - name: Check zero CJK in code
+        run: bash scripts/check-no-cjk.sh
+      - name: Build GitHub Pages bundle
+        run: bun run build:pages
         env:
           GITHUB_ACTIONS: 'true'
           VITE_STATIC: '1'
           VITE_API_BASE: ${{ vars.VITE_API_BASE }}
-      - uses: actions/upload-pages-artifact@v3
+      - name: Verify Pages snapshot artifacts
+        run: |
+          jq -e 'type == "object" and (.cards | type == "array" and length > 0)' dist/data/airdrops.json > /dev/null
+          jq -e 'type == "object" and (.sections | type == "array" and length >= 6)' dist/data/markets.json > /dev/null
+          jq -e 'type == "object" and (.items | type == "array" and length > 0)' dist/data/feed.json > /dev/null
+          jq -e 'type == "array" and length > 0' dist/data/sources.json > /dev/null
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

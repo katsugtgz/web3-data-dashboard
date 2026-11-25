@@ -4,7 +4,13 @@ import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
 import { normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
+import {
+  cardLegacyStorageKey,
+  cardStorageKey,
+  getCardTaskKeyPairs,
+  getCardTasks,
+  isTaskKeyDone,
+} from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { Avatar, BadgeChip } from './ProjectCard';
@@ -18,13 +24,15 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
+  const tickerLabel = card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'No ticker yet';
+  const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
   return [
     ['Rank', `#${card.r}`],
-    ['Ticker', card.t ? `$${card.t}` : 'No ticker yet'],
+    ['Ticker', tickerLabel],
     ['Chains', chains.length ? chains.join(', ') : 'Not specified'],
     ['Funding', card.f],
     ['Tasks (Open / Total)', card.tk],
-    ['Heat (X Score)', card.h.toLocaleString('en-US')],
+    ['Heat (X Score)', safeHeat.toLocaleString('en-US')],
     ['Updated', card.u === 'today' ? 'Today' : card.u],
     ['Best for', card.fit.map(f => fit[f]).join(', ') || '—'],
     ...(card.x ? [['Code', card.x] as [string, string]] : []),
@@ -34,11 +42,13 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
 }
 
 function DetailScores({ card }: { card: Card }) {
+  const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
   const heatWidth =
-    card.sub[2] != null
-      ? Math.min(100, card.sub[2] * 10)
-      : Math.min(100, Math.round(Math.log10(card.h + 1) * 22));
-  const heatText = card.sub[2] != null ? `${card.sub[2]}/10` : orDash(card.h.toLocaleString('en-US'));
+    card.sub[2] != null && Number.isFinite(card.sub[2])
+      ? Math.min(100, Math.max(0, card.sub[2] * 10))
+      : Math.min(100, Math.round(Math.log10(safeHeat + 1) * 22));
+  const heatText =
+    card.sub[2] != null && Number.isFinite(card.sub[2]) ? `${card.sub[2]}/10` : orDash(safeHeat.toLocaleString('en-US'));
 
   return (
     <div className="dlg-scores">
@@ -77,22 +87,26 @@ function DetailScores({ card }: { card: Card }) {
 interface TaskRowProps {
   task: CardTask;
   storageKey: string;
+  legacyKey: string | null;
   checked: boolean;
-  onToggle: (taskKey: string) => void;
+  onToggle: (taskKey: string, legacyKey?: string) => void;
 }
 
-function TaskRow({ task: t, storageKey, checked, onToggle }: TaskRowProps) {
+function TaskRow({ task: t, storageKey, legacyKey, checked, onToggle }: TaskRowProps) {
   const normStatus = t.status.trim().toUpperCase();
   const isClosed = normStatus === 'CLOSED';
   const showStatus = normStatus === 'OPEN' || isClosed;
-  const costLabel = t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
-  const timeLabel = t.timeMinutes ? ` · ${t.timeMinutes} min` : '';
+  const costLabel = !Number.isFinite(t.cost) || t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
+  const timeLabel =
+    typeof t.timeMinutes === 'number' && Number.isFinite(t.timeMinutes) && t.timeMinutes > 0
+      ? ` · ${t.timeMinutes} min`
+      : '';
   const href = normalizeExternalUrl(t.url);
 
   return (
     <li className={`task-item${checked ? ' is-done' : ''}${isClosed ? ' is-closed' : ''}`}>
       <label className="task-check">
-        <input type="checkbox" checked={checked} onChange={() => onToggle(storageKey)} />
+        <input type="checkbox" checked={checked} onChange={() => onToggle(storageKey, legacyKey ?? undefined)} />
         <span className="task-meta">
           <span className="task-title">{t.title}</span>
           <span className="task-sub">
@@ -126,8 +140,8 @@ interface BodyProps {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (name: string) => void;
-  onToggleTask: (taskKey: string) => void;
+  onToggleSaved: (name: string, legacyKey?: string) => void;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
   onDismiss: () => void;
   copyStatus: CopyStatus | null;
@@ -149,7 +163,7 @@ function DetailDialogBody({
   const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
-  const taskKeys = getTaskStorageKeys(cardStorageKey(card), taskList);
+  const taskPairs = getCardTaskKeyPairs(card, taskList);
   const rows = buildDetailRows(card, chains, fit);
   const renderedBrief = showBrief ? buildBrief(card, profile) : null;
   const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
@@ -162,7 +176,7 @@ function DetailDialogBody({
           <div>
             <h2 id="detail-title">{card.n}</h2>
             <p className="ticker mono">
-              {card.t ? `$${card.t}` : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
+              {card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
             </p>
           </div>
         </div>
@@ -171,7 +185,7 @@ function DetailDialogBody({
             type="button"
             className="chip"
             aria-pressed={saved}
-            onClick={() => onToggleSaved(cardStorageKey(card))}
+            onClick={() => onToggleSaved(cardStorageKey(card), cardLegacyStorageKey(card))}
           >
             <span aria-hidden="true">{saved ? '★' : '☆'}</span> Save
           </button>
@@ -233,10 +247,11 @@ function DetailDialogBody({
         <ul className="task-list">
           {taskList.map((t, i) => (
             <TaskRow
-              key={taskKeys[i]}
+              key={taskPairs[i].primary}
               task={t}
-              storageKey={taskKeys[i]}
-              checked={doneTasks.has(taskKeys[i])}
+              storageKey={taskPairs[i].primary}
+              legacyKey={taskPairs[i].legacy}
+              checked={isTaskKeyDone(doneTasks, taskPairs[i])}
               onToggle={onToggleTask}
             />
           ))}
@@ -261,8 +276,8 @@ interface Props {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (name: string) => void;
-  onToggleTask: (taskKey: string) => void;
+  onToggleSaved: (name: string, legacyKey?: string) => void;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
   onClose: () => void;
   copyStatus: CopyStatus | null;
@@ -301,7 +316,7 @@ export function DetailDialog({
     >
       {card && (
         <DetailDialogBody
-          key={`${card.r}-${card.n}`}
+          key={cardStorageKey(card)}
           card={card}
           fit={fit}
           profile={profile}

@@ -13,6 +13,7 @@ export function useSourcesHealth() {
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
+  const hasLiveRef = useRef(false);
 
   const fetchNow = useCallback((mode: PollMode) => {
     const { signal, skipped } = poll.beginRequest(mode);
@@ -20,18 +21,25 @@ export function useSourcesHealth() {
     getJson<SourceHealth[]>('/sources.json', etagRef.current, signal)
       .then(res => {
         if (signal.aborted) return;
-        poll.settle();
         if (res.status === 200) {
+          if (res.source === 'snapshot' && hasLiveRef.current) {
+            poll.settle(false);
+            setFailed(true);
+            setLoading(false);
+            return;
+          }
+          hasLiveRef.current = res.source === 'api';
           etagRef.current = res.etag;
           setSources(res.body);
           setIsLiveApi(res.source === 'api');
         }
+        poll.settle(true);
         setFailed(false);
         setLoading(false);
       })
       .catch(() => {
         if (!signal.aborted) {
-          poll.settle();
+          poll.settle(false);
           setFailed(true);
           setLoading(false);
         }
@@ -46,5 +54,5 @@ export function useSourcesHealth() {
   poll.useInterval(fetchNowRef, SOURCES_POLL_MS);
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
-  return { sources, loading, isLiveApi, failed, refresh };
+  return { sources, loading, isLiveApi: isLiveApi && !failed, failed, refresh };
 }

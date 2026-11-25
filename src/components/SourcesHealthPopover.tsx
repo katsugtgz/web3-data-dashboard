@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SourceHealth } from '../../shared/types';
 import { formatSourceHandle, formatSourcesSummary } from '../lib/feedDisplay';
 import { formatRelativeTime } from '../lib/format';
@@ -12,6 +12,30 @@ interface Props {
 
 export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Props) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [open]);
 
   const okCount = sources.filter(s => s.status === 'ok').length;
   const summary = formatSourcesSummary(sources);
@@ -26,8 +50,9 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
         : `Sources snapshot (${okCount}/${sources.length} ok)`;
 
   return (
-    <div className="sources-health">
+    <div className="sources-health" ref={containerRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="chip"
         aria-expanded={open}
@@ -40,7 +65,14 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
         <div className="sources-popover" role="region" aria-label="Configured feed sources health">
           <div className="sources-popover-head">
             <strong>{summary}</strong>
-            <button type="button" className="link-btn" onClick={() => setOpen(false)}>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setOpen(false);
+                triggerRef.current?.focus();
+              }}
+            >
               Close
             </button>
           </div>

@@ -9,17 +9,28 @@ export async function copyText(text: string): Promise<boolean> {
   }
   if (typeof document === 'undefined') return false;
   try {
+    const prevActive = document.activeElement as HTMLElement | null;
+    const activeDialog =
+      typeof prevActive?.closest === 'function' ? (prevActive.closest('dialog[open]') as HTMLElement | null) : null;
+    const mount = activeDialog ?? (document.querySelector('dialog[open]') as HTMLElement | null) ?? document.body;
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.setAttribute('readonly', 'true');
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
-    document.body.appendChild(ta);
+    mount.appendChild(ta);
     try {
+      ta.focus({ preventScroll: true });
       ta.select();
-      return document.execCommand('copy');
+      if (document.activeElement !== ta) return false;
+      return Boolean(document.execCommand('copy'));
     } finally {
       ta.remove();
+      try {
+        prevActive?.focus?.({ preventScroll: true });
+      } catch {
+        // Ignore focus restoration errors on detached/inert elements.
+      }
     }
   } catch {
     return false;

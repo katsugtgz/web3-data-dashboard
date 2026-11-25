@@ -366,4 +366,142 @@ describe('X best-effort syndication parser & backoff', () => {
       globalThis.fetch = prevFetch;
     }
   });
+
+  test('parses __NEXT_DATA__ regardless of attribute order and rejects future-skew timestamps beyond 15m', () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const html = `<html><body><script type="application/json" nonce="abc" id='__NEXT_DATA__'>${JSON.stringify({
+      props: {
+        pageProps: {
+          timeline: {
+            entries: [
+              {
+                content: {
+                  tweet: {
+                    id_str: '19000001',
+                    created_at: '2026-11-24T12:10:00Z',
+                    full_text: 'Valid slight skew tweet https://novaproto.xyz',
+                  },
+                },
+              },
+              {
+                content: {
+                  tweet: {
+                    id_str: '19000002',
+                    created_at: '2026-11-24T12:16:00Z',
+                    full_text: 'Future tweet beyond 15m skew',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    })}</script></body></html>`;
+
+    const nextParsed = parseNextDataTimeline(html, 'DefiIgnas', now);
+    expect(nextParsed.map(p => p.idStr)).toEqual(['19000001']);
+
+    const cdnParsed = parseCdnSyndication(
+      JSON.stringify({
+        entries: [
+          { id_str: '19000003', created_at: '2026-11-24T12:10:00Z', full_text: 'Valid CDN tweet' },
+          { id_str: '19000004', created_at: '2026-11-24T12:20:00Z', full_text: 'Future CDN tweet' },
+        ],
+      }),
+      'DefiIgnas',
+      now,
+    );
+    expect(cdnParsed.map(p => p.idStr)).toEqual(['19000003']);
+  });
+
+  test('fetchXTimelineBestEffort cancels response body on !res.ok', async () => {
+    const prevFetch = globalThis.fetch;
+    let cancelCount = 0;
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 429,
+      body: {
+        async cancel() {
+          cancelCount++;
+        },
+      },
+    })) as unknown as typeof fetch;
+    try {
+      // Without mirror: only syndication endpoint is attempted (dead cdn.syndication skipped)
+      await expect(fetchXTimelineBestEffort('DefiIgnas')).rejects.toThrow('X endpoints unavailable');
+      expect(cancelCount).toBe(1);
+
+      // With mirror configured: both mirror and syndication !res.ok bodies are cancelled
+      cancelCount = 0;
+      await expect(fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example')).rejects.toThrow('X endpoints unavailable');
+      expect(cancelCount).toBe(2);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('pollXBatch commits highest contiguous succeeded snowflake ID on partial failure', async () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const db = createSqliteD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled, last_seen_id)
+         VALUES ('x:DefiIgnas', 'x', 'DefiIgnas', 'en', 0.85, 1, '18880000')`,
+      )
+      .run();
+
+    const partialDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/INSERT\s+OR\s+IGNORE\s+INTO\s+posts/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              const bound = stmt.bind(...args);
+              return {
+                ...bound,
+                async run() {
+                  if (args[0] === 'x:DefiIgnas:18880002') throw new Error('simulated D1 write fail on tweet 2');
+                  return bound.run();
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    const postedAt = now - 60_000;
+    const summary = await pollXBatch(partialDb, 3, now, null, async handle => [
+      {
+        idStr: '18880003',
+        postUrl: `https://x.com/${handle}/status/18880003`,
+        postedAt,
+        text: 'ThirdXProto testnet airdrop live https://thirdx.xyz',
+        urls: ['https://thirdx.xyz'],
+      },
+      {
+        idStr: '18880001',
+        postUrl: `https://x.com/${handle}/status/18880001`,
+        postedAt,
+        text: 'FirstXProto testnet airdrop live https://firstx.xyz',
+        urls: ['https://firstx.xyz'],
+      },
+      {
+        idStr: '18880002',
+        postUrl: `https://x.com/${handle}/status/18880002`,
+        postedAt,
+        text: 'SecondXProto faucet claim live https://secondx.xyz',
+        urls: ['https://secondx.xyz'],
+      },
+    ]);
+
+    expect(summary.degraded).toBe(1);
+    expect(summary.insertedPosts).toBe(1);
+    const row = await db
+      .prepare(`SELECT last_seen_id, status, fail_count FROM sources WHERE id = 'x:DefiIgnas'`)
+      .first<{ last_seen_id: string; status: string; fail_count: number }>();
+    expect(row).toEqual({ last_seen_id: '18880001', status: 'degraded', fail_count: 1 });
+  });
 });

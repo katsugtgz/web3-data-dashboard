@@ -47,7 +47,7 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
       const nextHash = nextId === 'drops' ? dropsHash.current : `#${nextId}`;
       if (findHashTab() !== nextId) {
         if (findHashTab() === 'drops') dropsHash.current = window.location.hash;
-        history.replaceState(history.state, '', nextHash);
+        safeReplaceHash(nextHash);
       }
       scrollToMainTop();
     },
@@ -55,11 +55,24 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   );
 
   useEffect(() => {
+    if (isUnknownTabHash(window.location.hash)) {
+      safeReplaceHash('#drops');
+    }
     const onHash = (event: HashChangeEvent) => {
-      const oldHash = new URL(event.oldURL).hash;
-      if (findHashTab(oldHash) === 'drops') dropsHash.current = oldHash;
+      try {
+        const oldHash = event.oldURL ? new URL(event.oldURL).hash : '';
+        if (findHashTab(oldHash) === 'drops') dropsHash.current = oldHash;
+      } catch {
+        // Ignore malformed oldURL in synthetic hashchange events.
+      }
       const hash = window.location.hash;
       if (!hash) dropsHash.current = '#drops';
+      if (isUnknownTabHash(hash)) {
+        safeReplaceHash('#drops');
+        setTab(TABS[0].id);
+        markVisited(TABS[0].id);
+        return;
+      }
       const next = hash ? findHashTab(hash) : TABS[0].id;
       if (!next) return;
       setTab(next);
@@ -70,19 +83,35 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   }, [markVisited]);
 
   useEffect(() => {
+    const isEditable = (node: EventTarget | null): boolean => {
+      if (!(node instanceof HTMLElement)) return false;
+      return (
+        node.tagName === 'INPUT' ||
+        node.tagName === 'TEXTAREA' ||
+        node.tagName === 'SELECT' ||
+        node.isContentEditable
+      );
+    };
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || isModalOpen()) return;
-      const el = document.activeElement;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
-      const targetRef = tab === 'drops' ? searchRefs.drops.current : tab === 'airdrops' ? searchRefs.airdrops.current : null;
-      if (targetRef) {
-        e.preventDefault();
-        targetRef.focus();
+      if (isEditable(e.target) || isEditable(document.activeElement)) return;
+      const targetInput =
+        tab === 'drops'
+          ? searchRefs.drops.current
+          : tab === 'airdrops'
+            ? searchRefs.airdrops.current
+            : document.querySelector<HTMLInputElement>(`#panel-${tab} input[type="search"]`);
+      e.preventDefault();
+      if (targetInput) {
+        targetInput.focus();
+      } else {
+        selectTab('drops');
+        requestAnimationFrame(() => searchRefs.drops.current?.focus());
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tab, searchRefs, isModalOpen]);
+  }, [tab, searchRefs, isModalOpen, selectTab]);
 
   const onTabKey = useCallback(
     (e: KeyboardEvent) => {
@@ -111,10 +140,26 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   return { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey };
 }
 
+export function safeReplaceHash(nextHash: string): void {
+  try {
+    history.replaceState(history.state, '', nextHash);
+  } catch {
+    // Ignore SecurityError / browser replaceState rate limits.
+  }
+}
+
 function findHashTab(hash = window.location.hash): string | undefined {
   const raw = hash.slice(1).split('?')[0];
   if (raw === '' && hash.includes('?')) return 'drops';
   return TABS.some(t => t.id === raw) ? raw : undefined;
+}
+
+/** True when a non-empty hash names neither `#main` (skip link) nor any known dashboard tab. */
+export function isUnknownTabHash(hash: string): boolean {
+  if (!hash || hash === '#') return false;
+  const raw = hash.slice(1).split('?')[0];
+  if (raw === 'main') return false;
+  return findHashTab(hash) === undefined;
 }
 
 /** True when this hash targets the Drops tab: `#drops`, `#drops?…`, or an empty segment with query (`#?type=…`). */

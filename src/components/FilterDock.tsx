@@ -177,10 +177,9 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
 
           <button
             type="button"
-            className="chip"
+            className={`chip${showMoreFilters || filters.activeAdvancedCount > 0 ? ' is-active' : ''}`}
             aria-expanded={showMoreFilters}
             aria-controls="more-filters"
-            aria-pressed={showMoreFilters || filters.activeAdvancedCount > 0}
             onClick={() => setShowMoreFilters(v => !v)}
           >
             Filters{filters.activeAdvancedCount > 0 ? ` (${filters.activeAdvancedCount})` : ''}

@@ -443,4 +443,48 @@ describe('createFeedSession', () => {
     const uncachedSession = createFeedSession(fetcher);
     await expect(uncachedSession.fetch()).rejects.toThrow('Feed continuation failed');
   });
+
+  test('does not wipe cached ETags or pendingResume when a fetch is aborted mid-flight', async () => {
+    const seenEtags: (string | null | undefined)[] = [];
+    let shouldFallbackOnAbort = false;
+
+    const fetcher: FeedFetcher = async (path, etag) => {
+      seenEtags.push(etag);
+      if (shouldFallbackOnAbort) {
+        return {
+          status: 200,
+          body: { generatedAt: 999, items: [makeFeedItem('snap', 999)] },
+          etag: null,
+          source: 'snapshot',
+        };
+      }
+      if (path === '/feed.json') {
+        if (etag === '"e-live"') return { status: 304 };
+        return {
+          status: 200,
+          body: { generatedAt: 200, items: [makeFeedItem('live_1', 200)] },
+          etag: '"e-live"',
+          source: 'api',
+        };
+      }
+      return { status: 304 };
+    };
+
+    const session = createFeedSession(fetcher);
+    const first = await session.fetch();
+    expect(first.status).toBe(200);
+
+    // Simulate an aborted poll whose fetcher resolves with fallback after signal aborts.
+    const ctrl = new AbortController();
+    shouldFallbackOnAbort = true;
+    const abortedPromise = session.fetch(ctrl.signal);
+    ctrl.abort();
+    await expect(abortedPromise).rejects.toThrow();
+
+    // Cached ETag '"e-live"' must remain intact for the next non-aborted poll!
+    shouldFallbackOnAbort = false;
+    const next = await session.fetch();
+    expect(next).toEqual({ status: 304 });
+    expect(seenEtags[seenEtags.length - 1]).toBe('"e-live"');
+  });
 });

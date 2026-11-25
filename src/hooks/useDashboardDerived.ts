@@ -1,20 +1,63 @@
 import { useMemo } from 'react';
 import type { MarketSection, SourceHealth } from '../../shared/types';
 
-interface Input {
-  sources: SourceHealth[];
-  marketSections: MarketSection[] | null;
-  visitedTabs: Set<string>;
+export interface HeaderStatusInput {
   tab: string;
   dropsCount: number;
   dropsGeneratedAt: number | null;
-  airdropsFetchedAt: number | null | undefined;
+  dropsFailed: boolean;
+  dropsIsLiveApi: boolean;
   cardsCount: number;
+  airdropsFetchedAt: number | null | undefined;
+  airdropsFailed: boolean;
+  airdropsIsLiveApi: boolean;
+  marketSections: MarketSection[] | null;
+  marketsGeneratedAt: number | null | undefined;
+  marketsFailed: boolean;
+  marketsIsLiveApi: boolean;
+}
+
+export interface HeaderStatus {
+  totalCount: number;
+  headerFetchedAt: number | null;
+  headerFailed: boolean;
+  headerIsLiveApi: boolean;
+}
+
+export function deriveHeaderStatus(input: HeaderStatusInput): HeaderStatus {
+  if (input.tab === 'drops') {
+    return {
+      totalCount: input.dropsCount,
+      headerFetchedAt: input.dropsGeneratedAt,
+      headerFailed: input.dropsFailed,
+      headerIsLiveApi: input.dropsIsLiveApi && !input.dropsFailed,
+    };
+  }
+  if (input.tab === 'airdrops') {
+    return {
+      totalCount: input.cardsCount,
+      headerFetchedAt: input.airdropsFetchedAt ?? null,
+      headerFailed: input.airdropsFailed,
+      headerIsLiveApi: input.airdropsIsLiveApi && !input.airdropsFailed,
+    };
+  }
+  const activeMarket = (input.marketSections ?? []).find(s => s.id === input.tab) ?? null;
+  return {
+    totalCount: activeMarket?.rows.length ?? 0,
+    headerFetchedAt: activeMarket?.fetchedAt ?? input.marketsGeneratedAt ?? null,
+    headerFailed: input.marketsFailed,
+    headerIsLiveApi: input.marketsIsLiveApi && !input.marketsFailed,
+  };
+}
+
+interface Input extends HeaderStatusInput {
+  sources: SourceHealth[];
+  visitedTabs: Set<string>;
 }
 
 /**
  * Values App derives from the polling hooks for header/panels: X availability,
- * lazily-mounted market sections, and the active tab's counts/fetch time.
+ * lazily-mounted market sections, and the active tab's counts/fetch time/status.
  * Keeps App a pure composition shell.
  */
 export function useDashboardDerived(input: Input): {
@@ -22,8 +65,10 @@ export function useDashboardDerived(input: Input): {
   mountedMarkets: MarketSection[];
   totalCount: number;
   headerFetchedAt: number | null;
+  headerFailed: boolean;
+  headerIsLiveApi: boolean;
 } {
-  const { sources, marketSections, visitedTabs, tab, dropsCount, dropsGeneratedAt, airdropsFetchedAt, cardsCount } = input;
+  const { sources, marketSections, visitedTabs } = input;
 
   const xUnavailable = useMemo(() => {
     const xSources = sources.filter(s => s.platform === 'x');
@@ -33,12 +78,11 @@ export function useDashboardDerived(input: Input): {
     () => (marketSections ?? []).filter(s => visitedTabs.has(s.id)),
     [marketSections, visitedTabs],
   );
-  const onDrops = tab === 'drops';
+  const header = deriveHeaderStatus(input);
 
   return {
     xUnavailable,
     mountedMarkets,
-    totalCount: onDrops ? dropsCount : cardsCount,
-    headerFetchedAt: onDrops ? dropsGeneratedAt : (airdropsFetchedAt ?? null),
+    ...header,
   };
 }

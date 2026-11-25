@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Grade, MarketSection, RiskLevel } from '../../shared/types';
+import type { AirdropFeed, Grade, MarketSection, RiskLevel } from '../../shared/types';
 import { createTestD1 } from './helpers';
 import { buildSurfIndex, computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import { HAN_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
@@ -520,6 +520,206 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     const okScore = computeScore({ trustMax: 0.8, sourceCount: 3, lastSeen: now, nowMs: now, surfTier: 'S', riskLevel: 'ok' });
     const riskScore = computeScore({ trustMax: 0.8, sourceCount: 3, lastSeen: now, nowMs: now, surfTier: 'S', riskLevel: 'risk' });
     expect(okScore).toBeCloseTo(riskScore * 5, 3);
+
+    // Unknown/corrupt surfTier must default to 0 bonus rather than producing NaN.
+    const unknownTier = computeScore({
+      trustMax: 0.8,
+      sourceCount: 3,
+      lastSeen: now,
+      nowMs: now,
+      surfTier: 'Z' as unknown as Grade,
+      riskLevel: 'ok',
+    });
+    const noTier = computeScore({
+      trustMax: 0.8,
+      sourceCount: 3,
+      lastSeen: now,
+      nowMs: now,
+      surfTier: null,
+      riskLevel: 'ok',
+    });
+    expect(Number.isFinite(unknownTier)).toBe(true);
+    expect(unknownTier).toBe(noTier);
+  });
+
+  test('seedKnownDomains and decayClusterScores issue a single db.batch call beyond 40 statements', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_200_000_000;
+    let batchCalls = 0;
+    const countedDb = {
+      ...db,
+      prepare: db.prepare.bind(db),
+      exec: db.exec.bind(db),
+      batch(stmts: D1PreparedStatement[]) {
+        batchCalls++;
+        return db.batch(stmts);
+      },
+    } as unknown as D1Database;
+
+    const defi: MarketSection = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: Array.from({ length: 55 }, (_, i) => ({
+        cells: [`Proto${i}`],
+        href: `https://proto${i}.xyz`,
+      })),
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: now,
+      stale: false,
+    };
+
+    await seedKnownDomains(countedDb, null, defi);
+    expect(batchCalls).toBe(1);
+
+    for (let i = 0; i < 55; i++) {
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, trust_max)
+           VALUES (?1, ?2, '[]', '["quest"]', 'Summary', 'rule', 'ok', '[]', 9.9, 1, ?3, ?3, 0.8)`,
+        )
+        .bind(`c_batch_${String(i).padStart(3, '0')}`, `Proto${i}`, now - 3_600_000)
+        .run();
+    }
+
+    batchCalls = 0;
+    await decayClusterScores(countedDb, now);
+    expect(batchCalls).toBe(1);
+  });
+
+  test('collectKnownDomainEntries, buildSurfIndex, and seedKnownDomains prevent poisoning and prune stale rows', async () => {
+    const now = 1_795_200_000_000;
+    const surfFeed: AirdropFeed = {
+      fetchedAt: now,
+      tge: [],
+      counts: { active: 3, preToken: 2 },
+      cards: [
+        {
+          r: 1,
+          n: 'LegitProto',
+          t: 'LEGIT',
+          g: 'A',
+          b: ['live'],
+          f: '$10M',
+          tk: 'Live',
+          h: 80,
+          u: 'today',
+          fit: [],
+          best: { n: 'Quest', ty: 'quest', c: '$0', m: '5m' },
+          sc: 80,
+          sub: [1, 1, 1],
+          url: 'https://legitproto.xyz/',
+          tasks: [
+            { title: 'App', type: 'testnet', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://app.legitproto.xyz/quest' },
+            { title: 'Third-party partner', type: 'social', status: 'OPEN', cost: 0, timeMinutes: 2, url: 'https://evil-thirdparty.xyz/phish' },
+            { title: 'Shortener', type: 'social', status: 'OPEN', cost: 0, timeMinutes: 1, url: 'https://bit.ly/legit' },
+          ],
+        },
+        {
+          r: 2,
+          n: 'RiskyProto',
+          t: 'RSKY',
+          g: 'C',
+          b: ['risk'],
+          f: '$0',
+          tk: 'Risk',
+          h: 10,
+          u: 'today',
+          fit: [],
+          best: { n: 'Risk', ty: 'other', c: '$0', m: '1m' },
+          sc: 10,
+          sub: [1, 1, 1],
+          url: 'https://riskyproto.xyz/',
+          tasks: [],
+        },
+        {
+          r: 3,
+          n: 'PaasDemo',
+          t: 'PAAS',
+          g: 'B',
+          b: ['live'],
+          f: '$1M',
+          tk: 'Live',
+          h: 50,
+          u: 'today',
+          fit: [],
+          best: { n: 'Demo', ty: 'testnet', c: '$0', m: '5m' },
+          sc: 50,
+          sub: [1, 1, 1],
+          url: 'https://paasdemo.vercel.app/',
+          tasks: [{ title: 'Third-party', type: 'other', status: 'OPEN', cost: 0, timeMinutes: 1, url: 'https://sneaky.xyz/' }],
+        },
+      ],
+    };
+
+    const entries = collectKnownDomainEntries(surfFeed, null);
+    const entryDomains = new Set(entries.map(e => e.domain));
+    expect(entryDomains.has('legitproto.xyz')).toBe(true);
+    expect(entryDomains.has('evil-thirdparty.xyz')).toBe(false);
+    expect(entryDomains.has('riskyproto.xyz')).toBe(false);
+    expect(entryDomains.has('vercel.app')).toBe(false);
+    expect(entryDomains.has('sneaky.xyz')).toBe(false);
+    expect(entryDomains.has('bit.ly')).toBe(false);
+
+    const surfIdx = buildSurfIndex(surfFeed);
+    expect(surfIdx.byDomain.get('legitproto.xyz')?.name).toBe('LegitProto');
+    expect(surfIdx.byTicker.get('LEGIT')?.name).toBe('LegitProto');
+    expect(surfIdx.byDomain.has('evil-thirdparty.xyz')).toBe(false);
+    expect(surfIdx.byDomain.has('riskyproto.xyz')).toBe(false);
+    expect(surfIdx.byTicker.has('RSKY')).toBe(false);
+    expect(surfIdx.byDomain.has('vercel.app')).toBe(false);
+    expect(surfIdx.byDomain.has('sneaky.xyz')).toBe(false);
+
+    // Seed stale rows across platform, surf, defi, PaaS, CEX, and shorteners, then verify pruning.
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin) VALUES
+         ('stale-platform.xyz', 'OldPlat', 'platform'),
+         ('stale-surf.xyz', 'OldSurf', 'surf'),
+         ('stale-defi.xyz', 'OldDefi', 'defi'),
+         ('vercel.app', 'PaasPoison', 'surf'),
+         ('foo.pages.dev', 'SubPaasPoison', 'surf'),
+         ('binance.com', 'Binance', 'defi'),
+         ('bit.ly', 'ShortenerPoison', 'surf')`,
+      )
+      .run();
+
+    const defi: MarketSection = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: [
+        { cells: ['KeepDefi'], href: 'https://keepdefi.xyz/' },
+        { cells: ['Binance'], href: 'https://binance.com/' },
+      ],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: now,
+      stale: false,
+    };
+
+    await seedKnownDomains(db, surfFeed, defi);
+    const loaded = await loadKnownDomains(db, now);
+    expect(loaded.projectDomains.has('legitproto.xyz')).toBe(true);
+    expect(loaded.projectDomains.has('keepdefi.xyz')).toBe(true);
+    expect(loaded.projectDomains.has('stale-surf.xyz')).toBe(false);
+    expect(loaded.projectDomains.has('stale-defi.xyz')).toBe(false);
+    expect(loaded.projectDomains.has('vercel.app')).toBe(false);
+    expect(loaded.projectDomains.has('foo.pages.dev')).toBe(false);
+    expect(loaded.projectDomains.has('binance.com')).toBe(false);
+    expect(loaded.projectDomains.has('bit.ly')).toBe(false);
+    expect(loaded.platformDomains.has('stale-platform.xyz')).toBe(false);
+    expect(loaded.platformDomains.has('galxe.com')).toBe(true);
+
+    // Passing null surfFeed must preserve existing valid surf rows while still pruning defi/platform.
+    await seedKnownDomains(db, null, defi);
+    const loaded2 = await loadKnownDomains(db, now + 1_000);
+    expect(loaded2.projectDomains.has('legitproto.xyz')).toBe(true);
+    expect(loaded2.projectDomains.has('keepdefi.xyz')).toBe(true);
   });
 
   test('persists clusters.trust_max on insert and keeps it monotonically non-decreasing', async () => {
@@ -802,8 +1002,8 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       { id: 'telegram:ch3', last_polled_at: now, last_ok_at: null, status: 'ok', fail_count: 1 },
     ]);
 
-    // Tick 2: ch1 has 1 new post, ch2/ch3 have no new posts -> loadKnownDomains runs once and ch1 ingests.
-    const t1 = now + 60_000;
+    // Tick 2 (after ch3's 4m error backoff expires): ch1 has 1 new post, ch2/ch3 have no new posts -> loadKnownDomains runs once and ch1 ingests.
+    const t1 = now + 4 * 60_000;
     const before1 = queries.length;
     const s1 = await pollTelegramBatch(db, 4, t1, null, async handle => {
       if (handle === 'ch1') {
@@ -1130,7 +1330,7 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
   });
 
-  test('collectKnownDomainEntries, seedKnownDomains, and buildSurfIndex enforce trust boundaries and prune stale curated rows', async () => {
+  test('collectKnownDomainEntries, seedKnownDomains, and buildSurfIndex enforce trust boundaries and prune stale rows', async () => {
     const makeCard = (overrides: Record<string, unknown>) => ({
       r: 1,
       n: 'Proto',
@@ -1211,14 +1411,15 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(surfIndex.byDomain.get('pendle.finance')?.name).toBe('Pendle');
     expect(surfIndex.byDomain.has('merkl.xyz')).toBe(false);
 
-    // seedKnownDomains prunes stale origin='curated' rows while preserving surf/defi/platform.
+    // seedKnownDomains prunes stale curated/surf/defi rows when authoritative feeds are supplied
+    // while retaining active curated/surf/defi/platform entries.
     const { db } = createTestD1();
     await db
       .prepare(
         `INSERT INTO known_domains (domain, project, origin)
          VALUES ('stale-curated.io', 'OldCurated', 'curated'),
-                ('keep-surf.io', 'KeepSurf', 'surf'),
-                ('keep-defi.io', 'KeepDefi', 'defi')`,
+                ('stale-surf-removed.io', 'OldSurf', 'surf'),
+                ('stale-defi-removed.io', 'OldDefi', 'defi')`,
       )
       .run();
 
@@ -1228,9 +1429,11 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       .all<{ domain: string; origin: string }>();
     const domSet = new Set(rows.results.map(r => r.domain));
     expect(domSet.has('stale-curated.io')).toBe(false);
+    expect(domSet.has('stale-surf-removed.io')).toBe(false);
+    expect(domSet.has('stale-defi-removed.io')).toBe(false);
     expect(domSet.has('defigood.fi')).toBe(true);
-    expect(domSet.has('keep-surf.io')).toBe(true);
-    expect(domSet.has('keep-defi.io')).toBe(true);
+    expect(domSet.has('surfgood.xyz')).toBe(true);
+    expect(domSet.has('arbitrum.io')).toBe(true);
     expect(domSet.has('galxe.com')).toBe(true);
 
     // Merged Surf + Pendle and ASSO7878 + Pendle cards must never poison known_domains or surfIndex with pendle.finance/merkl.xyz.
@@ -1380,5 +1583,217 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       .prepare(`SELECT domain, origin FROM known_domains WHERE domain = 'brandnew.fi'`)
       .first<{ domain: string; origin: string }>();
     expect(brandNewRow).toEqual({ domain: 'brandnew.fi', origin: 'curated' });
+  });
+
+  test('M-38/M-39a/M-41a: concurrent ON CONFLICT coalesces metadata & recomputes risk/score, fallback_windows advances on re-ingest, and risk updates apply current computeScore', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:lo1', 'telegram', 'lo1', 'en', 0.3, 1),
+                ('telegram:lo2', 'telegram', 'lo2', 'en', 0.3, 1)`,
+      )
+      .run();
+
+    const known = new Map([['conflictproto.xyz', 'ConflictProto']]);
+    const surfIndex = {
+      byDomain: new Map([['conflictproto.xyz', { name: 'ConflictProto', tier: 'A' as const, cardRank: 7 }]]),
+      byTicker: new Map(),
+    };
+
+    // M-38: Two concurrent first posts from low-trust sources race past `existing = null` onto ON CONFLICT(id).
+    // Post 1 has no ticker/surf match; Post 2 carries $CFPT + Surf tier A/rank 7.
+    let barrierCount = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>(resolve => {
+      releaseBarrier = resolve;
+    });
+    const makeRacingDb = (): D1Database =>
+      ({
+        ...db,
+        prepare(sql: string) {
+          const stmt = db.prepare(sql);
+          if (/SELECT id, project, ticker, domain, chains.*FROM clusters WHERE id = \?1/is.test(sql)) {
+            return {
+              bind(...args: unknown[]) {
+                const bound = stmt.bind(...args);
+                return {
+                  ...bound,
+                  async first<T>() {
+                    const row = await bound.first<T>();
+                    if (!row) {
+                      barrierCount++;
+                      if (barrierCount === 2) releaseBarrier();
+                      else await barrier;
+                    }
+                    return row;
+                  },
+                };
+              },
+            };
+          }
+          return stmt;
+        },
+      }) as unknown as D1Database;
+
+    const [cA, cB] = await Promise.all([
+      ingestPostIntoCluster(
+        makeRacingDb(),
+        {
+          postId: 'telegram:lo1:1',
+          sourceId: 'telegram:lo1',
+          sourceTrust: 0.3,
+          postUrl: 'https://t.me/lo1/1',
+          postedAt: now - 3_600_000,
+          text: 'ConflictProto testnet live https://conflictproto.xyz/',
+        },
+        { knownDomains: known },
+        { byDomain: new Map(), byTicker: new Map() },
+        known,
+        new Set(),
+        now,
+      ),
+      ingestPostIntoCluster(
+        makeRacingDb(),
+        {
+          postId: 'telegram:lo2:2',
+          sourceId: 'telegram:lo2',
+          sourceTrust: 0.3,
+          postUrl: 'https://t.me/lo2/2',
+          postedAt: now,
+          text: 'ConflictProto $CFPT faucet live https://conflictproto.xyz/faucet',
+        },
+        { knownDomains: known },
+        surfIndex,
+        known,
+        new Set(),
+        now,
+      ),
+    ]);
+    expect(cA.clusterId).toBe(cB.clusterId);
+    const merged = await db
+      .prepare('SELECT ticker, domain, surf_tier, surf_rank, source_count, risk_level, risk_reasons, score FROM clusters WHERE id = ?1')
+      .bind(cA.clusterId)
+      .first<{
+        ticker: string | null;
+        domain: string | null;
+        surf_tier: Grade | null;
+        surf_rank: number | null;
+        source_count: number;
+        risk_level: RiskLevel;
+        risk_reasons: string;
+        score: number;
+      }>();
+    expect(merged?.ticker).toBe('CFPT');
+    expect(merged?.domain).toBe('conflictproto.xyz');
+    expect(merged?.surf_tier).toBe('A');
+    expect(merged?.surf_rank).toBe(7);
+    expect(merged?.source_count).toBe(2);
+    expect(merged?.risk_level).toBe('ok');
+    expect(JSON.parse(merged?.risk_reasons ?? '[]')).toEqual([]);
+    const expectedMergedScore = computeScore({
+      trustMax: 0.3,
+      sourceCount: 2,
+      lastSeen: now,
+      nowMs: now,
+      surfTier: 'A',
+      riskLevel: 'ok',
+    });
+    expect(merged!.score).toBeCloseTo(expectedMergedScore, 3);
+
+    // M-39a: fallback_windows.last_seen advances when a newer post re-ingests into an existing fallback cluster.
+    const fb1 = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:lo1:fb1',
+        sourceId: 'telegram:lo1',
+        sourceTrust: 0.3,
+        postUrl: 'https://t.me/lo1/fb1',
+        postedAt: now - 86_400_000,
+        text: 'WindowAdvanceProto testnet live',
+      },
+      { knownDomains: new Map() },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map(),
+      new Set(),
+      now - 86_400_000,
+    );
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:lo2:fb2',
+        sourceId: 'telegram:lo2',
+        sourceTrust: 0.3,
+        postUrl: 'https://t.me/lo2/fb2',
+        postedAt: now,
+        text: 'WindowAdvanceProto quest update',
+      },
+      { knownDomains: new Map() },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map(),
+      new Set(),
+      now,
+    );
+    const fw = await db
+      .prepare('SELECT last_seen FROM fallback_windows WHERE cluster_id = ?1')
+      .bind(fb1.clusterId)
+      .first<{ last_seen: number }>();
+    expect(fw?.last_seen).toBe(now);
+
+    // M-41a: decayed risk cluster receiving a fresh post updates to current penalized computeScore (not pinned by MIN).
+    const riskSeed = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:lo1:risk1',
+        sourceId: 'telegram:lo1',
+        sourceTrust: 0.3,
+        postUrl: 'https://t.me/lo1/risk1',
+        postedAt: now - 10 * 86_400_000,
+        text: 'RiskScoreProto airdrop is live! Claim now and connect your wallet to claim rewards https://riskscore.xyz/',
+      },
+      { knownDomains: new Map([['riskscore.xyz', 'RiskScoreProto']]) },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map([['riskscore.xyz', 'RiskScoreProto']]),
+      new Set(),
+      now,
+    );
+    const decayedRow = await db
+      .prepare('SELECT score FROM clusters WHERE id = ?1')
+      .bind(riskSeed.clusterId)
+      .first<{ score: number }>();
+    expect(decayedRow!.score).toBeLessThan(0.02);
+
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:lo2:risk2',
+        sourceId: 'telegram:lo2',
+        sourceTrust: 0.3,
+        postUrl: 'https://t.me/lo2/risk2',
+        postedAt: now,
+        text: 'RiskScoreProto airdrop update https://riskscore.xyz/',
+      },
+      { knownDomains: new Map([['riskscore.xyz', 'RiskScoreProto']]) },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map([['riskscore.xyz', 'RiskScoreProto']]),
+      new Set(),
+      now,
+    );
+    const refreshedRow = await db
+      .prepare('SELECT score, risk_level FROM clusters WHERE id = ?1')
+      .bind(riskSeed.clusterId)
+      .first<{ score: number; risk_level: string }>();
+    const expectedRiskScore = computeScore({
+      trustMax: 0.3,
+      sourceCount: 2,
+      lastSeen: now,
+      nowMs: now,
+      surfTier: null,
+      riskLevel: 'risk',
+    });
+    expect(refreshedRow?.risk_level).toBe('risk');
+    expect(refreshedRow!.score).toBeCloseTo(expectedRiskScore, 3);
+    expect(refreshedRow!.score).toBeGreaterThan(decayedRow!.score);
   });
 });

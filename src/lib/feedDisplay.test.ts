@@ -283,14 +283,23 @@ describe('prepareFeedLinks', () => {
     ]);
   });
 
-  test('never fabricates https or escalates known=false when deduplicating', () => {
+  test('never fabricates https, downgrades plain http known links, and never escalates known=false when deduplicating', () => {
     const httpOnly = prepareFeedLinks(
       makeItem({
         links: [{ url: 'http://example.com/task', known: true }],
       }),
     );
     expect(httpOnly).toEqual([
-      { url: 'http://example.com/task', label: 'example.com', known: true },
+      { url: 'http://example.com/task', label: 'example.com', known: false },
+    ]);
+
+    const httpsKnown = prepareFeedLinks(
+      makeItem({
+        links: [{ url: 'https://example.com/task', known: true }],
+      }),
+    );
+    expect(httpsKnown).toEqual([
+      { url: 'https://example.com/task', label: 'example.com', known: true },
     ]);
 
     const mixedKnown = prepareFeedLinks(

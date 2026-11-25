@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AirdropFeed } from '../../shared/types';
+import type { AirdropFeed, Card } from '../../shared/types';
 import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
 
@@ -11,6 +11,8 @@ export interface AirdropFeedState {
   failed: boolean;
   isLiveApi: boolean;
   refresh: () => void;
+  /** Live lookup of currently visible cards for freshness-sensitive brief revalidation. */
+  getVisibleCards: () => Card[];
 }
 
 /** Polls /airdrops.json with ETag support. Pauses in background tabs and keeps the last loaded list on error. */
@@ -22,6 +24,8 @@ export function useAirdropFeed(): AirdropFeedState {
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
+  const hasLiveRef = useRef(false);
+  const cardsRef = useRef<Card[]>([]);
 
   const fetchNow = useCallback((mode: PollMode) => {
     if (mode !== 'background') setLoading(true);
@@ -31,18 +35,26 @@ export function useAirdropFeed(): AirdropFeedState {
     getJson<AirdropFeed>('/airdrops.json', etagRef.current, signal)
       .then(res => {
         if (signal.aborted) return;
-        poll.settle();
         if (res.status === 200) {
+          if (res.source === 'snapshot' && hasLiveRef.current) {
+            poll.settle(false);
+            setFailed(true);
+            if (mode !== 'background') setLoading(false);
+            return;
+          }
+          hasLiveRef.current = res.source === 'api';
           etagRef.current = res.etag;
+          cardsRef.current = res.body.cards;
           setFeed(res.body);
           setIsLiveApi(res.source === 'api');
         }
+        poll.settle(true);
         setFailed(false);
         if (mode !== 'background') setLoading(false);
       })
       .catch(() => {
         if (signal.aborted) return;
-        poll.settle();
+        poll.settle(false);
         setFailed(true);
         if (mode !== 'background') setLoading(false);
       });
@@ -56,8 +68,9 @@ export function useAirdropFeed(): AirdropFeedState {
   poll.useInterval(fetchNowRef, POLL_MS);
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
+  const getVisibleCards = useCallback(() => cardsRef.current, []);
 
   // A failed refresh must not keep the stale feed labelled "Live API";
   // consumers already render their failed branches off `failed`.
-  return { feed, loading, failed, isLiveApi: isLiveApi && !failed, refresh };
+  return { feed, loading, failed, isLiveApi: isLiveApi && !failed, refresh, getVisibleCards };
 }

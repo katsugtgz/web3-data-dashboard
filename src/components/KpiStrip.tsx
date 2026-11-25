@@ -33,6 +33,7 @@ export function KpiStrip({
       <button
         type="button"
         className={`kpi-card${status === 'all' && grade === 'All' ? ' is-active' : ''}`}
+        aria-pressed={status === 'all' && grade === 'All'}
         onClick={onSelectAll}
       >
         <span className="kpi-label">Active Tracked</span>
@@ -42,6 +43,7 @@ export function KpiStrip({
       <button
         type="button"
         className={`kpi-card${status === 'pre' ? ' is-active' : ''}`}
+        aria-pressed={status === 'pre'}
         onClick={onTogglePre}
       >
         <span className="kpi-label">Pre-Token</span>
@@ -51,6 +53,7 @@ export function KpiStrip({
       <button
         type="button"
         className={`kpi-card${grade === 'S' ? ' is-active' : ''}`}
+        aria-pressed={grade === 'S'}
         onClick={onToggleSTier}
       >
         <span className="kpi-label">S-Tier Projects</span>
@@ -65,6 +68,7 @@ export function KpiStrip({
       <button
         type="button"
         className={`kpi-card${status === 'saved' ? ' is-active' : ''}`}
+        aria-pressed={status === 'saved'}
         onClick={onToggleSaved}
       >
         <span className="kpi-label">Watchlist</span>

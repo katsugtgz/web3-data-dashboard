@@ -53,6 +53,18 @@ export const CONTENT_HOST_DOMAINS = new Set<string>([
   'tokopedia.com',
   'bitget.cloud',
   'thedefinvestor.com',
+  // Shared PaaS / static hosting domains (never a project's trusted registrable domain)
+  'vercel.app',
+  'netlify.app',
+  'github.io',
+  'pages.dev',
+  'workers.dev',
+  'web.app',
+  'firebaseapp.com',
+  'onrender.com',
+  'fly.dev',
+  'railway.app',
+  'herokuapp.com',
 ]);
 
 /** Quest / bounty / allowlist / claim platforms shared across many projects. */
@@ -173,6 +185,19 @@ export const TRACKER_MARKETPLACE_DOMAINS = new Set<string>([
   'glassnode.com',
   'messari.io',
   'tokenterminal.com',
+  // Major centralized exchanges
+  'binance.com',
+  'coinbase.com',
+  'bybit.com',
+  'okx.com',
+  'kucoin.com',
+  'bitget.com',
+  'gate.io',
+  'kraken.com',
+  'mexc.com',
+  'htx.com',
+  'upbit.com',
+  'bingx.com',
 ]);
 
 /**
@@ -621,6 +646,8 @@ function tryFastCleanHttpsUrl(cleaned: string): string | null {
   return cleaned;
 }
 
+const TRAILING_ENCODED_PUNCT_RE = /(?:%(?:2C|2E|29|3B|3A|21|3F|22|27))+$/i;
+
 function cleanUrlParts(raw: string): CleanedUrlParts | null {
   try {
     let cleaned = raw.trim();
@@ -636,29 +663,27 @@ function cleanUrlParts(raw: string): CleanedUrlParts | null {
     cleaned = stripTrailingUrlNoise(cleaned);
     if (!cleaned) return null;
 
-    // Trim glued prose after long numeric ID path segments (`.../status/<id>Update`).
-    const qMark = cleaned.indexOf('?');
-    const hashMark = cleaned.indexOf('#');
-    const qIdx = qMark === -1 ? hashMark : hashMark === -1 ? qMark : qMark < hashMark ? qMark : hashMark;
-    const pathPart = qIdx === -1 ? cleaned : cleaned.slice(0, qIdx);
-    const lastSlash = pathPart.lastIndexOf('/');
-    const lastSeg = lastSlash === -1 ? pathPart : pathPart.slice(lastSlash + 1);
-    if (lastSeg.length >= 9) {
-      const segFirst = lastSeg.charCodeAt(0);
-      if (segFirst >= 48 && segFirst <= 57) {
-        const idGlue = lastSeg.match(/^(\d{8,})([A-Za-z][A-Za-z0-9]*)$/);
-        if (idGlue) {
-          const segIdx = cleaned.lastIndexOf(lastSeg);
-          cleaned = cleaned.slice(0, segIdx) + idGlue[1] + cleaned.slice(segIdx + lastSeg.length);
-        }
-      }
-    }
+    // Strip only trailing percent-encoded punctuation, preserving valid %25, %20, %3D.
     if (cleaned.includes('%')) {
-      cleaned = cleaned.replace(/(?:%[0-9A-Fa-f]{2})+$/, '');
+      cleaned = cleaned.replace(TRAILING_ENCODED_PUNCT_RE, '');
     }
 
     const u = new URL(cleaned);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (u.username || u.password) return null;
+
+    // Trim glued prose after long numeric ID path segments (`.../status/<id>Update`),
+    // operating strictly on pathname while skipping pure hex slugs and YYYYMMDD date slugs.
+    const lastSlash = u.pathname.lastIndexOf('/');
+    const lastSeg = lastSlash === -1 ? u.pathname : u.pathname.slice(lastSlash + 1);
+    const isHexSlug = lastSeg.length >= 8 && /^[0-9a-f]+$/.test(lastSeg);
+    const isDateSlug = /^20\d{6}[a-z]/.test(lastSeg);
+    if (!isHexSlug && !isDateSlug) {
+      const idGlue = lastSeg.match(/^(\d{8,})([A-Za-z][A-Za-z0-9]*)$/);
+      if (idGlue) {
+        u.pathname = u.pathname.slice(0, lastSlash + 1) + idGlue[1];
+      }
+    }
 
     const hostLower = u.hostname.toLowerCase();
     if (!hostLower || !hostLower.includes('.') || isRawIpHost(hostLower)) return null;

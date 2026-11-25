@@ -3,15 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="referrer" content="no-referrer" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' https:; object-src 'none'; base-uri 'self'; form-action 'self'" />
 <meta name="color-scheme" content="light dark" />
-<script>
-try {
-  var s = localStorage.getItem('color-scheme');
-  if (s === 'light' || s === 'dark') {
-    document.querySelector('meta[name="color-scheme"]').content = s;
-  }
-} catch (_) {}
-</script>
+<script src="./theme-init.js"></script>
 <title>Web3 Radar · Realtime Airdrop &amp; Market Aggregator</title>
 <meta name="description" content="Realtime, keyless, 100% English Web3 airdrop radar with live market data from CoinGecko, DefiLlama, Polymarket, DexScreener, and GitHub." />
 <meta property="og:type" content="website" />
@@ -22,11 +17,10 @@ try {
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" content="Web3 Radar: Airdrops and live market data" />
 <link rel="icon" type="image/svg+xml" href="./icon.svg" />
-<!-- Optional webfonts: non-blocking; falls back to system-ui and monospace when offline or blocked. -->
+<!-- Optional webfonts: non-blocking via display=optional; falls back to system-ui and monospace when offline or blocked. -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=optional" media="print" onload="this.media='all'" />
-<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=optional" /></noscript>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=optional" />
 </head>
 <body>
 <div id="root"></div>
