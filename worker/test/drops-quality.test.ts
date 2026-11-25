@@ -13,6 +13,7 @@ import {
 } from '../src/normalize/domains';
 import {
   isAssoDroppedOrRug,
+  parseAssoBookmarkDate,
   parseCjkRaiseUsd,
   stripOrTranslateCjk,
   translateAssoCost,
@@ -2834,6 +2835,9 @@ describe('Domain classification & i18n ASSO7878 regression fixes', () => {
       expect(translateAssoStep('1) \u90e8\u7f72nft + \u6bcf\u65e5gm')).toBe('Deploy NFT + Daily GM');
       expect(translateAssoStep('2\u3001\u9886\u6c34+\u4ea4\u6613')).toBe('Claim faucet + Trade');
       expect(translateAssoStep('Complete quiz + Swap')).toBe('Complete quiz + Swap');
+      expect(translateAssoStep('Connect\u2192Swap')).toBe('Connect Swap');
+      expect(translateAssoStep('Connect\u27A1\uFE0FSwap')).toBe('Connect Swap');
+      expect(translateAssoStep('A\uFE0FB')).toBe('AB');
     } finally {
       console.warn = origWarn;
     }
@@ -2860,6 +2864,19 @@ describe('Domain classification & i18n ASSO7878 regression fixes', () => {
     expect(parseCjkRaiseUsd('500\u4e07\uff08\u79cd\u5b50\u8f6e\uff09')).toBe(5_000_000);
     expect(parseCjkRaiseUsd('2.5\u4ebf\u7f8e\u5143\uff08A\u8f6e\uff09')).toBe(250_000_000);
     expect(parseCjkRaiseUsd('~$4.5M (seed, reported)')).toBe(4_500_000);
+    expect(parseCjkRaiseUsd('$4.50')).toBe(5);
+    expect(parseCjkRaiseUsd('$10,000')).toBe(10_000);
+    expect(parseCjkRaiseUsd('$4.5XYZ')).toBe(0);
+    expect(parseCjkRaiseUsd('$4.5.6')).toBe(0);
+    expect(parseCjkRaiseUsd('$4XYZ')).toBe(0);
+
+    // Non-existent rolled-over bookmark dates fall back without timestamp; valid leap day stays valid.
+    expect(parseAssoBookmarkDate('2.29', 2026)).toEqual({ label: '2.29' });
+    expect(parseAssoBookmarkDate('4.31', 2026)).toEqual({ label: '4.31' });
+    expect(parseAssoBookmarkDate('2.29', 2028)).toEqual({
+      label: '2028-02-29',
+      updatedTs: Math.floor(Date.UTC(2028, 1, 29) / 1000),
+    });
 
     expect(translateAssoEcosystem('\u9884\u6d4b\uff0c\u6c38\u7eed')).toBe('Prediction / Perps');
 

@@ -178,32 +178,55 @@ function extractXmlTag(block: string, tagName: string): string {
 }
 
 function extractTagAttr(tag: string, attrName: string): string | null {
-  const re = new RegExp(`\\b${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+  const escaped = attrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
   const m = tag.match(re);
   return m ? (m[1] ?? m[2] ?? '') : null;
 }
 
-function extractAtomLink(block: string): string {
+function resolveXmlBase(rawBase: string | null | undefined, inheritedBase?: string): string | undefined {
+  const decoded = rawBase ? decodeFeedHtmlEntities(rawBase).trim() : '';
+  if (!decoded) return inheritedBase;
+  try {
+    return inheritedBase ? new URL(decoded, inheritedBase).toString() : new URL(decoded).toString();
+  } catch {
+    return inheritedBase;
+  }
+}
+
+function resolveAtomHref(rawHref: string, base?: string): string {
+  const decoded = decodeFeedHtmlEntities(rawHref).trim();
+  if (!decoded) return '';
+  if (!base) return decoded;
+  try {
+    return new URL(decoded, base).toString();
+  } catch {
+    return decoded;
+  }
+}
+
+function extractAtomLink(block: string, entryBase?: string): string {
   const linkTags = block.match(/<link\b[^>]*\/?>/gi) ?? [];
   let fallbackHref = '';
   let anyHref = '';
   for (const tag of linkTags) {
     const href = extractTagAttr(tag, 'href');
     if (!href) continue;
-    const decodedHref = decodeFeedHtmlEntities(href).trim();
-    if (!decodedHref) continue;
-    if (!anyHref) anyHref = decodedHref;
+    const linkBase = resolveXmlBase(extractTagAttr(tag, 'xml:base'), entryBase);
+    const resolvedHref = resolveAtomHref(href, linkBase);
+    if (!resolvedHref) continue;
+    if (!anyHref) anyHref = resolvedHref;
     const rel = extractTagAttr(tag, 'rel')?.trim().toLowerCase() ?? '';
     if (rel === 'alternate' || rel === '') {
-      return decodedHref;
+      return resolvedHref;
     }
     if (!fallbackHref && rel !== 'enclosure' && rel !== 'self') {
-      fallbackHref = decodedHref;
+      fallbackHref = resolvedHref;
     }
   }
   if (fallbackHref) return fallbackHref;
   if (anyHref) return anyHref;
-  return extractXmlTag(block, 'link');
+  return resolveAtomHref(extractXmlTag(block, 'link'), entryBase);
 }
 
 function normalizePostId(raw: string): string {
@@ -229,7 +252,7 @@ function slugify(raw: string): string {
  * Lightweight zero-dependency RSS 2.0 & Atom XML parser suitable for Workers.
  * Undated/invalid entries are strictly dropped (never stamped with Date.now()).
  */
-export function parseRssOrAtomXml(xml: string): ParsedFeedPost[] {
+export function parseRssOrAtomXml(xml: string, baseUrl?: string): ParsedFeedPost[] {
   const posts: ParsedFeedPost[] = [];
   const seen = new Set<string>();
 
@@ -237,10 +260,14 @@ export function parseRssOrAtomXml(xml: string): ParsedFeedPost[] {
   const entryBlocks = itemBlocks.length === 0 ? (xml.match(/<entry(?:\s[^>]*)?>[\s\S]*?<\/entry>/gi) ?? []) : [];
   const isAtom = itemBlocks.length === 0 && entryBlocks.length > 0;
   const blocks = isAtom ? entryBlocks : itemBlocks;
+  const feedOpenTag = isAtom ? (xml.match(/<feed\b[^>]*>/i)?.[0] ?? '') : '';
+  const feedBase = isAtom ? resolveXmlBase(extractTagAttr(feedOpenTag, 'xml:base'), baseUrl) : baseUrl;
 
   for (const block of blocks) {
     const rawTitle = extractXmlTag(block, 'title');
-    const rawLink = isAtom ? extractAtomLink(block) : extractXmlTag(block, 'link');
+    const entryOpenTag = isAtom ? (block.match(/^<entry\b[^>]*>/i)?.[0] ?? '') : '';
+    const entryBase = isAtom ? resolveXmlBase(extractTagAttr(entryOpenTag, 'xml:base'), feedBase) : feedBase;
+    const rawLink = isAtom ? extractAtomLink(block, entryBase) : extractXmlTag(block, 'link');
     const rawGuid = isAtom ? extractXmlTag(block, 'id') : extractXmlTag(block, 'guid');
     const rawDate = isAtom
       ? extractXmlTag(block, 'published') || extractXmlTag(block, 'updated')
@@ -335,11 +362,18 @@ export function parseWpCalendarToFeedPosts(raw: unknown): ParsedFeedPost[] {
   return out;
 }
 
+export function parseWpCalendarFeedPayload(raw: unknown): ParsedFeedPost[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('Malformed WP calendar payload: expected event array');
+  }
+  return parseWpCalendarToFeedPosts(raw);
+}
+
 function inferCalendarStatus(text: string): string {
   const lower = text.toLowerCase();
+  if (/\b(?:ended|stopped|closed|expired)\b/.test(lower)) return 'Ended';
   if (/\b(?:claim|checker|claimable|eligibility)\b/.test(lower)) return 'Claimable';
   if (/\b(?:snapshot)\b/.test(lower)) return 'Snapshot';
-  if (/\b(?:ended|stopped|closed|expired)\b/.test(lower)) return 'Ended';
   if (/\b(?:tge|launch|listing)\b/.test(lower)) return 'TGE';
   return 'Upcoming';
 }
@@ -814,13 +848,13 @@ async function fetchJsonWithTimeout(url: string, init?: RequestInit): Promise<un
   return res.json();
 }
 
-async function fetchTextWithTimeout(url: string): Promise<string> {
+async function fetchTextWithTimeout(url: string): Promise<{ text: string; url: string }> {
   const res = await fetch(url, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Feed HTTP ${res.status} for ${url}`);
-  return res.text();
+  return { text: await res.text(), url: res.url || url };
 }
 
 export async function fetchPendlePoints(url = PENDLE_POINTS_URL, nowMs = Date.now()): Promise<AirdropFeed> {
@@ -857,12 +891,12 @@ export async function fetchDropFeedPosts(src: SourceConfig, nowMs = Date.now()):
   if (!src.url) throw new Error(`Missing URL for feed source ${src.handle}`);
   switch (src.parser) {
     case 'rss': {
-      const xml = await fetchTextWithTimeout(src.url);
-      return parseRssOrAtomXml(xml);
+      const { text: xml, url: finalUrl } = await fetchTextWithTimeout(src.url);
+      return parseRssOrAtomXml(xml, finalUrl);
     }
     case 'wp_calendar': {
       const raw = await fetchJsonWithTimeout(src.url);
-      return parseWpCalendarToFeedPosts(raw);
+      return parseWpCalendarFeedPayload(raw);
     }
     case 'substack': {
       const raw = await fetchJsonWithTimeout(src.url);
@@ -969,9 +1003,17 @@ async function pollSingleFeedSource(
     const sorted = [...posts].sort((a, b) => b.postedAt - a.postedAt || a.id.localeCompare(b.id));
     const newestId = sorted[0]?.id ?? src.last_seen_id;
 
-    // Deduplicate against D1 posts table instead of breaking on a single last_seen_id
-    // so non-monotonic feeds (Galxe trending, WP calendar) never drop or replay items.
-    const recentPosts = sorted.filter(p => p.postedAt >= cutoffMs);
+    // Deduplicate within the current response by full post key before querying D1
+    // and applying MAX_POSTS_PER_POLL, so duplicate items never consume cap slots.
+    const seenResponseKeys = new Set<string>();
+    const recentPosts: ParsedFeedPost[] = [];
+    for (const p of sorted) {
+      if (p.postedAt < cutoffMs) continue;
+      const fullKey = `feed:${src.handle}:${p.id}`;
+      if (seenResponseKeys.has(fullKey)) continue;
+      seenResponseKeys.add(fullKey);
+      recentPosts.push(p);
+    }
     const existingIds = new Set<string>();
     for (let i = 0; i < recentPosts.length; i += D1_EXISTING_CHECK_CHUNK) {
       const chunk = recentPosts.slice(i, i + D1_EXISTING_CHECK_CHUNK);

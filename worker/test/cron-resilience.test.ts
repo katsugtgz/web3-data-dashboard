@@ -1186,4 +1186,140 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
     expect(fetchedStale).toContain('https://asso.test/csv');
     expect(fetchedStale).toContain('https://arndxt.test/csv');
   });
+
+  test('*/5 cron ignores stale (>6h) airdrops:defillama snapshot and isolates pollXBatch / pollFeedBatch rejections', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    await ensureSourcesSynced(db);
+
+    const staleAt = t0 - 7 * 3_600_000;
+    await upsertSnapshot(
+      db,
+      'airdrops:defillama',
+      {
+        cards: [
+          {
+            r: 1,
+            n: 'StaleTokenlessProto',
+            id: 'defillama:staletokenless',
+            t: null,
+            g: 'A',
+            b: ['early'],
+            x: null,
+            img: '',
+            f: '—',
+            tk: '1/1',
+            h: 10,
+            u: 'today',
+            fit: ['small'],
+            best: { n: 'Use proto', ty: 'liquidity', c: 'On-chain', m: '—' },
+            sc: 74,
+            sub: [7, 7, null],
+            url: 'https://staletokenless.xyz/',
+            source: 'DefiLlama',
+          },
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: staleAt,
+      },
+      staleAt,
+    );
+
+    const surfPayload = {
+      active: [
+        {
+          project_id: 'live-surf-fresh',
+          project_name: 'LiveSurfFresh',
+          grade: 'S',
+          score: 90,
+          best_task: { title: 'Swap', type: 'testnet', external_link: 'https://livesurffresh.xyz/' },
+          tasks: [{ title: 'Swap', type: 'testnet', external_link: 'https://livesurffresh.xyz/' }],
+        },
+      ],
+      tge: [],
+    };
+
+    // Simulate a transient D1 failure inside pollFeedBatch's initial SELECT while pollXBatch and postProcess/prune/decay succeed.
+    const oldPostedAt = t0 - 31 * 86_400_000;
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('c:old-iso', 'OldIso', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?1, ?1)`,
+      )
+      .bind(oldPostedAt)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:old-iso', 'telegram:ch1', 'https://t.me/ch1/9', ?1, 'old post', '[]', 'c:old-iso', ?1)`,
+      )
+      .bind(oldPostedAt)
+      .run();
+
+    const feedFailingDb = {
+      ...db,
+      prepare(sql: string) {
+        if (/WHERE\s+platform\s*=\s*'feed'/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async all() {
+                  throw new Error('D1 feed select error');
+                },
+              };
+            },
+          };
+        }
+        return db.prepare(sql);
+      },
+      batch(stmts: D1PreparedStatement[]) {
+        return db.batch(stmts);
+      },
+      exec(sql: string) {
+        return db.exec(sql);
+      },
+    } as unknown as D1Database;
+
+    const origErr = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+      await withStubbedFetch(
+        url => {
+          if (url === 'https://surf.test/airdrops') {
+            return new Response(JSON.stringify(surfPayload), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          return new Response('offline', { status: 503 });
+        },
+        async () => {
+          await worker.scheduled(
+            { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+            {
+              DB: feedFailingDb,
+              SURF_AIRDROPS_URL: 'https://surf.test/airdrops',
+              X_BATCH_SIZE: '1',
+              FEED_BATCH_SIZE: '1',
+            },
+            makeExecCtx(),
+          );
+        },
+      );
+    } finally {
+      console.error = origErr;
+    }
+
+    // Stale >6h airdrops:defillama was excluded from merged airdrops snapshot
+    const saved = JSON.parse((await readSnapshot(db, 'airdrops'))!.body) as { cards: { n: string }[] };
+    expect(saved.cards.map(c => c.n)).toContain('LiveSurfFresh');
+    expect(saved.cards.map(c => c.n)).not.toContain('StaleTokenlessProto');
+
+    // pollFeedBatch rejection was isolated and logged; prune still ran!
+    expect(errors.some(args => args[0] === 'cron-error:pollFeedBatch')).toBe(true);
+    const pruned = await db.prepare(`SELECT id FROM posts WHERE id = 'p:old-iso'`).first<{ id: string }>();
+    expect(pruned).toBeNull();
+  });
 });

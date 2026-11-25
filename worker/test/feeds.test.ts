@@ -223,7 +223,7 @@ describe('feeds parsers (RSS/Atom, WP Calendar, Substack, Galxe, Pendle, Merkl)'
 
 describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () => {
   test('uses sources_poll index, ingests feed posts with feed:<handle>:<id>, sets 30m TTL, and backs off on error', async () => {
-    const { db, explain } = createTestD1();
+    const { db, queries, explain } = createTestD1();
     await db
       .prepare(
         `INSERT INTO sources (id, platform, handle, lang, trust, enabled, tags)
@@ -233,20 +233,7 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
       )
       .run();
 
-    // Verify query plan uses sources_poll without TEMP B-TREE
-    const plan = explain(
-      `SELECT id, handle, lang, trust, last_seen_id, fail_count, first_fail_at
-       FROM sources
-       WHERE platform = 'feed' AND enabled = 1 AND tags LIKE '%"drops"%' AND (next_poll_at IS NULL OR next_poll_at <= ?1)
-       ORDER BY last_polled_at ASC NULLS FIRST
-       LIMIT ?2`,
-      [NOW, 3],
-    )
-      .map(s => s.detail)
-      .join('\n');
-    expect(plan).toContain('sources_poll');
-    expect(plan).not.toMatch(/TEMP B-TREE/i);
-
+    const beforePoll = queries.length;
     const summary = await pollFeedBatch(db, 3, NOW, null, async src => {
       if (src.handle === 'airdroptracker_rss') {
         return [
@@ -261,6 +248,17 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
       }
       throw new Error('upstream 503');
     });
+
+    // Verify query plan of the actual production source-selection SQL executed by pollFeedBatch
+    const pollSql = queries
+      .slice(beforePoll)
+      .find(q => /FROM\s+sources/i.test(q) && /ORDER\s+BY\s+last_polled_at/i.test(q));
+    expect(pollSql).toBeDefined();
+    const plan = explain(pollSql!, [NOW, 3])
+      .map(s => s.detail)
+      .join('\n');
+    expect(plan).toContain('sources_poll');
+    expect(plan).not.toMatch(/TEMP B-TREE/i);
 
     // pendle_points (curated, not drops) must not be polled here
     expect(summary.polled).toBe(2);
@@ -631,5 +629,159 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
     // Second poll with identical feed (after TTL): remaining 3 unseen posts ingested, 0 duplicates re-ingested!
     const summary2 = await pollFeedBatch(db, 3, NOW + 35 * 60_000, null, async () => batch);
     expect(summary2.insertedPosts).toBe(3);
+  });
+
+  test('deduplicates repeated IDs within a single poll response before MAX_POSTS_PER_POLL, resolves relative Atom links with xml:base, prioritizes ended calendar claims, and rejects malformed wp_calendar payloads', async () => {
+    // 1. Ended claim precedence over generic claim keyword
+    const endedCal = parseWpCalendarToAirdropFeed(
+      [
+        {
+          id: 1,
+          date_gmt: '2026-11-22T12:00:00',
+          title: { rendered: 'Example Airdrop Claim Ended' },
+          content: { rendered: '<p>The claim window has closed.</p>' },
+          link: 'https://airdropalert.com/calendar/ended-claim/',
+        },
+        {
+          id: 2,
+          date_gmt: '2026-11-22T13:00:00',
+          title: { rendered: 'OpenProto Airdrop Claim Live' },
+          content: { rendered: '<p>Check eligibility now.</p>' },
+          link: 'https://airdropalert.com/calendar/open-claim/',
+        },
+      ],
+      NOW,
+    );
+    expect(endedCal.tge.find(t => t.n === 'Example Airdrop Claim Ended')?.s).toBe('Ended');
+    expect(endedCal.tge.find(t => t.n === 'OpenProto Airdrop Claim Live')?.s).toBe('Claimable');
+
+    // 2. Relative Atom links resolved via xml:base and response URL
+    const relAtom = `<?xml version="1.0" encoding="utf-8"?>
+      <feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://publisher.example/updates/">
+        <entry>
+          <id>rel-1</id>
+          <title>Relative Launch Guide</title>
+          <link rel="alternate" href="launch?utm_source=atom" />
+          <updated>2026-11-23T08:00:00Z</updated>
+          <summary>Testnet guide live.</summary>
+        </entry>
+        <entry xml:base="sub/">
+          <id>rel-2</id>
+          <title>Nested Entry Guide</title>
+          <link href="nested-post" />
+          <updated>2026-11-23T09:00:00Z</updated>
+          <summary>Nested testnet guide.</summary>
+        </entry>
+        <entry>
+          <id>abs-1</id>
+          <title>Absolute Link Guide</title>
+          <link href="https://other.example/airdrop?utm_medium=rss" />
+          <updated>2026-11-23T10:00:00Z</updated>
+          <summary>Absolute link stays intact.</summary>
+        </entry>
+      </feed>`;
+    const relPosts = parseRssOrAtomXml(relAtom);
+    expect(relPosts.find(p => p.id === 'rel-1')?.postUrl).toBe('https://publisher.example/updates/launch');
+    expect(relPosts.find(p => p.id === 'rel-2')?.postUrl).toBe('https://publisher.example/updates/sub/nested-post');
+    expect(relPosts.find(p => p.id === 'abs-1')?.postUrl).toBe('https://other.example/airdrop');
+
+    // Without xml:base, resolve against feed response URL
+    const noBaseAtom = `<?xml version="1.0" encoding="utf-8"?>
+      <feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+          <id>resp-base-1</id>
+          <title>Response Base Post</title>
+          <link href="post-99" />
+          <updated>2026-11-23T08:00:00Z</updated>
+          <summary>Uses response URL as base.</summary>
+        </entry>
+      </feed>`;
+    const respBasePosts = parseRssOrAtomXml(noBaseAtom, 'https://publisher.example/blog/atom.xml');
+    expect(respBasePosts[0]?.postUrl).toBe('https://publisher.example/blog/post-99');
+
+    // 3. Repeated event ID inside one response must not consume a MAX_POSTS_PER_POLL slot
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled, tags)
+         VALUES ('feed:airdropalert_calendar', 'feed', 'airdropalert_calendar', 'en', 0.85, 1, '["airdrop","calendar","tge","drops"]')`,
+      )
+      .run();
+    const dupBatch = [
+      {
+        id: 'evt-dup',
+        postUrl: 'https://airdropalert.com/calendar/dup',
+        postedAt: NOW - 10_000,
+        text: 'DupProto testnet airdrop quest live at https://dupproto.xyz/quest',
+        urls: ['https://dupproto.xyz/quest'],
+      },
+      {
+        id: 'evt-dup',
+        postUrl: 'https://airdropalert.com/calendar/dup',
+        postedAt: NOW - 10_000,
+        text: 'DupProto testnet airdrop quest live at https://dupproto.xyz/quest',
+        urls: ['https://dupproto.xyz/quest'],
+      },
+      ...Array.from({ length: 9 }, (_, i) => ({
+        id: `evt-${i + 1}`,
+        postUrl: `https://airdropalert.com/calendar/evt-${i + 1}`,
+        postedAt: NOW - (i + 2) * 60_000,
+        text: `CalProto${i + 1} testnet airdrop quest live at https://calproto${i + 1}.xyz/quest`,
+        urls: [`https://calproto${i + 1}.xyz/quest`],
+      })),
+    ];
+    const dupSummary = await pollFeedBatch(db, 3, NOW, null, async () => dupBatch);
+    expect(dupSummary.insertedPosts).toBe(10);
+    const ninth = await db
+      .prepare(`SELECT id FROM posts WHERE id = 'feed:airdropalert_calendar:evt-9'`)
+      .first<{ id: string }>();
+    expect(ninth?.id).toBe('feed:airdropalert_calendar:evt-9');
+
+    // 4. Malformed wp_calendar JSON object throws in fetchDropFeedPosts; valid empty [] succeeds
+    const prevFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ code: 'rest_forbidden', message: 'denied' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })) as unknown as typeof fetch;
+      await expect(
+        fetchDropFeedPosts(
+          {
+            platform: 'feed',
+            handle: 'airdropalert_calendar',
+            lang: 'en',
+            trust: 0.85,
+            tags: ['drops'],
+            enabled: true,
+            url: 'https://airdropalert.com/wp-json/wp/v2/aa_calendar_event',
+            parser: 'wp_calendar',
+          },
+          NOW,
+        ),
+      ).rejects.toThrow();
+
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })) as unknown as typeof fetch;
+      const emptyOk = await fetchDropFeedPosts(
+        {
+          platform: 'feed',
+          handle: 'airdropalert_calendar',
+          lang: 'en',
+          trust: 0.85,
+          tags: ['drops'],
+          enabled: true,
+          url: 'https://airdropalert.com/wp-json/wp/v2/aa_calendar_event',
+          parser: 'wp_calendar',
+        },
+        NOW,
+      );
+      expect(emptyOk).toEqual([]);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 });

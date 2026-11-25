@@ -126,7 +126,7 @@ describe('ASSO7878 Google Sheet parser', () => {
       22: '可多号',
       23: '少量',
     }),
-    // Layout C: Waitlist (URL is in Col 16, Col 21 is empty)
+    // Waitlist layout: URL pulled from Col 16 and ref stripped
     makeAssoRow({
       0: '候补',
       2: 'Ultrade',
@@ -145,6 +145,17 @@ describe('ASSO7878 Google Sheet parser', () => {
       19: '单独号',
       20: '无消耗',
       21: '',
+    }),
+    // Active post-header CEX row (exercises catInfo.skip === 'cex' with valid Col 21 URL)
+    makeAssoRow({
+      0: '交易所',
+      2: 'PostHeaderCex',
+      3: '1000万',
+      8: '潜力大',
+      13: '在参与',
+      14: '任务',
+      18: '持续',
+      21: 'https://postheadercex.xyz/signup',
     }),
     // Post-TGE banner + rows (URL is in Col 17; must route to tge[] NOT cards[])
     makeAssoRow({ 0: '下面这些项目已经发币（The project that has been TGE）' }),
@@ -195,10 +206,12 @@ describe('ASSO7878 Google Sheet parser', () => {
     expect(cardNames).toContain('Bitget Wallet');
     expect(cardNames).toContain('Monad Eco');
     expect(cardNames).toContain('Ultrade');
+    expect(cardNames).not.toContain('PostHeaderCex');
     expect(cardNames).not.toContain('HyperLaunch');
     expect(cardNames).not.toContain('RugProtocol');
     expect(cardNames).not.toContain('AbandonedProto');
     expect(cardNames.length).toBe(4);
+    expect(feed.tge.map(t => t.n)).not.toContain('PostHeaderCex');
 
     // Standard row checks
     const myriad = feed.cards.find(c => c.n === 'Myriad')!;
@@ -408,5 +421,51 @@ describe('arndxt 2026 English Google Sheet parser', () => {
     expect(feed.cards[0].best.n).toBe('Trade perps & earn points');
     expect(feed.cards[0].g).toBe('S');
     expect(feed.cards[0].sc).toBe(92);
+  });
+
+  test('checks every repeated start/startapp query value, preserves arrow word boundaries, omits positional fallbacks for absent named arndxt columns, and keeps projected quarter launches active', () => {
+    // 1. Repeated start / startapp values: referral in 2nd value still removes parameter; neutral repeated values stay.
+    const header = makeAssoRow({ 0: '分类', 2: '项目名称', 14: '交互方式', 21: '链接' });
+    const assoCsv = [
+      header,
+      makeAssoRow({ 0: '交易类', 2: 'DupStart1', 21: 'https://d.xyz/?start=neutral&start=ref_999&tab=1' }),
+      makeAssoRow({ 0: '', 2: 'DupStart2', 21: 'https://d.xyz/?start=ref_999&start=neutral&tab=1' }),
+      makeAssoRow({ 0: '', 2: 'DupStartApp', 21: 'https://d.xyz/?startapp=home&startapp=invite_abc' }),
+      makeAssoRow({ 0: '', 2: 'SafeStart', 21: 'https://d.xyz/?start=home&start=tab2' }),
+      makeAssoRow({ 0: '主网生态', 2: 'ArrowProto', 14: 'Connect\u2192Swap', 21: '主网' }),
+    ].join('\n');
+    const assoFeed = parseAsso7878Sheet(assoCsv, Date.parse('2026-11-24T00:00:00Z'));
+    const byName = new Map(assoFeed.cards.map(c => [c.n, c]));
+    expect(byName.get('DupStart1')?.url).toBe('https://d.xyz/?tab=1');
+    expect(byName.get('DupStart2')?.url).toBe('https://d.xyz/?tab=1');
+    expect(byName.get('DupStartApp')?.url).toBe('https://d.xyz/');
+    expect(byName.get('SafeStart')?.url).toBe('https://d.xyz/?start=home&start=tab2');
+    expect(byName.get('ArrowProto')?.tasks?.[0].title).toBe('Connect Swap');
+    expect(byName.get('ArrowProto')?.tasks?.[0].type).toBe('trading');
+
+    // 2. Named arndxt header without Website must NOT read col 2 (Reasoning) as Website.
+    const minimalArndxtCsv = [
+      'Project,Tasks,Reasoning',
+      'NamedOnlyProto,Complete quests,Read analysis at https://research.example/note',
+    ].join('\n');
+    const minimalFeed = parseArndxtSheet(minimalArndxtCsv, Date.parse('2026-11-24T00:00:00Z'));
+    expect(minimalFeed.cards.length).toBe(1);
+    expect(minimalFeed.cards[0].url).toBeNull();
+    expect(minimalFeed.cards[0].tasks?.[0].url).toBeNull();
+    expect(minimalFeed.cards[0].raiseNum).toBe(0);
+
+    // 3. Projected quarter launch must NOT flip to Token live merely because the quarter ended.
+    const quarterCsv = [
+      'Project,Website,TGE (approx),Airdrop tasks',
+      'ProjectedQ4,https://projq4.xyz,Token launch Q4 2026,Trade perps',
+      'ExplicitQ4,https://expq4.xyz,Q4 2026 (token launched),Claim',
+    ].join('\n');
+    const beforeEnd = parseArndxtSheet(quarterCsv, Date.parse('2026-11-24T00:00:00Z'));
+    expect(beforeEnd.cards.map(c => c.n)).toEqual(['ProjectedQ4']);
+    expect(beforeEnd.tge.map(t => t.n)).toEqual(['ExplicitQ4']);
+
+    const afterEnd = parseArndxtSheet(quarterCsv, Date.parse('2027-01-15T00:00:00Z'));
+    expect(afterEnd.cards.map(c => c.n)).toEqual(['ProjectedQ4']);
+    expect(afterEnd.tge.map(t => t.n)).toEqual(['ExplicitQ4']);
   });
 });

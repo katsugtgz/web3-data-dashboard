@@ -14,7 +14,7 @@ import type {
   TaskType,
 } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
-import { buildSurfIndex, computeClusterId } from '../worker/src/normalize/cluster';
+import { buildSurfIndex, computeClusterId, type SurfIndex } from '../worker/src/normalize/cluster';
 import { selectFeedLinks } from '../worker/src/normalize/domains';
 import { getRegistrableDomain, parseDropPost } from '../worker/src/normalize/parse';
 import { computeScore } from '../worker/src/normalize/score';
@@ -27,8 +27,8 @@ import {
 import {
   AIRDROPALERT_CALENDAR_URL,
   fetchDropFeedPosts,
+  parseWpCalendarFeedPayload,
   parseWpCalendarToAirdropFeed,
-  parseWpCalendarToFeedPosts,
 } from '../worker/src/sources/feeds';
 import {
   fetchCryptoSection,
@@ -38,7 +38,7 @@ import {
   normalizeDefiProtocols,
   normalizeDefiYields,
 } from '../worker/src/sources/markets';
-import { SEED_SOURCES } from '../worker/src/sources/registry';
+import { SEED_SOURCES, getSeedSourceById } from '../worker/src/sources/registry';
 import { normalizeSurf } from '../worker/src/sources/surf';
 import { fetchTelegramChannelHtml, parseTelegramHtml } from '../worker/src/sources/telegram';
 
@@ -249,6 +249,18 @@ async function buildMarkets(
 
   const sections = mergeSectionsWithPrior(fresh, await readPriorSections(), ['crypto', 'defi']);
   return sections ? { generatedAt: nowMs, sections, sectors } : null;
+}
+
+/** Matches Worker parseDropPost's guard: ticker fallback applies only when no projectDomain is present. */
+export function resolveSnapshotSurfMatch(
+  parsed: { projectDomain?: string; ticker?: string },
+  surfIndex: SurfIndex,
+) {
+  return (
+    (parsed.projectDomain && surfIndex.byDomain.get(parsed.projectDomain)) ||
+    (!parsed.projectDomain && parsed.ticker && surfIndex.byTicker.get(parsed.ticker)) ||
+    undefined
+  );
 }
 
 export interface SnapshotAccCluster {
@@ -478,7 +490,7 @@ async function buildDropsAndSources(
       try {
         const posts =
           src.parser === 'wp_calendar' && airdropAlertRawPromise
-            ? parseWpCalendarToFeedPosts(await airdropAlertRawPromise)
+            ? parseWpCalendarFeedPayload(await airdropAlertRawPromise)
             : await fetchDropFeedPosts(src, nowMs);
         healthMap.set(id, {
           id,
@@ -560,10 +572,7 @@ async function buildDropsAndSources(
     );
 
     const srcId = `${platform}:${post.handle}`;
-    const surfMatch =
-      (parsed.projectDomain && surfIndex.byDomain.get(parsed.projectDomain)) ||
-      (parsed.ticker && surfIndex.byTicker.get(parsed.ticker)) ||
-      undefined;
+    const surfMatch = resolveSnapshotSurfMatch(parsed, surfIndex);
 
     let acc = clusters.get(cid);
     if (!acc) {
@@ -642,7 +651,8 @@ async function runSnapshot(): Promise<void> {
   // Share single DefiLlama protocols & AirdropAlert calendar fetches concurrently
   // across airdrops, markets, and drop feeds without pre-awaiting serially.
   const sharedProtocolsPromise = workerBase ? undefined : fetchJson('https://api.llama.fi/protocols');
-  const sharedAirdropAlertPromise = workerBase ? undefined : fetchJson(AIRDROPALERT_CALENDAR_URL);
+  const airdropAlertUrl = getSeedSourceById('feed:airdropalert_calendar')?.url ?? AIRDROPALERT_CALENDAR_URL;
+  const sharedAirdropAlertPromise = workerBase ? undefined : fetchJson(airdropAlertUrl);
   sharedProtocolsPromise?.catch(() => {});
   sharedAirdropAlertPromise?.catch(() => {});
   const [{ feed: airdrops, curatedOutcomes }, markets] = await Promise.all([

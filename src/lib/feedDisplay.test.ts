@@ -449,6 +449,50 @@ describe('prepareFeedLinks', () => {
       expect(l.label.length).toBeLessThanOrEqual(34);
     }
   });
+
+  test('keeps all distinct selected same-host links with unique labels under max length when long paths differ in multiple positions', () => {
+    const a40 = 'a'.repeat(40);
+    const z40 = 'z'.repeat(40);
+    const sixUrls = [
+      `https://example.com/p/alpha-${a40}x${z40}`,
+      `https://example.com/p/alpha-${a40}y${z40}`,
+      `https://example.com/p/bravo-${a40}x${z40}`,
+      `https://example.com/p/bravo-${a40}y${z40}`,
+      `https://example.com/p/delta-${a40}x${z40}`,
+      `https://example.com/p/delta-${a40}y${z40}`,
+    ];
+    const links = prepareFeedLinks(
+      makeItem({
+        domain: 'example.com',
+        links: sixUrls.map(url => ({ url, known: false })),
+      }),
+      { max: 8 },
+    );
+    expect(links.map(l => l.url)).toEqual(sixUrls);
+    expect(new Set(links.map(l => l.label.toLowerCase())).size).toBe(6);
+    for (const l of links) {
+      expect(l.label.length).toBeLessThanOrEqual(34);
+    }
+
+    // Secondary query-parameter differences on identical paths also stay distinct without dropping links.
+    const queryUrls = [
+      'https://example.com/app/campaign?tab=quests&step=1',
+      'https://example.com/app/campaign?tab=quests&step=2',
+      'https://example.com/app/campaign?tab=quests&step=3',
+    ];
+    const qLinks = prepareFeedLinks(
+      makeItem({
+        domain: 'example.com',
+        links: queryUrls.map(url => ({ url, known: false })),
+      }),
+      { max: 6 },
+    );
+    expect(qLinks.map(l => l.url)).toEqual(queryUrls);
+    expect(new Set(qLinks.map(l => l.label.toLowerCase())).size).toBe(3);
+    for (const l of qLinks) {
+      expect(l.label.length).toBeLessThanOrEqual(34);
+    }
+  });
 });
 
 describe('formatRiskReasons', () => {

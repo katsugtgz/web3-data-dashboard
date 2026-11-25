@@ -4,9 +4,14 @@ import { join } from 'node:path';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
 import { extractDefiLlamaTokenlessAirdrops } from '../worker/src/sources/curated';
-import { fetchDuneAirdrops } from '../worker/src/sources/dune';
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
-import { fetchArndxtSheet, fetchAsso7878Sheet } from '../worker/src/sources/sheets';
+import { resolveCuratedSourceUrl } from '../worker/src/sources/registry';
+import {
+  ARNDXT_SHEET_URL,
+  ASSO7878_SHEET_URL,
+  fetchArndxtSheet,
+  fetchAsso7878Sheet,
+} from '../worker/src/sources/sheets';
 
 const dryRun = process.argv.includes('--dry-run');
 const nowMs = Date.now();
@@ -28,14 +33,24 @@ async function main() {
   // Fetch heavy DefiLlama payloads and Google Sheets concurrently outside the
   // Worker's 10 ms free-tier CPU budget; sheet failures are non-fatal so
   // DefiLlama snapshots still refresh.
+  const assoSheetUrl = resolveCuratedSourceUrl(
+    process.env.ASSO7878_SHEET_URL,
+    'sheet:asso7878_sheet',
+    ASSO7878_SHEET_URL,
+  );
+  const arndxtSheetUrl = resolveCuratedSourceUrl(
+    process.env.ARNDXT_SHEET_URL,
+    'sheet:arndxt_sheet',
+    ARNDXT_SHEET_URL,
+  );
   const [protocolsRaw, yieldsRaw, asso7878Feed, arndxtFeed] = await Promise.all([
     fetchJson('https://api.llama.fi/protocols'),
     fetchJson('https://yields.llama.fi/pools'),
-    fetchAsso7878Sheet(undefined, nowMs).catch(err => {
+    fetchAsso7878Sheet(assoSheetUrl, nowMs).catch(err => {
       console.warn('Optional ASSO7878 sheet fetch failed (continuing with other snapshots):', err);
       return null;
     }),
-    fetchArndxtSheet(undefined, nowMs).catch(err => {
+    fetchArndxtSheet(arndxtSheetUrl, nowMs).catch(err => {
       console.warn('Optional arndxt sheet fetch failed (continuing with other snapshots):', err);
       return null;
     }),
@@ -69,18 +84,8 @@ async function main() {
   if (arndxtFeed && (arndxtFeed.cards.length > 0 || arndxtFeed.tge.length > 0)) {
     snapshotsToWrite.push(['airdrops:arndxt', arndxtFeed]);
   }
-
-  // Strictly opt-in paid Dune integration: 100% keyless $0 when DUNE_API_KEY is unset.
-  const duneApiKey = process.env.DUNE_API_KEY?.trim();
-  if (duneApiKey) {
-    try {
-      const duneSnapshot = await fetchDuneAirdrops(duneApiKey, undefined, nowMs);
-      snapshotsToWrite.push(['airdrops:dune', duneSnapshot]);
-      console.log(`Fetched Dune airdrop snapshot: ${duneSnapshot.queries.length} queries`);
-    } catch (err) {
-      console.warn('Optional Dune airdrop fetch failed (continuing with DefiLlama snapshots):', err);
-    }
-  }
+  // Note: Dune snapshot ingestion (worker/src/sources/dune.ts) is deferred until
+  // a Worker/frontend response consumer reads the airdrops:dune snapshot body.
 
   if (dryRun) {
     console.log('Dry-run complete (skipping D1 remote write).');

@@ -125,6 +125,44 @@ describe('worker/sources.json registry', () => {
         { platform: 'telegram', handle: 'bad_tg_parser', lang: 'en', trust: 0.8, tags: [], enabled: true, parser: 'bogus' },
       ]),
     ).toThrow();
+    // Role/platform parser compatibility checks
+    expect(() =>
+      validateSources([
+        { platform: 'feed', handle: 'pendle_as_drops', lang: 'en', trust: 0.85, tags: ['drops'], enabled: true, url: 'https://api-v2.pendle.finance/core/v1/markets/all', parser: 'pendle' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      validateSources([
+        { platform: 'feed', handle: 'merkl_as_drops', lang: 'en', trust: 0.85, tags: ['drops'], enabled: true, url: 'https://api.merkl.xyz/v4/opportunities', parser: 'merkl' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      validateSources([
+        { platform: 'feed', handle: 'rss_as_curated', lang: 'en', trust: 0.8, tags: ['curated'], enabled: true, url: 'https://example.com/rss', parser: 'rss' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      validateSources([
+        { platform: 'sheet', handle: 'sheet_with_rss', lang: 'en', trust: 0.8, tags: ['curated'], enabled: true, url: 'https://docs.google.com/spreadsheets/d/abc/gviz/tq?tqx=out:csv', parser: 'rss' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      validateSources([
+        { platform: 'sheet', handle: 'sheet_as_drops', lang: 'en', trust: 0.8, tags: ['drops'], enabled: true, url: 'https://docs.google.com/spreadsheets/d/abc/gviz/tq?tqx=out:csv', parser: 'arndxt' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      validateSources([
+        { platform: 'telegram', handle: 'tg_with_rss', lang: 'en', trust: 0.8, tags: [], enabled: true, parser: 'rss' },
+      ]),
+    ).toThrow();
+    // Curated-only pendle and dual-role wp_calendar remain valid
+    expect(
+      validateSources([
+        { platform: 'feed', handle: 'pendle_curated', lang: 'en', trust: 0.85, tags: ['curated'], enabled: true, url: 'https://api-v2.pendle.finance/core/v1/markets/all', parser: 'pendle' },
+        { platform: 'feed', handle: 'calendar_dual', lang: 'en', trust: 0.85, tags: ['drops', 'curated'], enabled: true, url: 'https://airdropalert.com/wp-json/wp/v2/aa_calendar_event', parser: 'wp_calendar' },
+      ]).length,
+    ).toBe(2);
   });
 
   test('keys SEED_SOURCE_BY_ID by lowercase id and exposes case-insensitive getSeedSourceById', () => {

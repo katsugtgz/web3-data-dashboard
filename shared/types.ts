@@ -14,6 +14,7 @@ export interface CardTask {
   timeMinutes: number | null;
   url: string | null;
   isExclusive?: boolean;
+  source?: string;
 }
 
 export interface Card {

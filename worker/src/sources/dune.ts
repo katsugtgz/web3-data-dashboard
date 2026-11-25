@@ -53,8 +53,8 @@ export function normalizeDuneRows(rawRows: unknown, maxRows = 50): Record<string
 }
 
 /**
- * Optional Dune Analytics fetcher used ONLY when `DUNE_API_KEY` is provided in
- * `scripts/ingest-heavy.mts`. Default runtime remains 100% keyless ($0).
+ * Optional Dune Analytics fetcher adapter (deferred from scheduled ingest until
+ * a response consumer reads `airdrops:dune`). Default runtime remains 100% keyless ($0).
  */
 export async function fetchDuneAirdrops(
   apiKey: string,

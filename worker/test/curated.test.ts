@@ -604,4 +604,100 @@ describe('curated multi-source airdrop aggregator', () => {
       }),
     ).rejects.toThrow(/All curated airdrop sources failed/i);
   });
+
+  test('strips merged sheet tasks from Surf fallback cards when the sheet source is later disabled', async () => {
+    const surfCard = makeCard({
+      n: 'SharedProto',
+      id: 'surf-shared',
+      source: 'Surf',
+      url: 'https://sharedproto.xyz/app',
+      taskTypes: ['testnet'],
+      tasks: [{ title: 'Surf official task', type: 'testnet', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://sharedproto.xyz/app' }],
+    });
+    const sheetCard = makeCard({
+      n: 'SharedProto',
+      id: 'asso7878:sharedproto',
+      source: 'ASSO7878',
+      url: 'https://sharedproto.xyz/sheet-task',
+      taskTypes: ['social'],
+      tasks: [{ title: 'Sheet bonus task', type: 'social', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://sharedproto.xyz/sheet-task' }],
+    });
+    const prevMerged = mergeCuratedAirdropFeeds(
+      [
+        { cards: [surfCard], tge: [], counts: { active: 1, preToken: 1 }, fetchedAt: NOW - 60_000 },
+        { cards: [sheetCard], tge: [], counts: { active: 1, preToken: 1 }, fetchedAt: NOW - 60_000 },
+      ],
+      NOW - 60_000,
+    );
+    expect(prevMerged.cards[0].tasks?.map(t => t.title)).toEqual(['Surf official task', 'Sheet bonus task']);
+
+    // Operator disables ASSO7878, then Surf fails while Pendle succeeds -> fallback Surf card must NOT restore the disabled sheet task.
+    const nextRes = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed: prevMerged,
+      disabledSourceIds: new Set(['sheet:asso7878_sheet']),
+      fetchers: {
+        surf: async () => {
+          throw new Error('surf outage');
+        },
+        asso7878: async () => {
+          throw new Error('must not run while disabled');
+        },
+        arndxt: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+        pendle: async () => ({
+          cards: [makeCard({ n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0x1' })],
+          tge: [],
+          counts: { active: 1, preToken: 1 },
+          fetchedAt: NOW,
+        }),
+        merkl: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+        airdropalert: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+      },
+    });
+
+    const restoredSurf = nextRes.feed.cards.find(c => c.n === 'SharedProto')!;
+    expect(restoredSurf).toBeDefined();
+    expect(restoredSurf.tasks?.map(t => t.title)).toEqual(['Surf official task']);
+    expect(restoredSurf.tk).toBe('1/1');
+    expect(restoredSurf.taskTypes).toEqual(['testnet']);
+  });
+
+  test('resolves curated source URLs from the source registry while keeping explicit URL overrides higher priority', async () => {
+    const requested: string[] = [];
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      return new Response('offline', { status: 503 });
+    }) as unknown as typeof fetch;
+
+    const customRegistry = new Map([
+      ['sheet:asso7878_sheet', { platform: 'sheet' as const, handle: 'asso7878_sheet', lang: 'zh', trust: 0.75, tags: ['curated'], enabled: true, url: 'https://registry.test/asso.csv', parser: 'asso7878' as const }],
+      ['sheet:arndxt_sheet', { platform: 'sheet' as const, handle: 'arndxt_sheet', lang: 'en', trust: 0.8, tags: ['curated'], enabled: true, url: 'https://registry.test/arndxt.csv', parser: 'arndxt' as const }],
+      ['feed:pendle_points', { platform: 'feed' as const, handle: 'pendle_points', lang: 'en', trust: 0.85, tags: ['curated'], enabled: true, url: 'https://registry.test/pendle.json', parser: 'pendle' as const }],
+      ['feed:merkl_opportunities', { platform: 'feed' as const, handle: 'merkl_opportunities', lang: 'en', trust: 0.85, tags: ['curated'], enabled: true, url: 'https://registry.test/merkl.json', parser: 'merkl' as const }],
+      ['feed:airdropalert_calendar', { platform: 'feed' as const, handle: 'airdropalert_calendar', lang: 'en', trust: 0.85, tags: ['drops', 'tge'], enabled: true, url: 'https://registry.test/calendar.json', parser: 'wp_calendar' as const }],
+    ]);
+
+    try {
+      await expect(
+        buildCuratedAirdropFeed({
+          nowMs: NOW,
+          surfUrl: 'https://override.test/surf.json',
+          arndxtUrl: 'https://override.test/arndxt.csv',
+          sourceRegistry: customRegistry,
+        }),
+      ).rejects.toThrow(/All curated airdrop sources failed/i);
+
+      expect(requested).toContain('https://override.test/surf.json');
+      expect(requested).toContain('https://registry.test/asso.csv');
+      expect(requested).toContain('https://override.test/arndxt.csv');
+      expect(requested).not.toContain('https://registry.test/arndxt.csv');
+      expect(requested).toContain('https://registry.test/pendle.json');
+      expect(requested).toContain('https://registry.test/merkl.json');
+      expect(requested).toContain('https://registry.test/calendar.json');
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
 });

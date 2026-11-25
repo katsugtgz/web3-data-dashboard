@@ -210,7 +210,7 @@ const SHEET_HTTP_URL_RE = /https?:\/\/[^\s<>"'`]+/i;
 
 function stripSearchParamsInPlace(params: URLSearchParams, isRoot: boolean, isTelegram: boolean): boolean {
   let changed = false;
-  for (const key of [...params.keys()]) {
+  for (const key of new Set(params.keys())) {
     const lowerKey = key.toLowerCase();
     if (SHEET_STRIP_QUERY_PARAMS.has(lowerKey)) {
       params.delete(key);
@@ -219,8 +219,8 @@ function stripSearchParamsInPlace(params: URLSearchParams, isRoot: boolean, isTe
       params.delete(key);
       changed = true;
     } else if (lowerKey === 'start' || lowerKey === 'startapp') {
-      const val = (params.get(key) ?? '').trim();
-      if (isTelegram || SHEET_REF_START_TOKEN_RE.test(val) || SHEET_REF_START_WORD_RE.test(val)) {
+      const vals = params.getAll(key).map(v => v.trim());
+      if (isTelegram || vals.some(val => SHEET_REF_START_TOKEN_RE.test(val) || SHEET_REF_START_WORD_RE.test(val))) {
         params.delete(key);
         changed = true;
       }
@@ -638,7 +638,7 @@ const ARNDXT_TOKEN_LAUNCH_RE = /\btoken\s+launch\b/i;
 const ARNDXT_FUTURE_QUALIFIER_RE = /\b(?:expected|estimated|est\.?|target|planned|rumored|upcoming|tba)\b/i;
 const ARNDXT_MONTH_YEAR_RE =
   /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(?:\d{1,2},?\s+)?(20\d{2})\b/i;
-const ARNDXT_QUARTER_YEAR_RE = /\bQ([1-4])\s+(20\d{2})\b/i;
+const ARNDXT_QUARTER_RE = /\bQ[1-4](?:\s+20\d{2})?\b/i;
 const ARNDXT_YEAR_RE = /\b(20\d{2})\b/g;
 const MONTH_NAME_INDEX: Record<string, number> = {
   jan: 0,
@@ -667,15 +667,9 @@ function hasArndxtFutureQualifier(tgeRaw: string, nowMs: number): boolean {
       if (monthEndMs > nowMs) return true;
     }
   }
-  const quarterMatch = tgeRaw.match(ARNDXT_QUARTER_YEAR_RE);
-  if (quarterMatch) {
-    const q = Number(quarterMatch[1]);
-    const year = Number(quarterMatch[2]);
-    if (Number.isFinite(q) && Number.isFinite(year)) {
-      const qEndMs = Date.UTC(year, q * 3, 0, 23, 59, 59, 999);
-      if (qEndMs > nowMs) return true;
-    }
-  }
+  // Quarter windows (e.g. "Token launch Q4 2026") are projected schedules,
+  // never launch confirmation merely because the quarter ended.
+  if (ARNDXT_QUARTER_RE.test(tgeRaw)) return true;
   for (const m of tgeRaw.matchAll(ARNDXT_YEAR_RE)) {
     const year = Number(m[1]);
     if (Number.isFinite(year) && year > currentYear) return true;
@@ -738,17 +732,34 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
     return { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: nowMs };
   }
 
+  // Only apply canonical arndxt positional defaults (tasks=8, score=11) when
+  // the header matches the standard 12-column arndxt layout and those columns
+  // are not claimed by another named field; otherwise absent named columns stay missing.
+  const isCanonicalArndxtLayout =
+    rows[headerIdx].length >= 12 &&
+    colIndex.project === 0 &&
+    colIndex.website === 2 &&
+    colIndex.raise === 3 &&
+    colIndex.tge === 5 &&
+    colIndex.reasoning === 6;
+  if (isCanonicalArndxtLayout) {
+    const claimedCols = new Set(Object.values(colIndex));
+    if (colIndex.tasks === undefined && !claimedCols.has(8)) colIndex.tasks = 8;
+    if (colIndex.score === undefined && !claimedCols.has(11)) colIndex.score = 11;
+  }
+
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
-    const name = stripOrTranslateCjk(row[colIndex.project ?? 0] ?? '');
+    const cell = (idx: number | undefined): string | undefined => (idx !== undefined ? row[idx] : undefined);
+    const name = stripOrTranslateCjk(cell(colIndex.project) ?? '');
     if (!name) continue;
 
-    const url = extractCleanSheetUrl(row[colIndex.website ?? 2]);
-    const raiseNum = parseCjkRaiseUsd(row[colIndex.raise ?? 3]);
-    const tgeRaw = stripOrTranslateCjk(row[colIndex.tge ?? 5] ?? '');
-    const tasksRaw = stripOrTranslateCjk(row[colIndex.tasks ?? 8] ?? '');
-    const reasoningRaw = stripOrTranslateCjk(row[colIndex.reasoning ?? 6] ?? '');
-    const scoreRaw = Number.parseFloat((row[colIndex.score ?? 11] ?? '').trim());
+    const url = extractCleanSheetUrl(cell(colIndex.website));
+    const raiseNum = parseCjkRaiseUsd(cell(colIndex.raise));
+    const tgeRaw = stripOrTranslateCjk(cell(colIndex.tge) ?? '');
+    const tasksRaw = stripOrTranslateCjk(cell(colIndex.tasks) ?? '');
+    const reasoningRaw = stripOrTranslateCjk(cell(colIndex.reasoning) ?? '');
+    const scoreRaw = Number.parseFloat((cell(colIndex.score) ?? '').trim());
 
     const sc = Number.isFinite(scoreRaw)
       ? Math.max(20, Math.min(95, Math.round(scoreRaw * 17 + 7)))

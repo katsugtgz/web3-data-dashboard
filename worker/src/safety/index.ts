@@ -378,6 +378,27 @@ export function collectKnownDomainEntries(
   return [...map.values()];
 }
 
+const knownDomainSeedQueues = new WeakMap<D1Database, Promise<void>>();
+
+async function withKnownDomainSeedLock<T>(db: D1Database, fn: () => Promise<T>): Promise<T> {
+  const prev = knownDomainSeedQueues.get(db) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const chained = prev.then(() => gate, () => gate);
+  knownDomainSeedQueues.set(db, chained);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (knownDomainSeedQueues.get(db) === chained) {
+      knownDomainSeedQueues.delete(db);
+    }
+  }
+}
+
 export async function seedKnownDomains(
   db: D1Database,
   surfFeed?: AirdropFeed | null,
@@ -386,49 +407,57 @@ export async function seedKnownDomains(
   const entries = collectKnownDomainEntries(surfFeed, defiSection);
   if (entries.length === 0) return 0;
 
-  const stmts = entries.map(e =>
-    db
-      .prepare(
-        `INSERT INTO known_domains (domain, project, origin) VALUES (?1, ?2, ?3)
-         ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin
-         WHERE known_domains.project IS NOT excluded.project
-            OR known_domains.origin IS NOT excluded.origin`,
-      )
-      .bind(e.domain, e.project, e.origin),
-  );
-
-  const chunks = [];
-  for (let i = 0; i < stmts.length; i += 40) {
-    chunks.push(db.batch(stmts.slice(i, i + 40)));
-  }
-  try {
-    await Promise.all(chunks);
-    // Prune stale origin = 'curated' rows when an authoritative curated feed was supplied;
-    // keep surf, defi, and platform rows untouched.
-    if (surfFeed != null) {
-      const existingCurated = await db
-        .prepare(`SELECT domain FROM known_domains WHERE origin = 'curated'`)
-        .all<{ domain: string }>();
-      const activeDomains = new Set(entries.map(e => e.domain.toLowerCase()));
-      const staleDomains = (existingCurated.results ?? [])
-        .map(r => r.domain)
-        .filter(d => !activeDomains.has(d.toLowerCase()));
-      if (staleDomains.length > 0) {
-        const delStmts = staleDomains.map(d =>
-          db.prepare(`DELETE FROM known_domains WHERE domain = ?1 AND origin = 'curated'`).bind(d),
-        );
-        const delChunks = [];
-        for (let i = 0; i < delStmts.length; i += 40) {
-          delChunks.push(db.batch(delStmts.slice(i, i + 40)));
-        }
-        await Promise.all(delChunks);
+  // Serialize per-DB seed calls and execute upserts + curated prune in one atomic
+  // D1 batch transaction so no concurrent seed can interleave a prune over fresh rows.
+  // Multi-row upserts (30 rows * 3 params = 90) stay under D1's 100-param statement cap.
+  const UPSERT_ROWS_PER_STMT = 30;
+  return withKnownDomainSeedLock(db, async () => {
+    const batchStmts: D1PreparedStatement[] = [];
+    for (let i = 0; i < entries.length; i += UPSERT_ROWS_PER_STMT) {
+      const slice = entries.slice(i, i + UPSERT_ROWS_PER_STMT);
+      const placeholders = slice
+        .map((_, idx) => `(?${idx * 3 + 1}, ?${idx * 3 + 2}, ?${idx * 3 + 3})`)
+        .join(', ');
+      const binds: string[] = [];
+      for (const e of slice) {
+        binds.push(e.domain, e.project, e.origin);
       }
+      batchStmts.push(
+        db
+          .prepare(
+            `INSERT INTO known_domains (domain, project, origin) VALUES ${placeholders}
+             ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin
+             WHERE (known_domains.project IS NOT excluded.project
+                    OR known_domains.origin IS NOT excluded.origin)
+               AND NOT (excluded.origin = 'curated' AND known_domains.origin IN ('defi', 'surf', 'platform'))`,
+          )
+          .bind(...binds),
+      );
     }
-  } finally {
-    knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
-    knownDomainsCache.delete(db);
-  }
-  return entries.length;
+
+    // Prune stale origin = 'curated' rows atomically inside the same batch when
+    // an authoritative curated feed was supplied; surf, defi, and platform rows stay untouched.
+    if (surfFeed != null) {
+      const activeDomains = [...new Set(entries.map(e => e.domain.toLowerCase()))];
+      batchStmts.push(
+        db
+          .prepare(
+            `DELETE FROM known_domains
+             WHERE origin = 'curated'
+               AND lower(domain) NOT IN (SELECT value FROM json_each(?1))`,
+          )
+          .bind(JSON.stringify(activeDomains)),
+      );
+    }
+
+    try {
+      await db.batch(batchStmts);
+    } finally {
+      knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
+      knownDomainsCache.delete(db);
+    }
+    return entries.length;
+  });
 }
 
 export interface KnownDomainsLoaded {

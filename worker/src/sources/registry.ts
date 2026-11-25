@@ -16,6 +16,13 @@ export const ALLOWED_SOURCE_PARSERS = [
 export type SourceParser = (typeof ALLOWED_SOURCE_PARSERS)[number];
 
 const ALLOWED_SOURCE_PARSER_SET: ReadonlySet<string> = new Set(ALLOWED_SOURCE_PARSERS);
+const SHEET_SOURCE_PARSER_SET: ReadonlySet<SourceParser> = new Set(['asso7878', 'arndxt']);
+const DROP_FEED_PARSER_SET: ReadonlySet<SourceParser> = new Set(['rss', 'wp_calendar', 'substack', 'galxe']);
+const CURATED_FEED_PARSER_SET: ReadonlySet<SourceParser> = new Set(['wp_calendar', 'pendle', 'merkl']);
+const FEED_SOURCE_PARSER_SET: ReadonlySet<SourceParser> = new Set([
+  ...DROP_FEED_PARSER_SET,
+  ...CURATED_FEED_PARSER_SET,
+]);
 
 export interface SourceConfig {
   platform: SourcePlatform;
@@ -92,10 +99,31 @@ export function validateSources(raw: unknown): SourceConfig[] {
 
     let parser: SourceParser | undefined;
     if (platform === 'sheet' || platform === 'feed' || item.parser !== undefined) {
+      if (platform !== 'sheet' && platform !== 'feed') {
+        throw new Error(`sources[${i}].parser is not supported for platform ${platform}`);
+      }
       if (typeof item.parser !== 'string' || !ALLOWED_SOURCE_PARSER_SET.has(item.parser.trim())) {
         throw new Error(`sources[${i}].parser invalid: ${String(item.parser)}`);
       }
       parser = item.parser.trim() as SourceParser;
+      if (platform === 'sheet') {
+        if (!SHEET_SOURCE_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" is not valid for sheet platform`);
+        }
+        if (tags.includes('drops')) {
+          throw new Error(`sources[${i}] sheet source cannot use drops polling role`);
+        }
+      } else {
+        if (!FEED_SOURCE_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" is not valid for feed platform`);
+        }
+        if (tags.includes('drops') && !DROP_FEED_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" cannot run in drops polling role`);
+        }
+        if (tags.includes('curated') && !CURATED_FEED_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" cannot run in curated polling role`);
+        }
+      }
     }
 
     const entry: SourceConfig = { platform, handle, lang, trust, tags, enabled };
@@ -115,6 +143,17 @@ export const SEED_SOURCE_BY_ID: ReadonlyMap<string, SourceConfig> = new Map(
 
 export function getSeedSourceById(id: string): SourceConfig | undefined {
   return SEED_SOURCE_BY_ID.get(id.toLowerCase());
+}
+
+export function resolveCuratedSourceUrl(
+  overrideUrl: string | undefined,
+  sourceId: string,
+  fallbackUrl: string,
+  registry: ReadonlyMap<string, SourceConfig> = SEED_SOURCE_BY_ID,
+): string {
+  const explicit = overrideUrl?.trim();
+  if (explicit) return explicit;
+  return registry.get(sourceId.toLowerCase())?.url ?? fallbackUrl;
 }
 
 /**

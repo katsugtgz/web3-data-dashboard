@@ -5,8 +5,10 @@ import {
   isEnglishText,
   mergePostsStable,
   mergeSectionsWithPrior,
+  resolveSnapshotSurfMatch,
   type MergePost,
 } from './snapshot.mts';
+import { parseWpCalendarFeedPayload } from '../worker/src/sources/feeds';
 import type { FeedResponse, MarketSection } from '../shared/types';
 
 function section(id: string, title = `T ${id}`): MarketSection {
@@ -247,5 +249,24 @@ describe('finalizeSnapshotCluster (Worker safety & link parity)', () => {
     );
     expect(twinItem.risk.level).toBe('ok');
     expect(twinItem.risk.reasons).toEqual([]);
+  });
+
+  test('resolveSnapshotSurfMatch does not use ticker fallback when a post has a different projectDomain, and parseWpCalendarFeedPayload rejects malformed objects', () => {
+    const surfIndex = {
+      byDomain: new Map([['knownsurf.xyz', { name: 'KnownSurf', tier: 'S' as const, cardRank: 1 }]]),
+      byTicker: new Map([['SURF', { name: 'KnownSurf', tier: 'S' as const, cardRank: 1 }]]),
+    };
+
+    // Unmatched projectDomain + matching ticker must NOT attach another project's Surf tier
+    expect(resolveSnapshotSurfMatch({ projectDomain: 'unrelated.xyz', ticker: 'SURF' }, surfIndex)).toBeUndefined();
+    // Matching projectDomain still resolves
+    expect(resolveSnapshotSurfMatch({ projectDomain: 'knownsurf.xyz', ticker: 'OTHER' }, surfIndex)?.tier).toBe('S');
+    // No projectDomain -> ticker fallback preserved
+    expect(resolveSnapshotSurfMatch({ ticker: 'SURF' }, surfIndex)?.tier).toBe('S');
+
+    // Calendar payload validation: non-array object rejects; empty array succeeds
+    expect(() => parseWpCalendarFeedPayload({ code: 'rest_forbidden' })).toThrow();
+    expect(() => parseWpCalendarFeedPayload(null)).toThrow();
+    expect(parseWpCalendarFeedPayload([])).toEqual([]);
   });
 });

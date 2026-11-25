@@ -279,10 +279,11 @@ async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
   await postProcessIngest(env, summary.ingestedResults, nowMs);
 }
 
-async function loadCachedDefiLlamaAirdrops(db: D1Database): Promise<AirdropFeed | null> {
+async function loadCachedDefiLlamaAirdrops(db: D1Database, nowMs: number): Promise<AirdropFeed | null> {
   try {
     const row = await readSnapshot(db, 'airdrops:defillama');
     if (!row?.body || row.body === '{}') return null;
+    if (nowMs - row.fetched_at > SIX_H_MS) return null;
     const parsed = JSON.parse(row.body) as AirdropFeed;
     return Array.isArray(parsed?.cards) ? parsed : null;
   } catch (err) {
@@ -415,7 +416,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
 
       const [prevLoaded, defiLlamaFeed, cachedAsso, cachedArndxt, sourceStates] = await Promise.all([
         !prevMeta || prevMeta.body_len > 2 ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: null, fetchedAt: 0 }),
-        loadCachedDefiLlamaAirdrops(env.DB),
+        loadCachedDefiLlamaAirdrops(env.DB, nowMs),
         loadFreshCachedSheetFeed(env.DB, 'airdrops:asso7878', nowMs),
         loadFreshCachedSheetFeed(env.DB, 'airdrops:arndxt', nowMs),
         (async () => {
@@ -558,12 +559,16 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   // Best-effort X polling + chronological keyless drop feeds (both throttled via sources.next_poll_at)
   const xBatch = Math.max(1, Number.parseInt(env.X_BATCH_SIZE ?? '3', 10) || 3);
   const feedBatch = Math.max(1, Number.parseInt(env.FEED_BATCH_SIZE ?? '3', 10) || 3);
-  const [xSummary, feedSummary] = await Promise.all([
+  const [xRes, feedRes] = await Promise.allSettled([
     pollXBatch(env.DB, xBatch, nowMs, surf, undefined, env.X_RSS_MIRROR_BASE),
     pollFeedBatch(env.DB, feedBatch, nowMs, surf),
   ]);
+  if (xRes.status === 'rejected') console.error('cron-error:pollXBatch', xRes.reason);
+  if (feedRes.status === 'rejected') console.error('cron-error:pollFeedBatch', feedRes.reason);
+  const xIngested = xRes.status === 'fulfilled' ? xRes.value.ingestedResults : [];
+  const feedIngested = feedRes.status === 'fulfilled' ? feedRes.value.ingestedResults : [];
   try {
-    await postProcessIngest(env, [...xSummary.ingestedResults, ...feedSummary.ingestedResults], nowMs);
+    await postProcessIngest(env, [...xIngested, ...feedIngested], nowMs);
   } catch (err) {
     console.error('cron-error:postProcessIngest', err);
   }

@@ -280,7 +280,9 @@ export function parseCjkRaiseUsd(raw?: string): number {
           : 1e3;
     return Math.round(num * mult);
   }
-  const plainUsdMatch = trimmed.match(/^(?:~|≈|>|<|approx\.?\s*)*\$\s*([\d,]+(?:\.\d+)?)(?:\b|[+\s(,;/-]|$)/i);
+  const plainUsdMatch = trimmed.match(
+    /^(?:~|≈|>|<|approx\.?\s*)*\$\s*([\d,]+(?:\.\d+)?)(?:\s*(?:usd|usdt|usdc))?(?=$|[+\s([（,;/-])/i,
+  );
   if (plainUsdMatch) {
     const num = Number(plainUsdMatch[1].replace(/,/g, ''));
     return Number.isFinite(num) && num > 0 ? Math.round(num) : 0;
@@ -420,12 +422,19 @@ export function parseAssoBookmarkDate(raw?: string, defaultYear = 2026): { label
     const month = Number(md[1]);
     const day = Number(md[2]);
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const mm = String(month).padStart(2, '0');
-      const dd = String(day).padStart(2, '0');
-      return {
-        label: `${defaultYear}-${mm}-${dd}`,
-        updatedTs: Math.floor(Date.UTC(defaultYear, month - 1, day) / 1000),
-      };
+      const utcDate = new Date(Date.UTC(defaultYear, month - 1, day));
+      if (
+        utcDate.getUTCFullYear() === defaultYear &&
+        utcDate.getUTCMonth() === month - 1 &&
+        utcDate.getUTCDate() === day
+      ) {
+        const mm = String(month).padStart(2, '0');
+        const dd = String(day).padStart(2, '0');
+        return {
+          label: `${defaultYear}-${mm}-${dd}`,
+          updatedTs: Math.floor(utcDate.getTime() / 1000),
+        };
+      }
     }
   }
 
@@ -602,7 +611,9 @@ export function translateAssoStep(raw?: string): string {
   if (!trimmed || trimmed === '/') return '';
   let s = trimmed
     .replace(LIST_NUM_PREFIX_RE, '')
-    .replace(/[\u27A8\u27A1\u2192\uFE0F]+/g, '')
+    .replace(/\uFE0F/g, '')
+    .replace(/[\u27A8\u27A1\u2192]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
   if (!s) return '';
   if (!NON_ASCII_RE.test(s)) {

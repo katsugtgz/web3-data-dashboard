@@ -17,6 +17,7 @@ import {
   fetchPendlePoints,
   fetchWpCalendarAirdrops,
 } from './feeds';
+import { resolveCuratedSourceUrl, type SourceConfig } from './registry';
 import { ARNDXT_SHEET_URL, ASSO7878_SHEET_URL, fetchArndxtSheet, fetchAsso7878Sheet } from './sheets';
 import { SURF_AIRDROPS_URL, fetchSurfAirdrops } from './surf';
 
@@ -247,11 +248,14 @@ function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
       if (existing.length >= 6) break;
       if (seenTitles.has(st.title.toLowerCase())) continue;
       seenTitles.add(st.title.toLowerCase());
-      if (secondaryIsUntrustedSheet && st.url) {
-        const stDom = getRegistrableDomain(st.url)?.toLowerCase();
-        existing.push(stDom && primaryDomains?.has(stDom) ? st : { ...st, url: null });
+      const taskSource =
+        st.source ?? (secondary.source && secondary.source !== primary.source ? secondary.source : undefined);
+      const taskWithSource = taskSource && st.source !== taskSource ? { ...st, source: taskSource } : st;
+      if (secondaryIsUntrustedSheet && taskWithSource.url) {
+        const stDom = getRegistrableDomain(taskWithSource.url)?.toLowerCase();
+        existing.push(stDom && primaryDomains?.has(stDom) ? taskWithSource : { ...taskWithSource, url: null });
       } else {
-        existing.push(st);
+        existing.push(taskWithSource);
       }
     }
     merged.tasks = existing;
@@ -341,6 +345,7 @@ export interface CuratedAirdropOptions {
   pendleUrl?: string;
   merklUrl?: string;
   airdropAlertUrl?: string;
+  sourceRegistry?: ReadonlyMap<string, SourceConfig>;
   defiLlamaFeed?: AirdropFeed | null;
   cachedAsso7878Feed?: AirdropFeed | null;
   cachedArndxtFeed?: AirdropFeed | null;
@@ -372,9 +377,35 @@ export interface CuratedAirdropResult {
   outcomes: CuratedSourceOutcome[];
 }
 
-function slicePrevFeedForSource(prevFeed: AirdropFeed | null | undefined, sourceName: string): AirdropFeed | null {
+function stripExcludedMergedTasks(card: Card, excludedTaskSources?: ReadonlySet<string>): Card {
+  if (!excludedTaskSources || excludedTaskSources.size === 0 || !card.tasks?.length) {
+    return card;
+  }
+  const keptTasks = card.tasks.filter(t => !t.source || !excludedTaskSources.has(t.source.trim().toLowerCase()));
+  if (keptTasks.length === card.tasks.length) return card;
+  const nextTaskTypes =
+    keptTasks.length > 0
+      ? [...new Set(keptTasks.map(t => t.type).filter(Boolean))]
+      : card.best?.ty
+        ? [card.best.ty]
+        : [];
+  return {
+    ...card,
+    tasks: keptTasks,
+    tk: `${keptTasks.length}/${keptTasks.length}`,
+    taskTypes: nextTaskTypes.length > 0 ? nextTaskTypes : card.taskTypes,
+  };
+}
+
+function slicePrevFeedForSource(
+  prevFeed: AirdropFeed | null | undefined,
+  sourceName: string,
+  excludedTaskSources?: ReadonlySet<string>,
+): AirdropFeed | null {
   if (!prevFeed) return null;
-  const cards = (prevFeed.cards ?? []).filter(c => c.source === sourceName);
+  const cards = (prevFeed.cards ?? [])
+    .filter(c => c.source === sourceName)
+    .map(c => stripExcludedMergedTasks(c, excludedTaskSources));
   const tge = (prevFeed.tge ?? []).filter(t => t.source === sourceName);
   if (cards.length === 0 && tge.length === 0) return null;
   return {
@@ -394,6 +425,7 @@ function hasCachedFeedContent(feed?: AirdropFeed | null): feed is AirdropFeed {
 
 export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}): Promise<CuratedAirdropResult> {
   const nowMs = opts.nowMs ?? Date.now();
+  const reg = opts.sourceRegistry;
   const jobs: { name: string; sourceId?: string; cachedFeed?: AirdropFeed | null; run: () => Promise<AirdropFeed> }[] = [
     {
       name: 'Surf',
@@ -403,30 +435,58 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
       name: 'ASSO7878',
       sourceId: 'sheet:asso7878_sheet',
       cachedFeed: opts.cachedAsso7878Feed,
-      run: opts.fetchers?.asso7878 ?? (() => fetchAsso7878Sheet(opts.asso7878Url ?? ASSO7878_SHEET_URL, nowMs)),
+      run:
+        opts.fetchers?.asso7878 ??
+        (() =>
+          fetchAsso7878Sheet(
+            resolveCuratedSourceUrl(opts.asso7878Url, 'sheet:asso7878_sheet', ASSO7878_SHEET_URL, reg),
+            nowMs,
+          )),
     },
     {
       name: 'arndxt',
       sourceId: 'sheet:arndxt_sheet',
       cachedFeed: opts.cachedArndxtFeed,
-      run: opts.fetchers?.arndxt ?? (() => fetchArndxtSheet(opts.arndxtUrl ?? ARNDXT_SHEET_URL, nowMs)),
+      run:
+        opts.fetchers?.arndxt ??
+        (() =>
+          fetchArndxtSheet(
+            resolveCuratedSourceUrl(opts.arndxtUrl, 'sheet:arndxt_sheet', ARNDXT_SHEET_URL, reg),
+            nowMs,
+          )),
     },
     {
       name: 'Pendle',
       sourceId: 'feed:pendle_points',
-      run: opts.fetchers?.pendle ?? (() => fetchPendlePoints(opts.pendleUrl ?? PENDLE_POINTS_URL, nowMs)),
+      run:
+        opts.fetchers?.pendle ??
+        (() =>
+          fetchPendlePoints(
+            resolveCuratedSourceUrl(opts.pendleUrl, 'feed:pendle_points', PENDLE_POINTS_URL, reg),
+            nowMs,
+          )),
     },
     {
       name: 'Merkl',
       sourceId: 'feed:merkl_opportunities',
-      run: opts.fetchers?.merkl ?? (() => fetchMerklOpportunities(opts.merklUrl ?? MERKL_OPPORTUNITIES_URL, nowMs)),
+      run:
+        opts.fetchers?.merkl ??
+        (() =>
+          fetchMerklOpportunities(
+            resolveCuratedSourceUrl(opts.merklUrl, 'feed:merkl_opportunities', MERKL_OPPORTUNITIES_URL, reg),
+            nowMs,
+          )),
     },
     {
       name: 'AirdropAlert',
       sourceId: 'feed:airdropalert_calendar',
       run:
         opts.fetchers?.airdropalert ??
-        (() => fetchWpCalendarAirdrops(opts.airdropAlertUrl ?? AIRDROPALERT_CALENDAR_URL, nowMs)),
+        (() =>
+          fetchWpCalendarAirdrops(
+            resolveCuratedSourceUrl(opts.airdropAlertUrl, 'feed:airdropalert_calendar', AIRDROPALERT_CALENDAR_URL, reg),
+            nowMs,
+          )),
     },
   ];
 
@@ -435,14 +495,17 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
 
   const jobModes: ('disabled' | 'cached' | 'deferred' | 'live')[] = [];
   const liveIndices: number[] = [];
+  const excludedTaskSources = new Set<string>(disabledLower);
   let deferredCount = 0;
 
   for (let i = 0; i < jobs.length; i++) {
     const matchKey = (jobs[i].sourceId ?? jobs[i].name).toLowerCase();
     if (disabledLower.has(matchKey)) {
       jobModes.push('disabled');
+      excludedTaskSources.add(jobs[i].name.toLowerCase());
     } else if (hasCachedFeedContent(jobs[i].cachedFeed)) {
       jobModes.push('cached');
+      excludedTaskSources.add(jobs[i].name.toLowerCase());
     } else if (deferredLower.has(matchKey)) {
       jobModes.push('deferred');
       deferredCount++;
@@ -455,7 +518,11 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
   const settledLive = await Promise.allSettled(liveIndices.map(idx => jobs[idx].run()));
   const settledByJobIdx = new Map<number, PromiseSettledResult<AirdropFeed>>();
   for (let i = 0; i < liveIndices.length; i++) {
-    settledByJobIdx.set(liveIndices[i], settledLive[i]);
+    const idx = liveIndices[i];
+    settledByJobIdx.set(idx, settledLive[i]);
+    if (settledLive[i].status === 'fulfilled') {
+      excludedTaskSources.add(jobs[idx].name.toLowerCase());
+    }
   }
 
   const fulfilledFeeds: AirdropFeed[] = [];
@@ -478,7 +545,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
       continue;
     }
     if (mode === 'deferred') {
-      const prior = slicePrevFeedForSource(opts.prevFeed, job.name);
+      const prior = slicePrevFeedForSource(opts.prevFeed, job.name, excludedTaskSources);
       if (prior) fulfilledFeeds.push(prior);
       continue;
     }
@@ -503,7 +570,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
         tge: 0,
         error: res.reason instanceof Error ? res.reason.message : String(res.reason),
       });
-      const prior = slicePrevFeedForSource(opts.prevFeed, job.name);
+      const prior = slicePrevFeedForSource(opts.prevFeed, job.name, excludedTaskSources);
       if (prior) fulfilledFeeds.push(prior);
     }
   }

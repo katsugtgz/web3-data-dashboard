@@ -296,4 +296,74 @@ describe('X best-effort syndication parser & backoff', () => {
     const summary = await pollXBatch(db, 3, now, null, async () => tweets);
     expect(summary.insertedPosts).toBe(10);
   });
+
+  test('fetchXTimelineBestEffort uses manual redirects, validates redirect destinations before following, and falls back to syndication on unsafe redirects', async () => {
+    const requests: { url: string; redirect?: string }[] = [];
+    const prevFetch = globalThis.fetch;
+
+    try {
+      // 1. Unsafe redirect targets must NEVER be requested; must fall back to syndication.
+      const unsafeLocations = [
+        'http://mirror.example/DefiIgnas/rss',
+        'https://127.0.0.1/internal',
+        'https://169.254.169.254/latest/meta-data/',
+        'https://localhost/rss',
+        'https://user:pass@alt.example/rss',
+      ];
+      for (const badLocation of unsafeLocations) {
+        requests.length = 0;
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          requests.push({ url, redirect: init?.redirect });
+          if (url === 'https://mirror.example/DefiIgnas/rss') {
+            return new Response('', { status: 302, headers: { Location: badLocation } });
+          }
+          return new Response('rate limited', { status: 429 });
+        }) as unknown as typeof fetch;
+
+        await expect(fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example')).rejects.toThrow();
+        expect(requests[0]).toEqual({ url: 'https://mirror.example/DefiIgnas/rss', redirect: 'manual' });
+        expect(requests.some(r => r.url === badLocation)).toBe(false);
+        expect(requests.map(r => r.url)).toEqual([
+          'https://mirror.example/DefiIgnas/rss',
+          'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas',
+        ]);
+      }
+
+      // 2. Safe HTTPS redirect is followed manually and its host is filtered out of post URLs.
+      requests.length = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, redirect: init?.redirect });
+        if (url === 'https://mirror.example/DefiIgnas/rss') {
+          return new Response('', {
+            status: 302,
+            headers: { Location: 'https://alt.redirected-mirror.net/DefiIgnas/rss' },
+          });
+        }
+        if (url === 'https://alt.redirected-mirror.net/DefiIgnas/rss') {
+          return new Response(
+            `<?xml version="1.0"?><rss version="2.0"><channel><item>
+              <title>Safe redirect post</title>
+              <link>https://alt.redirected-mirror.net/DefiIgnas/status/212500077</link>
+              <pubDate>Mon, 23 Nov 2026 12:00:00 GMT</pubDate>
+              <description><![CDATA[<a href="https://alt.redirected-mirror.net/img.png">img</a> <a href="https://realdrop.xyz/quest">Drop</a>]]></description>
+            </item></channel></rss>`,
+            { status: 200, headers: { 'Content-Type': 'application/rss+xml' } },
+          );
+        }
+        return new Response('unexpected', { status: 500 });
+      }) as unknown as typeof fetch;
+
+      const followed = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example');
+      expect(requests).toEqual([
+        { url: 'https://mirror.example/DefiIgnas/rss', redirect: 'manual' },
+        { url: 'https://alt.redirected-mirror.net/DefiIgnas/rss', redirect: 'manual' },
+      ]);
+      expect(followed.length).toBe(1);
+      expect(followed[0].urls).toEqual(['https://realdrop.xyz/quest']);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
 });

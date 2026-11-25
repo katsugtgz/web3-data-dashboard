@@ -147,17 +147,11 @@ const FOURTEEN_DAYS_MS = 14 * 86_400_000;
 const MAX_POSTS_PER_POLL = 10;
 const MIRROR_TIMEOUT_MS = Math.min(FETCH_TIMEOUT_MS, 7000);
 
-function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: string; reg: string } | null {
-  const trimmed = rssMirrorBase?.trim();
-  if (!trimmed) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
+const MAX_MIRROR_REDIRECTS = 3;
+
+function validateSafeMirrorUrl(u: URL): { host: string; reg: string } | null {
   if (u.protocol !== 'https:') return null;
-  if (u.username || u.password || u.search || u.hash) return null;
+  if (u.username || u.password) return null;
   const host = u.hostname.toLowerCase();
   if (
     !host ||
@@ -172,8 +166,38 @@ function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: stri
   }
   const reg = getRegistrableDomain(u.origin);
   if (!reg) return null;
+  return { host, reg };
+}
+
+function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: string; reg: string } | null {
+  const trimmed = rssMirrorBase?.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.search || u.hash) return null;
+  const valid = validateSafeMirrorUrl(u);
+  if (!valid) return null;
   const pathname = u.pathname.replace(/\/+$/, '');
-  return { base: `${u.origin}${pathname}`, host, reg };
+  return { base: `${u.origin}${pathname}`, host: valid.host, reg: valid.reg };
+}
+
+function parseSafeMirrorRedirectUrl(location: string, currentUrl: string): { url: string; host: string } | null {
+  const trimmed = location.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed, currentUrl);
+  } catch {
+    return null;
+  }
+  const valid = validateSafeMirrorUrl(u);
+  if (!valid) return null;
+  u.hash = '';
+  return { url: u.toString(), host: valid.host };
 }
 
 export function computeXBackoff(
@@ -307,14 +331,35 @@ export async function fetchXTimelineBestEffort(handle: string, rssMirrorBase?: s
   const mirror = parseSafeMirrorBase(rssMirrorBase);
   if (mirror) {
     try {
-      const mirrorUrl = `${mirror.base}/${encodeURIComponent(handle)}/rss`;
-      const res = await fetch(mirrorUrl, {
-        headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
-        signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
-      });
-      if (res.ok) {
+      let currentUrl = `${mirror.base}/${encodeURIComponent(handle)}/rss`;
+      const mirrorHosts: string[] = [mirror.host];
+      let res: Response | null = null;
+      for (let hop = 0; hop <= MAX_MIRROR_REDIRECTS; hop++) {
+        const candidate = await fetch(currentUrl, {
+          headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
+        });
+        if (candidate.status >= 300 && candidate.status < 400) {
+          const location = candidate.headers.get('location');
+          if (!location || hop === MAX_MIRROR_REDIRECTS) {
+            res = null;
+            break;
+          }
+          const nextTarget = parseSafeMirrorRedirectUrl(location, currentUrl);
+          if (!nextTarget) {
+            res = null;
+            break;
+          }
+          mirrorHosts.push(nextTarget.host);
+          currentUrl = nextTarget.url;
+          continue;
+        }
+        res = candidate;
+        break;
+      }
+      if (res?.ok) {
         const body = await res.text();
-        const mirrorHosts: string[] = [mirror.host];
         if (res.url) {
           try {
             const finalHost = new URL(res.url).hostname.toLowerCase();

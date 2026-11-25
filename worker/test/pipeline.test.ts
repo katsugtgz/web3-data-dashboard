@@ -1270,4 +1270,115 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(mergedSurfIdx.byDomain.has('pendle.finance')).toBe(false);
     expect(mergedSurfIdx.byDomain.has('merkl.xyz')).toBe(false);
   });
+
+  test('seedKnownDomains preserves stored defi/surf/platform identities when defi input is absent and serializes concurrent curated upserts and prunes', async () => {
+    const makeCard = (n: string, source: string, url: string) => ({
+      r: 1,
+      n,
+      t: null,
+      g: 'A' as Grade,
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 70,
+      sub: [7, 7, null],
+      url,
+      source,
+    });
+
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('aave.com', 'Aave', 'defi'),
+                ('surfkeep.xyz', 'SurfKeep', 'surf'),
+                ('oldcurated.fi', 'OldCurated', 'curated')`,
+      )
+      .run();
+
+    // Reseed with defiSection = null while curated DefiLlama cards contain the same domains under different names.
+    const curatedCollisionFeed = {
+      cards: [
+        makeCard('CuratedAaveAlias', 'DefiLlama', 'https://aave.com/'),
+        makeCard('CuratedSurfAlias', 'DefiLlama', 'https://surfkeep.xyz/'),
+        makeCard('FreshCurated', 'DefiLlama', 'https://freshcurated.fi/'),
+      ],
+      tge: [],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    await seedKnownDomains(db, curatedCollisionFeed, null);
+    const aaveRow = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'aave.com'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    const surfRow = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'surfkeep.xyz'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    expect(aaveRow).toEqual({ domain: 'aave.com', project: 'Aave', origin: 'defi' });
+    expect(surfRow).toEqual({ domain: 'surfkeep.xyz', project: 'SurfKeep', origin: 'surf' });
+
+    // Later reseed without aave.com must still preserve stored defi/surf rows while pruning stale curated rows.
+    const emptyFeed = {
+      cards: [],
+      tge: [],
+      counts: { active: 0, preToken: 0 },
+      fetchedAt: 2000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+    await seedKnownDomains(db, emptyFeed, null);
+    const aaveAfter = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'aave.com'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    const freshAfter = await db
+      .prepare(`SELECT domain FROM known_domains WHERE domain = 'freshcurated.fi'`)
+      .first<{ domain: string }>();
+    expect(aaveAfter).toEqual({ domain: 'aave.com', project: 'Aave', origin: 'defi' });
+    expect(freshAfter).toBeNull();
+
+    // Concurrent seed calls: an earlier seed's prune must never delete a curated row upserted by a newer seed.
+    const feedOld = {
+      cards: [makeCard('KeepOld', 'DefiLlama', 'https://keepold.fi/')],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: 3000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+    const feedNew = {
+      cards: [
+        makeCard('KeepOld', 'DefiLlama', 'https://keepold.fi/'),
+        makeCard('BrandNew', 'DefiLlama', 'https://brandnew.fi/'),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: 4000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    // Seed brandnew.fi first, then race feedOld against feedNew so feedOld runs first and feedNew second;
+    // with per-db serialization + atomic batch, feedOld cannot read stale rows and delete feedNew's upsert afterwards.
+    let delayFirstBatch = true;
+    const delayedDb = {
+      ...db,
+      prepare(sql: string) {
+        return db.prepare(sql);
+      },
+      async batch(stmts: D1PreparedStatement[]) {
+        if (delayFirstBatch) {
+          delayFirstBatch = false;
+          await new Promise(r => setTimeout(r, 15));
+        }
+        return db.batch(stmts);
+      },
+    } as unknown as D1Database;
+
+    await Promise.all([seedKnownDomains(delayedDb, feedOld, null), seedKnownDomains(delayedDb, feedNew, null)]);
+    const brandNewRow = await db
+      .prepare(`SELECT domain, origin FROM known_domains WHERE domain = 'brandnew.fi'`)
+      .first<{ domain: string; origin: string }>();
+    expect(brandNewRow).toEqual({ domain: 'brandnew.fi', origin: 'curated' });
+  });
 });
