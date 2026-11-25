@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
+import { normalizeExternalUrl } from '../lib/format';
 import { formatTgeStatus } from '../lib/labels';
 import { Avatar } from './ProjectCard';
 
@@ -9,24 +10,35 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
   const [filter, setFilter] = useState<TgeFilter>('all');
   const railRef = useRef<HTMLDivElement>(null);
 
-  const normalized = useMemo(
-    () =>
-      items.map(it => {
-        const st = formatTgeStatus(it.s);
-        // Split inline "$TICKER" from snapshot names like "predict.fun $PREDICT"
-        let name = it.n;
-        let ticker = it.t;
-        if (!ticker) {
-          const m = name.match(/^(.*?)\s+\$([A-Za-z0-9_]+)$/);
-          if (m) {
-            name = m[1];
-            ticker = m[2];
-          }
+  const normalized = useMemo(() => {
+    const seen = new Map<string, number>();
+    return items.map(it => {
+      const st = formatTgeStatus(it.s);
+      // Split inline "$TICKER" from snapshot names like "predict.fun $PREDICT"
+      let name = it.n;
+      let ticker = it.t;
+      if (!ticker) {
+        const m = name.match(/^(.*?)\s+\$([A-Za-z0-9_]+)$/);
+        if (m) {
+          name = m[1];
+          ticker = m[2];
         }
-        return { ...it, name, ticker, statusLabel: st.label, statusKind: st.kind, claimable: st.claimable };
-      }),
-    [items],
-  );
+      }
+      const baseKey = `${name}-${it.t}-${it.d}`;
+      const occ = seen.get(baseKey) ?? 0;
+      seen.set(baseKey, occ + 1);
+      return {
+        ...it,
+        name,
+        ticker,
+        safeUrl: normalizeExternalUrl(it.url),
+        itemKey: `${baseKey}-${occ}`,
+        statusLabel: st.label,
+        statusKind: st.kind,
+        claimable: st.claimable,
+      };
+    });
+  }, [items]);
 
   const claimableCount = useMemo(() => normalized.filter(i => i.statusKind === 'claimable').length, [normalized]);
   const verifyCount = useMemo(() => normalized.filter(i => i.statusKind === 'verify').length, [normalized]);
@@ -101,9 +113,9 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           tabIndex={0}
         >
           {visible.map(it => (
-            <article key={`${it.name}-${it.d}`} className="tge-card">
+            <article key={it.itemKey} className="tge-card">
               <div className="tge-card-top">
-                <Avatar name={it.name} src={it.logo ?? ''} size={30} />
+                <Avatar key={it.logo ?? ''} name={it.name} src={it.logo ?? ''} size={30} />
                 <div className="tge-card-title">
                   <span className="tn">{it.name}</span>
                   {it.ticker && <span className="tt mono">${it.ticker}</span>}
@@ -115,8 +127,8 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
                 <span className="tt mono">{it.d}</span>
                 {it.raise && <span className="tt mono">{it.raise}</span>}
               </div>
-              {it.url && (
-                <a className="tge-link" href={it.url} target="_blank" rel="noopener noreferrer">
+              {it.safeUrl && (
+                <a className="tge-link" href={it.safeUrl} target="_blank" rel="noopener noreferrer">
                   Open link
                   <span className="sr"> for {it.name} (opens in a new tab)</span>
                   <span aria-hidden="true"> ↗</span>

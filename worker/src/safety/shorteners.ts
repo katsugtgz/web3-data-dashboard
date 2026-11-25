@@ -28,4 +28,8 @@ export const URL_SHORTENERS: Record<string, true> = {
   'urlz.fr': true,
   'bit.do': true,
   't2m.io': true,
+  'bitly.com': true,
+  'x.gd': true,
+  'soo.gd': true,
+  'j.mp': true,
 };

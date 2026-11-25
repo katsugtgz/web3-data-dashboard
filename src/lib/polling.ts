@@ -17,9 +17,9 @@ export interface PollLifecycleApi extends PollLifecycle {
    * request, and returns the fresh signal. `skipped` means "don't fetch".
    */
   beginRequest: (mode: PollMode) => { signal: AbortSignal; skipped: boolean };
-  /** Marks the outstanding request finished and stamps completion time. */
-  settle: () => void;
-  /** Mount/unmount wiring: initial fetch + interval + visibility + teardown. */
+  /** Marks the outstanding request finished; stamps completion time only when succeeded. */
+  settle: (succeeded?: boolean) => void;
+  /** Mount/unmount wiring: initial fetch + interval + visibility + online + teardown. */
   useInterval: (fetchNowRef: { current: (mode: PollMode) => void }, pollMs: number) => void;
 }
 
@@ -40,9 +40,11 @@ export function createPollLifecycle(): PollLifecycleApi {
     return { signal: ctrl.signal, skipped: false };
   };
 
-  const settle = (): void => {
+  const settle = (succeeded = true): void => {
     inFlightRef.current = false;
-    lastFetchedRef.current = Date.now();
+    if (succeeded) {
+      lastFetchedRef.current = Date.now();
+    }
   };
 
   const dispose = (): void => {
@@ -61,11 +63,18 @@ export function createPollLifecycle(): PollLifecycleApi {
           fetchNowRef.current('background');
         }
       };
+      const onOnline = () => {
+        if (document.visibilityState === 'visible') {
+          fetchNowRef.current('background');
+        }
+      };
       document.addEventListener('visibilitychange', onVisibility);
+      window.addEventListener('online', onOnline);
       return () => {
         dispose();
         clearInterval(id);
         document.removeEventListener('visibilitychange', onVisibility);
+        window.removeEventListener('online', onOnline);
       };
       // Poll wiring is set up once; fetchNow is always read through the ref.
       // eslint-disable-next-line react-hooks/exhaustive-deps

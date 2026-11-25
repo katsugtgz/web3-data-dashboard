@@ -59,7 +59,10 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'If-None-Match',
   'Access-Control-Expose-Headers': 'ETag',
+  'Access-Control-Max-Age': '86400',
 };
+
+const utf8Encoder = new TextEncoder();
 
 const THIRTY_MIN_MS = 30 * 60_000;
 const SIXTY_MIN_MS = 60 * 60_000;
@@ -111,6 +114,7 @@ function jsonResponse(body: string, status = 200, extraHeaders: Record<string, s
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': String(utf8Encoder.encode(body).byteLength),
       ...CORS_HEADERS,
       ...extraHeaders,
     },
@@ -124,6 +128,7 @@ function notModified(etag: string, cacheControl: string): Response {
       ...CORS_HEADERS,
       ETag: etag,
       'Cache-Control': cacheControl,
+      Vary: 'Accept-Encoding',
     },
   });
 }
@@ -145,6 +150,24 @@ async function runIsolated(db: D1Database, key: string, nowMs: number, fn: () =>
   }
 }
 
+function parseSnapshotJson<T>(row: SnapshotRow | null): T | null {
+  if (!row?.body || row.body === '{}') return null;
+  try {
+    return JSON.parse(row.body) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCachedSurf(db: D1Database): Promise<AirdropFeed | null> {
+  try {
+    return parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
+  } catch (err) {
+    console.error('cron-error:loadCachedSurf', err);
+    return null;
+  }
+}
+
 async function loadCachedSurfAndDefi(db: D1Database): Promise<{
   surf: AirdropFeed | null;
   defi: MarketSection | null;
@@ -158,23 +181,10 @@ async function loadCachedSurfAndDefi(db: D1Database): Promise<{
   } catch (err) {
     console.error('cron-error:loadCachedSurfAndDefi', err);
   }
-  let surf: AirdropFeed | null = null;
-  let defi: MarketSection | null = null;
-  if (surfRow?.body && surfRow.body !== '{}') {
-    try {
-      surf = JSON.parse(surfRow.body) as AirdropFeed;
-    } catch {
-      surf = null;
-    }
-  }
-  if (defiRow?.body && defiRow.body !== '{}') {
-    try {
-      defi = JSON.parse(defiRow.body) as MarketSection;
-    } catch {
-      defi = null;
-    }
-  }
-  return { surf, defi };
+  return {
+    surf: parseSnapshotJson<AirdropFeed>(surfRow),
+    defi: parseSnapshotJson<MarketSection>(defiRow),
+  };
 }
 
 /** Exported for behavior tests: the AI-summary chunk/backlog seam. */
@@ -199,20 +209,20 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
   // each tick drains up to AI_SUMMARY_CHUNK highest-priority clusters first
   // (score DESC, last_seen DESC) while persisting the remainder.
   const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
-  if (!env.AI || dailyMax <= 0) return;
+  const chunk = Math.min(100, parseNonNegativeInt(env.AI_SUMMARY_CHUNK, 6));
+  if (!env.AI || dailyMax <= 0 || chunk <= 0) return;
   if (!(await hasAiQuotaRemaining(env.DB, dailyMax, nowMs))) return;
 
-  const chunk = Math.max(1, Number.parseInt(env.AI_SUMMARY_CHUNK ?? '6', 10) || 6);
-
-  // Priority by score DESC, last_seen DESC; literal attempt cap matches
-  // partial index clusters_ai_backlog.
+  // Priority by score DESC, last_seen DESC; literal attempt cap and drop filter
+  // match partial index clusters_ai_backlog.
   const backlog = await env.DB.prepare(
     `SELECT c.id, c.project, c.risk_level FROM clusters c
      WHERE c.summary_source = 'rule'
        AND c.risk_level != 'risk'
        AND c.ai_attempts < ${AI_MAX_ATTEMPTS}
        AND c.ai_retry_after <= ?1
-       AND EXISTS (SELECT 1 FROM posts p WHERE p.cluster_id = c.id)
+       AND (c.is_drop IS NULL OR c.is_drop = 1)
+       AND EXISTS (SELECT 1 FROM posts p JOIN sources s ON s.id = p.source_id WHERE p.cluster_id = c.id AND s.enabled = 1)
      ORDER BY c.score DESC, c.last_seen DESC
      LIMIT ?2`,
   )
@@ -260,10 +270,16 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
 
 async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
   await ensureSourcesSynced(env.DB);
-  const { surf } = await loadCachedSurfAndDefi(env.DB);
-  const batchSize = Math.max(1, Number.parseInt(env.TG_BATCH_SIZE ?? '4', 10) || 4);
-  const summary = await pollTelegramBatch(env.DB, batchSize, nowMs, surf);
-  await postProcessIngest(env, summary.ingestedResults, nowMs);
+  const batchSize = parseNonNegativeInt(env.TG_BATCH_SIZE, 4);
+  const summary =
+    batchSize > 0
+      ? await pollTelegramBatch(env.DB, batchSize, nowMs, () => loadCachedSurf(env.DB))
+      : { polled: 0, insertedPosts: 0, errors: 0, ingestedResults: [] };
+  try {
+    await postProcessIngest(env, summary.ingestedResults, nowMs);
+  } catch (err) {
+    console.error('cron-error:postProcessIngest:1m', err);
+  }
 }
 
 async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
@@ -299,8 +315,11 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   await seedKnownDomains(env.DB, surf, defi);
 
   // Best-effort X polling (never throws unhandled errors)
-  const xBatch = Math.max(1, Number.parseInt(env.X_BATCH_SIZE ?? '3', 10) || 3);
-  const xSummary = await pollXBatch(env.DB, xBatch, nowMs, surf);
+  const xBatch = parseNonNegativeInt(env.X_BATCH_SIZE, 3);
+  const xSummary =
+    xBatch > 0
+      ? await pollXBatch(env.DB, xBatch, nowMs, surf)
+      : { polled: 0, insertedPosts: 0, errors: 0, ingestedResults: [] };
   try {
     await postProcessIngest(env, xSummary.ingestedResults, nowMs);
   } catch (err) {
@@ -352,6 +371,47 @@ async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ bod
   return { body, etag: await bodyEtag(body) };
 }
 
+interface CanonicalFeedParams {
+  since: number;
+  limit: number;
+  risk: 'include' | 'exclude';
+  sort: 'score' | 'new';
+  cursor?: string;
+}
+
+function parseFeedParams(url: URL): CanonicalFeedParams {
+  const sinceParam = url.searchParams.get('since');
+  const parsedSince = sinceParam ? Number(sinceParam) : 0;
+  const since = Number.isFinite(parsedSince) ? parsedSince : 0;
+
+  const limitParam = url.searchParams.get('limit');
+  const parsedLimit = limitParam ? Number(limitParam) : 100;
+  const limit = Number.isFinite(parsedLimit) ? Math.min(100, Math.max(1, Math.floor(parsedLimit))) : 100;
+
+  const risk = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
+  const sort = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
+  const cursor = url.searchParams.get('cursor') || undefined;
+
+  return { since, limit, risk, sort, cursor };
+}
+
+export function buildCacheKey(requestUrl: string | URL): Request {
+  const url = typeof requestUrl === 'string' ? new URL(requestUrl) : requestUrl;
+  const base = `${url.origin}${url.pathname}`;
+  if (url.pathname !== '/feed.json') {
+    return new Request(base, { method: 'GET' });
+  }
+  const p = parseFeedParams(url);
+  const canonical = new URLSearchParams();
+  if (p.cursor) canonical.set('cursor', p.cursor);
+  if (p.limit !== 100) canonical.set('limit', String(p.limit));
+  if (p.risk !== 'include') canonical.set('risk', p.risk);
+  if (p.since !== 0) canonical.set('since', String(p.since));
+  if (p.sort !== 'score') canonical.set('sort', p.sort);
+  const qs = canonical.toString();
+  return new Request(qs ? `${base}?${qs}` : base, { method: 'GET' });
+}
+
 async function handleCachedJson(
   request: Request,
   ctx: ExecutionContext,
@@ -359,17 +419,23 @@ async function handleCachedJson(
   loader: () => Promise<{ body: string; etag?: string } | null>,
 ): Promise<Response> {
   const cache = caches.default;
-  const cacheKey = new Request(request.url, { method: 'GET' });
+  const cacheKey = buildCacheKey(request.url);
   const ifNoneMatch = request.headers.get('If-None-Match');
 
   const cached = await cache.match(cacheKey);
   if (cached) {
     const cachedEtag = cached.headers.get('ETag');
     if (cachedEtag && etagMatches(ifNoneMatch, cachedEtag)) {
+      void cached.body?.cancel();
       return notModified(cachedEtag, cacheControl);
     }
     const headers = new Headers(cached.headers);
     for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
+    headers.set('Vary', 'Accept-Encoding');
+    if (request.method === 'HEAD') {
+      void cached.body?.cancel();
+      return new Response(null, { status: cached.status, headers });
+    }
     return new Response(cached.body, { status: cached.status, headers });
   }
 
@@ -381,15 +447,17 @@ async function handleCachedJson(
   }
 
   const etag = loaded.etag ?? (await bodyEtag(loaded.body));
-
-  if (etagMatches(ifNoneMatch, etag)) {
-    return notModified(etag, cacheControl);
-  }
-
   const res = jsonResponse(loaded.body, 200, {
     ETag: etag,
     'Cache-Control': cacheControl,
+    Vary: 'Accept-Encoding',
   });
+
+  if (etagMatches(ifNoneMatch, etag)) {
+    ctx.waitUntil(cache.put(cacheKey, res));
+    return notModified(etag, cacheControl);
+  }
+
   ctx.waitUntil(cache.put(cacheKey, res.clone()));
   return res;
 }
@@ -409,11 +477,17 @@ export default {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return jsonResponse(JSON.stringify({ error: 'Method not allowed' }), 405, { 'Cache-Control': 'no-store' });
+      return jsonResponse(JSON.stringify({ error: 'Method not allowed' }), 405, {
+        Allow: 'GET, HEAD, OPTIONS',
+        'Cache-Control': 'no-store',
+      });
     }
 
-    const stripBodyIfHead = (res: Response): Response =>
-      request.method === 'HEAD' && res.status !== 304 ? new Response(null, { status: res.status, headers: res.headers }) : res;
+    const stripBodyIfHead = (res: Response): Response => {
+      if (request.method !== 'HEAD' || res.status === 304) return res;
+      void res.body?.cancel();
+      return new Response(null, { status: res.status, headers: res.headers });
+    };
 
     const url = new URL(request.url);
     const cacheControl = 'public, max-age=60, s-maxage=120';
@@ -422,7 +496,7 @@ export default {
       // Metadata-only: /health is no-store and must not read full snapshot bodies.
       const rows = await listSnapshotMeta(env.DB);
       const body: HealthResponse = {
-        ok: true,
+        ok: rows.length > 0 && rows.every(r => r.ok === 1),
         snapshots: toHealthMap(rows),
       };
       return stripBodyIfHead(jsonResponse(JSON.stringify(body), 200, { 'Cache-Control': 'no-store' }));
@@ -447,20 +521,9 @@ export default {
     if (url.pathname === '/feed.json') {
       return stripBodyIfHead(
         await handleCachedJson(request, ctx, 'public, max-age=30, s-maxage=60', async () => {
-          const sinceParam = url.searchParams.get('since');
-          const limitParam = url.searchParams.get('limit');
-          const riskParam = url.searchParams.get('risk') === 'exclude' ? 'exclude' : 'include';
-          const sortParam = url.searchParams.get('sort') === 'new' ? 'new' : 'score';
-          const cursorParam = url.searchParams.get('cursor') ?? undefined;
+          const feedParams = parseFeedParams(url);
           const { allKnownDomains } = await loadKnownDomains(env.DB);
-          // queryFeed clamps non-finite limits to the default itself.
-          const feed = await queryFeed(env.DB, allKnownDomains, {
-            since: sinceParam ? Number(sinceParam) || 0 : 0,
-            limit: limitParam ? Number(limitParam) : 100,
-            risk: riskParam,
-            sort: sortParam,
-            cursor: cursorParam,
-          });
+          const feed = await queryFeed(env.DB, allKnownDomains, feedParams);
           const body = JSON.stringify(feed);
           return { body };
         }),
@@ -487,6 +550,8 @@ export default {
       );
     }
 
-    return jsonResponse(JSON.stringify({ error: 'Not found' }), 404, { 'Cache-Control': 'no-store' });
+    return stripBodyIfHead(
+      jsonResponse(JSON.stringify({ error: 'Not found' }), 404, { 'Cache-Control': 'no-store' }),
+    );
   },
 };

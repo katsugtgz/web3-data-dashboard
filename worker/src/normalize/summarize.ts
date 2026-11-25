@@ -1,5 +1,6 @@
 import type { TaskType } from '../../../shared/types';
 import { TASK_TYPES } from '../../../shared/constants';
+import { DOUBLING_SCAM_RE, DRAINER_RE } from '../safety';
 import { FORBIDDEN_CJK_RE, HAN_RE } from './i18n';
 
 export const AI_MODEL = '@cf/meta/llama-3.1-8b-instruct';
@@ -38,15 +39,52 @@ export function extractAiTextResponse(raw: unknown): string | null {
 // Scam text defangs itself to slip past filters: zero-width chars split
 // hosts, [.] / (.) / \u3002 (ideographic full stop) stand in for dots.
 const DEFANG_CHARS_RE = /[\u200b-\u200f\u2060\ufeff]/g;
+const DEV_FILE_SUFFIXES = new Set(['js', 'ts', 'py', 'rs', 'sol', 'json', 'md']);
+const DOMAIN_LIKE_RE = /\b[\w-]+(?:\.[\w-]+)*\.([a-z]{2,24})\b/gi;
+const RAW_IPV4_RE =
+  /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:[:/]\S*)?(?![\d.])/;
+const DANGEROUS_SCHEME_RE = /(?:https?|tg):\/\/|\b(?:javascript|data):/i;
+const HANDLE_MENTION_RE = /(?:^|[\s([{"'])@[a-z0-9_]{3,}/i;
+const AI_UNSAFE_PHRASE_RE =
+  /\b(?:connect|visit|open|verify|approve|validate|confirm)\b[^.!?]{0,40}\bwallets?\b|\bconfirm\s+in\s+(?:your\s+)?wallets?\b|\b(?:seed\s+phrase|recovery\s+phrase|private\s+key|mnemonic)\b/i;
+
+const CHAIN_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9 -]{0,29}$/;
+const CHAIN_INJECTION_WORD_RE =
+  /\b(?:ignore|ignored|prompt|system|instruction|override|wallet|connect|claim|airdrop|send|approve|verify|seed|private|key|click|visit|http|https|www)\b/i;
+const KNOWN_LONG_UPPER_CHAINS = new Set([
+  'ethereum', 'arbitrum', 'optimism', 'solana', 'polygon', 'avalanche', 'berachain',
+  'starknet', 'celestia', 'injective', 'hyperevm', 'megaeth', 'abstract', 'movement',
+  'bitcoin', 'cardano', 'polkadot', 'cosmos', 'fantom', 'gnosis', 'moonbeam', 'zksync',
+  'mantle', 'scroll', 'initia', 'unichain', 'soneium', 'eclipse', 'hyperliquid',
+]);
+
+function hasUnsafeDomainToken(text: string): boolean {
+  for (const match of text.matchAll(DOMAIN_LIKE_RE)) {
+    const suffix = match[1]?.toLowerCase();
+    if (suffix && !DEV_FILE_SUFFIXES.has(suffix)) return true;
+  }
+  return false;
+}
+
+function isCleanChainToken(chain: string): boolean {
+  if (!chain || chain.length > 30) return false;
+  if (HAN_RE.test(chain) || FORBIDDEN_CJK_RE.test(chain) || NON_LATIN_RE.test(chain)) return false;
+  if (unsafeContentRe(chain)) return false;
+  if (!CHAIN_TOKEN_RE.test(chain) || chain.includes('  ') || chain.endsWith('-')) return false;
+  if (chain.split(' ').length > 3) return false;
+  if (CHAIN_INJECTION_WORD_RE.test(chain)) return false;
+  if (/^[A-Z0-9 -]{7,}$/.test(chain) && !KNOWN_LONG_UPPER_CHAINS.has(chain.toLowerCase())) return false;
+  return true;
+}
 
 export function unsafeContentRe(s: string): boolean {
   const t = s.replace(DEFANG_CHARS_RE, '').replace(/\[\.\]|\(\.\)|\u3002/g, '.');
   return (
-    /https?:\/\//i.test(t) ||
+    DANGEROUS_SCHEME_RE.test(t) ||
     /www\./i.test(t) ||
-    // Domain-like token: one or more labels ending in a TLD-ish suffix, so
-    // example.com AND foo.bar.tld both match (case-insensitive).
-    /\b[\w-]+(?:\.[\w-]+)*\.(?:[a-z]{2,24})\b/i.test(t) ||
+    RAW_IPV4_RE.test(t) ||
+    HANDLE_MENTION_RE.test(t) ||
+    hasUnsafeDomainToken(t) ||
     // EVM address
     /0x[a-fA-F0-9]{6,}/.test(t) ||
     // Solana address: 32-44 chars base58 (alphabet excludes 0OIl)
@@ -67,20 +105,19 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     // The model sees untrusted post text. A crafted post can steer the summary
     // into links, wallet addresses, or drain instructions — never store those.
     if (unsafeContentRe(summary)) return null;
-    if (/\b(connect|visit|open)\b[^.]{0,40}\bwallet\b/i.test(summary) || /\bseed phrase\b|\bprivate key\b/i.test(summary)) {
+    if (DRAINER_RE.test(summary) || DOUBLING_SCAM_RE.test(summary) || AI_UNSAFE_PHRASE_RE.test(summary)) {
       return null;
     }
 
     const taskTypes = Array.isArray(parsed.taskTypes)
       ? parsed.taskTypes.filter((t): t is TaskType => typeof t === 'string' && VALID_TASKS.has(t as TaskType))
       : [];
-    // Cap chain names: a steered model could emit unbounded junk here.
+    // Cap and strictly validate chain names: a steered model could emit unbounded junk or prompt injections here.
     const chains = Array.isArray(parsed.chains)
       ? parsed.chains
           .filter((c): c is string => typeof c === 'string')
           .map(c => c.trim())
-          .filter(c => c.length > 0 && c.length <= 30 && !HAN_RE.test(c) && !FORBIDDEN_CJK_RE.test(c) && !NON_LATIN_RE.test(c))
-          .filter(c => !unsafeContentRe(c))
+          .filter(isCleanChainToken)
           .slice(0, 8)
       : [];
 
@@ -98,6 +135,7 @@ function utcDayKey(nowMs: number): string {
 
 const AI_RETRY_FIRST_MS = 6 * 3_600_000;
 const AI_RETRY_NEXT_MS = 24 * 3_600_000;
+const AI_LEASE_MS = 120_000;
 
 async function recordAiAttemptFailure(db: D1Database, clusterId: string, nowMs: number): Promise<void> {
   await db
@@ -108,6 +146,13 @@ async function recordAiAttemptFailure(db: D1Database, clusterId: string, nowMs: 
        WHERE id = ?1 AND summary_source = 'rule'`,
     )
     .bind(clusterId, nowMs + AI_RETRY_FIRST_MS, nowMs + AI_RETRY_NEXT_MS)
+    .run();
+}
+
+async function releaseAiLease(db: D1Database, clusterId: string, leaseUntil: number): Promise<void> {
+  await db
+    .prepare('UPDATE clusters SET ai_retry_after = 0 WHERE id = ?1 AND ai_retry_after = ?2')
+    .bind(clusterId, leaseUntil)
     .run();
 }
 
@@ -150,17 +195,42 @@ export async function summarizeClusterWithAi(
 
   if (dailyMax <= 0) return null;
 
-  const reserved = await db
+  // Claim a short per-cluster row lease before reserving daily quota or calling
+  // Workers AI so overlapping */2 and */5 crons never double-run the same cluster.
+  const leaseUntil = nowMs + AI_LEASE_MS;
+  const claimed = await db
     .prepare(
-      `INSERT INTO ai_usage (day, calls) VALUES (?1, 1)
-       ON CONFLICT(day) DO UPDATE SET calls = ai_usage.calls + 1
-       WHERE ai_usage.calls < ?2
-       RETURNING calls`,
+      `UPDATE clusters
+       SET ai_retry_after = ?2
+       WHERE id = ?1
+         AND summary_source = 'rule'
+         AND risk_level != 'risk'
+         AND ai_attempts < ${AI_MAX_ATTEMPTS}
+         AND ai_retry_after <= ?3
+       RETURNING id`,
     )
-    .bind(day, dailyMax)
-    .first<{ calls: number }>();
+    .bind(opts.clusterId, leaseUntil, nowMs)
+    .first<{ id: string }>();
+  if (!claimed) return null;
+
+  let reserved: { calls: number } | null;
+  try {
+    reserved = await db
+      .prepare(
+        `INSERT INTO ai_usage (day, calls) VALUES (?1, 1)
+         ON CONFLICT(day) DO UPDATE SET calls = ai_usage.calls + 1
+         WHERE ai_usage.calls < ?2
+         RETURNING calls`,
+      )
+      .bind(day, dailyMax)
+      .first<{ calls: number }>();
+  } catch (err) {
+    await releaseAiLease(db, opts.clusterId, leaseUntil).catch(() => {});
+    throw err;
+  }
 
   if (!reserved || typeof reserved.calls !== 'number' || !Number.isFinite(reserved.calls)) {
+    await releaseAiLease(db, opts.clusterId, leaseUntil);
     return null;
   }
 
@@ -181,7 +251,12 @@ export async function summarizeClusterWithAi(
       ],
       max_tokens: 180,
     });
-  } catch {
+  } catch (err) {
+    console.error('ai-summary-error', opts.clusterId, err);
+    await db
+      .prepare('UPDATE ai_usage SET calls = MAX(0, calls - 1) WHERE day = ?1')
+      .bind(day)
+      .run();
     rawOut = null;
   }
 
@@ -191,15 +266,6 @@ export async function summarizeClusterWithAi(
     await recordAiAttemptFailure(db, opts.clusterId, nowMs);
     return null;
   }
-
-  const existing = await db
-    .prepare('SELECT chains, task_types FROM clusters WHERE id = ?1')
-    .bind(opts.clusterId)
-    .first<{ chains: string; task_types: string }>();
-
-  const prevTasks = existing ? (JSON.parse(existing.task_types) as TaskType[]) : [];
-  const mergedTasksRaw = [...new Set([...prevTasks, ...validated.taskTypes])];
-  const mergedTasks = mergedTasksRaw.length > 1 ? mergedTasksRaw.filter(t => t !== 'other') : mergedTasksRaw;
 
   await db
     .prepare(
@@ -231,7 +297,7 @@ export async function summarizeClusterWithAi(
            )
        WHERE id = ?1`,
     )
-    .bind(opts.clusterId, validated.summary, JSON.stringify(validated.chains), JSON.stringify(mergedTasks))
+    .bind(opts.clusterId, validated.summary, JSON.stringify(validated.chains), JSON.stringify(validated.taskTypes))
     .run();
 
   return validated;

@@ -5,10 +5,7 @@ import { readPrefetched } from './lib/api';
 import './styles.css';
 
 async function boot() {
-  const feed = await readPrefetched('feed');
-  if (feed) {
-    window.__RADAR_PREFETCH_RESOLVED__ = { ...window.__RADAR_PREFETCH_RESOLVED__, feed };
-  }
+  await readPrefetched('feed');
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />

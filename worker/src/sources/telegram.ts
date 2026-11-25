@@ -67,12 +67,12 @@ function extractTelegramHandleFromUrl(href: string | null): string | null {
   }
 }
 
-function normalizeTelegramAnchorUrl(rawHref: string, rawAnchorText: string, channelHandle: string): string | null {
+function normalizeTelegramAnchorUrl(decodedHref: string, rawAnchorText: string, channelHandle: string): string | null {
   const anchorText = rawAnchorText.trim();
   // Skip whitespace-only hidden anchors (e.g. Cointelegraph footer `<a href="..."> </a>`).
   if (!anchorText) return null;
 
-  let href = decodeHtmlEntities(rawHref).trim();
+  let href = decodedHref.trim();
   if (!/^https?:\/\//i.test(href)) return null;
 
   try {
@@ -129,11 +129,27 @@ interface DraftPost {
 }
 
 interface ActiveLink {
-  href: string;
+  href: string | null;
   textParts: string[];
 }
 
-export async function parseTelegramHtml(html: string, handle: string): Promise<ParsedTelegramPost[]> {
+const MAX_FUTURE_SKEW_MS = 15 * 60_000;
+const TG_FETCH_CONCURRENCY = 6;
+
+function endsWithWhitespace(parts: string[]): boolean {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (!part) continue;
+    return /\s$/.test(part);
+  }
+  return true;
+}
+
+export async function parseTelegramHtml(
+  html: string,
+  handle: string,
+  nowMs = Date.now(),
+): Promise<ParsedTelegramPost[]> {
   const posts: DraftPost[] = [];
   let current: DraftPost | null = null;
   let textDepth = 0;
@@ -143,6 +159,8 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
   const rewriter = new HTMLRewriter()
     .on('div.tgme_widget_message', {
       element(el) {
+        const cls = el.getAttribute('class') ?? '';
+        if (/\bservice_message\b/.test(cls)) return;
         const dataPost = el.getAttribute('data-post');
         if (!dataPost) return;
         const slash = dataPost.lastIndexOf('/');
@@ -194,7 +212,7 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
         const cls = el.getAttribute('class') ?? '';
         if (cls.includes('js-message_reply_text')) return;
         const owner = current;
-        if (textDepth === 0 && owner.textParts.length > 0) {
+        if (textDepth === 0 && !endsWithWhitespace(owner.textParts)) {
           owner.textParts.push('\n');
         }
         textDepth++;
@@ -207,6 +225,23 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
         if (chunk.text) current.textParts.push(chunk.text);
       },
     })
+    .on(
+      'div.tgme_widget_message_text blockquote, div.tgme_widget_message_text p, div.tgme_widget_message_text pre, div.tgme_widget_message_text li, div.tgme_widget_message_text div',
+      {
+        element(el) {
+          if (!current || textDepth <= 0 || replyDepth > 0) return;
+          const cls = el.getAttribute('class') ?? '';
+          if (cls.includes('js-message_reply_text')) return;
+          const owner = current;
+          if (!endsWithWhitespace(owner.textParts)) owner.textParts.push('\n');
+          el.onEndTag(() => {
+            if (current === owner && textDepth > 0 && replyDepth === 0 && !endsWithWhitespace(owner.textParts)) {
+              owner.textParts.push('\n');
+            }
+          });
+        },
+      },
+    )
     .on('div.tgme_widget_message_text br', {
       element() {
         if (current && textDepth > 0 && replyDepth === 0) current.textParts.push('\n');
@@ -215,8 +250,9 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
     .on('div.tgme_widget_message_text a', {
       element(el) {
         if (!current || textDepth <= 0 || replyDepth > 0) return;
-        const href = el.getAttribute('href');
-        if (!href || !/^https?:\/\//i.test(href)) return;
+        const rawHref = el.getAttribute('href');
+        const decodedHref = rawHref ? decodeHtmlEntities(rawHref).trim() : '';
+        const href = /^https?:\/\//i.test(decodedHref) ? decodedHref : null;
         const owner = current;
         const linkState: ActiveLink = { href, textParts: [] };
         activeLinks.push(linkState);
@@ -225,12 +261,17 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
           if (idx >= 0) activeLinks.splice(idx, 1);
           if (current !== owner) return;
           const anchorText = decodeHtmlEntities(linkState.textParts.join(''));
-          const normalized = normalizeTelegramAnchorUrl(linkState.href, anchorText, handle);
-          if (normalized) {
-            owner.urls.push(normalized);
-            for (const extra of extractShortenerAnchorUrls(normalized, anchorText)) {
-              owner.urls.push(extra);
+          if (linkState.href) {
+            const normalized = normalizeTelegramAnchorUrl(linkState.href, anchorText, handle);
+            if (normalized) {
+              owner.urls.push(normalized);
+              for (const extra of extractShortenerAnchorUrls(normalized, anchorText)) {
+                owner.urls.push(extra);
+              }
             }
+          }
+          if (anchorText.trim() && !endsWithWhitespace(owner.textParts)) {
+            owner.textParts.push(' ');
           }
         });
       },
@@ -260,15 +301,16 @@ export async function parseTelegramHtml(html: string, handle: string): Promise<P
   await rewriter.transform(new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })).text();
 
   const seenIds = new Set<string>();
+  const maxAllowedTs = nowMs + MAX_FUTURE_SKEW_MS;
   const out: ParsedTelegramPost[] = [];
   for (const p of posts) {
     if (seenIds.has(p.msgId)) continue;
     seenIds.add(p.msgId);
     const decoded = decodeHtmlEntities(p.textParts.join('')).replace(/\u00a0/g, ' ').trim();
     if (!decoded && p.urls.length === 0) continue;
-    // Keep missing/invalid <time> invalid so poll filters drop the post:
+    // Keep missing/invalid/future-skewed <time> invalid so poll filters drop the post:
     // stamping Date.now() would defeat the 14-day cutoff for undated pages.
-    if (!p.postedAt || !Number.isFinite(p.postedAt)) continue;
+    if (!p.postedAt || !Number.isFinite(p.postedAt) || p.postedAt > maxAllowedTs) continue;
     out.push({
       msgId: p.msgId,
       msgNum: p.msgNum,
@@ -302,13 +344,36 @@ export interface TelegramPollSummary {
   ingestedResults: IngestPostResult[];
 }
 
+export type SurfFeedInput = AirdropFeed | null | (() => Promise<AirdropFeed | null>);
+
 export async function fetchTelegramChannelHtml(handle: string): Promise<string> {
   const res = await fetch(`https://t.me/s/${encodeURIComponent(handle)}`, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`t.me/s/${handle} HTTP ${res.status}`);
+  if (!res.ok) {
+    await res.body?.cancel();
+    throw new Error(`t.me/s/${handle} HTTP ${res.status}`);
+  }
   return res.text();
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIdx = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  const runWorker = async (): Promise<void> => {
+    if (nextIdx >= items.length) return;
+    const idx = nextIdx++;
+    results[idx] = await fn(items[idx]);
+    return runWorker();
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
 }
 
 type TelegramFetchOutcome =
@@ -318,11 +383,12 @@ type TelegramFetchOutcome =
 async function fetchAndParseTelegramSource(
   src: SourceRow,
   cutoffMs: number,
+  nowMs: number,
   fetcher: (handle: string) => Promise<string>,
 ): Promise<TelegramFetchOutcome> {
   try {
     const html = await fetcher(src.handle);
-    const parsedPosts = await parseTelegramHtml(html, src.handle);
+    const parsedPosts = await parseTelegramHtml(html, src.handle, nowMs);
     if (parsedPosts.length === 0) {
       throw new Error(`0 messages parsed for ${src.handle}`);
     }
@@ -341,17 +407,36 @@ async function fetchAndParseTelegramSource(
   }
 }
 
-async function markTelegramSourceError(db: D1Database, src: SourceRow, err: unknown, nowMs: number): Promise<void> {
+function computeTelegramBackoffMs(failCount: number): number {
+  return Math.min(120, 4 * 2 ** Math.min(5, Math.max(0, failCount - 1))) * 60_000;
+}
+
+async function markTelegramSourceError(
+  db: D1Database,
+  src: SourceRow,
+  err: unknown,
+  nowMs: number,
+  committedNum = 0,
+): Promise<void> {
   const nextFails = (src.fail_count ?? 0) + 1;
   const nextStatus = nextFails >= 10 ? 'down' : nextFails >= 3 ? 'degraded' : 'ok';
+  const nextPollAt = nowMs + computeTelegramBackoffMs(nextFails);
   console.error(`tg-poll-error:${src.handle}`, err);
   await db
     .prepare(
       `UPDATE sources
-       SET last_polled_at = ?2, fail_count = ?3, status = ?4
+       SET last_polled_at = ?2,
+           fail_count = ?3,
+           status = ?4,
+           next_poll_at = ?5,
+           last_seen_id = CASE
+             WHEN ?6 > 0 AND (last_seen_id IS NULL OR CAST(last_seen_id AS INTEGER) < ?6)
+             THEN CAST(?6 AS TEXT)
+             ELSE last_seen_id
+           END
        WHERE id = ?1`,
     )
-    .bind(src.id, nowMs, nextFails, nextStatus)
+    .bind(src.id, nowMs, nextFails, nextStatus, nextPollAt, committedNum)
     .run();
 }
 
@@ -359,10 +444,19 @@ async function markTelegramSourceOk(db: D1Database, src: SourceRow, maxSeenNum: 
   await db
     .prepare(
       `UPDATE sources
-       SET last_seen_id = ?2, last_ok_at = ?3, last_polled_at = ?3, status = 'ok', fail_count = 0
+       SET last_seen_id = CASE
+             WHEN ?2 > 0 AND (last_seen_id IS NULL OR CAST(last_seen_id AS INTEGER) < ?2)
+             THEN CAST(?2 AS TEXT)
+             ELSE COALESCE(last_seen_id, ?4)
+           END,
+           last_ok_at = ?3,
+           last_polled_at = ?3,
+           status = 'ok',
+           fail_count = 0,
+           next_poll_at = NULL
        WHERE id = ?1`,
     )
-    .bind(src.id, maxSeenNum > 0 ? String(maxSeenNum) : src.last_seen_id, nowMs)
+    .bind(src.id, maxSeenNum, nowMs, src.last_seen_id)
     .run();
 }
 
@@ -376,6 +470,10 @@ async function ingestTelegramSourcePosts(
   nowMs: number,
 ): Promise<{ insertedPosts: number; error: boolean; ingestedResults: IngestPostResult[] }> {
   const { src, newPosts, maxSeenNum } = outcome;
+  const prevSeenNum = src.last_seen_id ? Number.parseInt(src.last_seen_id, 10) : 0;
+  let committedNum = Number.isFinite(prevSeenNum) ? prevSeenNum : 0;
+  const ingestedResults: IngestPostResult[] = [];
+
   try {
     const sourceParseCtx: ParseContext = {
       ...parseCtx,
@@ -384,12 +482,11 @@ async function ingestTelegramSourcePosts(
       surfByTicker: surfIndex.byTicker,
     };
 
-    const relevantPosts = newPosts
-      .map(post => ({ post, parsed: parseDropPost(post.text, post.urls, sourceParseCtx) }))
-      .filter(entry => entry.parsed.isRelevantDrop);
-    const ingestedResults = await Promise.all(
-      relevantPosts.map(({ post, parsed }) =>
-        ingestPostIntoCluster(
+    const orderedPosts = [...newPosts].sort((a, b) => a.msgNum - b.msgNum);
+    for (const post of orderedPosts) {
+      const parsed = parseDropPost(post.text, post.urls, sourceParseCtx);
+      if (parsed.isRelevantDrop) {
+        const res = await ingestPostIntoCluster(
           db,
           {
             postId: `telegram:${src.handle}:${post.msgId}`,
@@ -408,15 +505,17 @@ async function ingestTelegramSourcePosts(
           platformDomains,
           nowMs,
           parsed,
-        ),
-      ),
-    );
+        );
+        ingestedResults.push(res);
+      }
+      if (post.msgNum > committedNum) committedNum = post.msgNum;
+    }
 
-    await markTelegramSourceOk(db, src, maxSeenNum, nowMs);
+    await markTelegramSourceOk(db, src, Math.max(committedNum, maxSeenNum), nowMs);
     return { insertedPosts: ingestedResults.length, error: false, ingestedResults };
   } catch (err) {
-    await markTelegramSourceError(db, src, err, nowMs);
-    return { insertedPosts: 0, error: true, ingestedResults: [] };
+    await markTelegramSourceError(db, src, err, nowMs, committedNum);
+    return { insertedPosts: ingestedResults.length, error: true, ingestedResults };
   }
 }
 
@@ -424,18 +523,18 @@ export async function pollTelegramBatch(
   db: D1Database,
   batchSize = 4,
   nowMs = Date.now(),
-  surfFeed?: AirdropFeed | null,
+  surfFeed?: SurfFeedInput,
   fetcher: (handle: string) => Promise<string> = fetchTelegramChannelHtml,
 ): Promise<TelegramPollSummary> {
   const batchRes = await db
     .prepare(
       `SELECT id, handle, lang, trust, last_seen_id, fail_count
        FROM sources
-       WHERE platform = 'telegram' AND enabled = 1
+       WHERE platform = 'telegram' AND enabled = 1 AND (next_poll_at IS NULL OR next_poll_at <= ?1)
        ORDER BY last_polled_at ASC NULLS FIRST
-       LIMIT ?1`,
+       LIMIT ?2`,
     )
-    .bind(batchSize)
+    .bind(nowMs, batchSize)
     .all<SourceRow>();
 
   const sources = batchRes.results ?? [];
@@ -444,7 +543,9 @@ export async function pollTelegramBatch(
   }
 
   const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
-  const fetchOutcomes = await Promise.all(sources.map(src => fetchAndParseTelegramSource(src, cutoffMs, fetcher)));
+  const fetchOutcomes = await mapWithConcurrency(sources, TG_FETCH_CONCURRENCY, src =>
+    fetchAndParseTelegramSource(src, cutoffMs, nowMs, fetcher),
+  );
   const failedOutcomes = fetchOutcomes.filter((o): o is Extract<TelegramFetchOutcome, { ok: false }> => !o.ok);
   const okOutcomes = fetchOutcomes.filter((o): o is Extract<TelegramFetchOutcome, { ok: true }> => o.ok);
 
@@ -457,8 +558,16 @@ export async function pollTelegramBatch(
     return { polled: sources.length, insertedPosts: 0, errors: failedOutcomes.length, ingestedResults: [] };
   }
 
-  const { projectDomains, platformDomains } = await loadKnownDomains(db, nowMs);
-  const surfIndex: SurfIndex = buildSurfIndex(surfFeed);
+  const [{ projectDomains, platformDomains }, resolvedSurf] = await Promise.all([
+    loadKnownDomains(db, nowMs),
+    typeof surfFeed === 'function'
+      ? surfFeed().catch(err => {
+          console.error('tg-surf-load-error', err);
+          return null;
+        })
+      : Promise.resolve(surfFeed ?? null),
+  ]);
+  const surfIndex: SurfIndex = buildSurfIndex(resolvedSurf);
   const parseCtx: ParseContext = { knownDomains: projectDomains };
 
   const ingestOutcomes = await Promise.all(
@@ -515,6 +624,7 @@ export async function pruneOldPosts(db: D1Database, nowMs = Date.now()): Promise
 
   const [clDel] = await db.batch([
     db.prepare('DELETE FROM clusters WHERE id NOT IN (SELECT DISTINCT cluster_id FROM posts WHERE cluster_id IS NOT NULL)'),
+    db.prepare('DELETE FROM fallback_windows WHERE cluster_id NOT IN (SELECT id FROM clusters)'),
     db.prepare('DELETE FROM cron_state WHERE key = ?1').bind(PRUNE_ORPHANS_STATE_KEY),
   ]);
   return { deletedPosts, deletedClusters: clDel.meta?.changes ?? 0 };

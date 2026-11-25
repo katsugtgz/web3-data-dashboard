@@ -2,7 +2,13 @@ import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
 import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
+import {
+  cardLegacyStorageKey,
+  cardStorageKey,
+  getCardTaskKeyPairs,
+  getCardTasks,
+  isTaskKeyDone,
+} from '../hooks/useWatchlist';
 
 const BADGE_CLASS: Partial<Record<Badge, string>> = {
   live: 'badge badge-live',
@@ -30,7 +36,16 @@ export function Avatar({ name, src, size = 38 }: { name: string; src: string; si
     <span className="avatar" style={{ width: size, height: size }} aria-hidden="true">
       <span>{initials || '?'}</span>
       {src && !broken && (
-        <img src={src} alt="" loading="lazy" decoding="async" width={size} height={size} onError={() => setBroken(true)} />
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          width={size}
+          height={size}
+          onError={() => setBroken(true)}
+        />
       )}
     </span>
   );
@@ -41,7 +56,7 @@ interface CardHeaderProps {
   icon: string;
   chains: string[];
   saved: boolean;
-  onToggleSaved: (key: string) => void;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
 }
 
@@ -61,7 +76,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           </button>
         </div>
         <p className="ticker">
-          <span className="mono">{c.t ? `$${c.t}` : 'Pre-token'}</span>
+          <span className="mono">{c.t ? `$${c.t}` : c.b.includes('token') ? 'Token live' : 'Pre-token'}</span>
           {chains.length > 0 && (
             <>
               {' · '}
@@ -83,7 +98,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           aria-pressed={saved}
           aria-label={`Save ${c.n} to watchlist`}
           title={saved ? 'Remove from watchlist' : 'Save to watchlist'}
-          onClick={() => onToggleSaved(cardStorageKey(c))}
+          onClick={() => onToggleSaved(cardStorageKey(c), cardLegacyStorageKey(c))}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -164,7 +179,7 @@ interface Props {
   fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (key: string) => void;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
@@ -175,8 +190,8 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);
-  const taskKeys = getTaskStorageKeys(cardStorageKey(c), tasks);
-  const doneCount = taskKeys.filter(k => doneTasks.has(k)).length;
+  const taskPairs = getCardTaskKeyPairs(c, tasks);
+  const doneCount = taskPairs.filter(pair => isTaskKeyDone(doneTasks, pair)).length;
   const showBadges = c.b.length > 0 || Boolean(c.x) || doneCount > 0;
 
   return (

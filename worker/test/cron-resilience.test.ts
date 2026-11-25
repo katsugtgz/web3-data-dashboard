@@ -10,6 +10,16 @@ function createSqliteD1(): D1Database {
   return createTestD1().db;
 }
 
+async function seedEnabledSource(db: D1Database, id = 'telegram:ch1', handle = 'ch1'): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO sources (id, platform, handle, lang, trust, enabled)
+       VALUES (?1, 'telegram', ?2, 'en', 0.8, 1)`,
+    )
+    .bind(id, handle)
+    .run();
+}
+
 const NOW = 1_795_240_000_000;
 
 describe('snapshot error marks only advance forward', () => {
@@ -104,6 +114,7 @@ function ingestedFor(clusterId: string, text: string): IngestPostResult[] {
 describe('AI summary chunking with persisted backlog', () => {
   test('processes highest score then newest last_seen up to AI_SUMMARY_CHUNK per tick and drains the rest later', async () => {
     const db = createSqliteD1();
+    await seedEnabledSource(db);
     // Seed 4 backlog clusters (rule summary, non-risk, with posts) whose
     // priority order (score DESC, last_seen DESC) differs from FIFO first_seen.
     const rows = [
@@ -183,6 +194,7 @@ describe('AI summary chunking with persisted backlog', () => {
 
   test('poison-pill failure backs off for 6h then permanently excludes after 3 attempts', async () => {
     const { db, queries, explain } = createTestD1();
+    await seedEnabledSource(db);
     const t0 = NOW;
 
     await db
@@ -284,6 +296,7 @@ describe('AI summary chunking with persisted backlog', () => {
 
   test('exits immediately with zero cluster/post queries when quota is exhausted or AI is disabled', async () => {
     const { db, queries } = createTestD1();
+    await seedEnabledSource(db);
     const day = new Date(NOW).toISOString().slice(0, 10);
 
     await db
@@ -325,10 +338,110 @@ describe('AI summary chunking with persisted backlog', () => {
     const beforeNoAi = queries.length;
     await postProcessIngest({ DB: db, AI_DAILY_MAX: '5', AI_SUMMARY_CHUNK: '2' }, [], NOW);
     expect(queries.slice(beforeNoAi)).toEqual([]);
+
+    // Case 4: AI_SUMMARY_CHUNK = '0' -> disables AI with zero queries.
+    const beforeZeroChunk = queries.length;
+    await postProcessIngest({ DB: db, AI: spyAi, AI_DAILY_MAX: '10', AI_SUMMARY_CHUNK: '0' }, [], NOW);
+    expect(aiCalls).toBe(0);
+    expect(queries.slice(beforeZeroChunk)).toEqual([]);
+  });
+
+  test('excludes non-drop and disabled-source clusters from AI backlog and clamps AI_SUMMARY_CHUNK at 100', async () => {
+    const { db, queries } = createTestD1();
+    await seedEnabledSource(db, 'telegram:enabled', 'enabled');
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:disabled', 'telegram', 'disabled', 'en', 0.8, 0)`,
+      )
+      .run();
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c:nondrop', 'NoiseProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 99, 1, ?1, ?1, 0),
+                ('c:disabled-src', 'DisabledSrcProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 88, 1, ?1, ?1, 1),
+                ('c:legacy-null', 'LegacyNullProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 50, 1, ?1, ?1, NULL),
+                ('c:eligible', 'EligibleProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 70, 1, ?1, ?1, 1)`,
+      )
+      .bind(NOW - 1_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:nondrop', 'telegram:enabled', 'https://t.me/enabled/1', ?1, 'noise', '[]', 'c:nondrop', ?1),
+                ('p:disabled', 'telegram:disabled', 'https://t.me/disabled/1', ?1, 'from disabled', '[]', 'c:disabled-src', ?1),
+                ('p:legacy', 'telegram:enabled', 'https://t.me/enabled/2', ?1, 'legacy drop', '[]', 'c:legacy-null', ?1),
+                ('p:eligible', 'telegram:enabled', 'https://t.me/enabled/3', ?1, 'real drop', '[]', 'c:eligible', ?1)`,
+      )
+      .bind(NOW - 1_000)
+      .run();
+
+    const seenProjects: string[] = [];
+    const env = makeEnv(
+      db,
+      {
+        async run(_model, input) {
+          const prompt = (input as { messages: { content: string }[] }).messages[1].content;
+          seenProjects.push(prompt);
+          return JSON.stringify({ summary: 'AI summarized.', taskTypes: ['quest'], chains: [] });
+        },
+      },
+      '250',
+    );
+
+    const before = queries.length;
+    await postProcessIngest(env, [], NOW);
+    expect(seenProjects.length).toBe(2);
+    expect(seenProjects[0]).toContain('EligibleProto');
+    expect(seenProjects[1]).toContain('LegacyNullProto');
+
+    // Verify LIMIT clamp <= 100 by seeding 105 eligible clusters and asserting at most 100 AI calls.
+    const db2 = createSqliteD1();
+    await seedEnabledSource(db2, 'telegram:enabled', 'enabled');
+    const stmts: D1PreparedStatement[] = [];
+    for (let i = 0; i < 105; i++) {
+      stmts.push(
+        db2
+          .prepare(
+            `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+             VALUES (?1, ?2, '[]', '["other"]', 'rule', 'rule', 'ok', '[]', ?3, 1, ?4, ?4, 1)`,
+          )
+          .bind(`c:${i}`, `Proto${i}`, i + 1, NOW - 1_000),
+      );
+      stmts.push(
+        db2
+          .prepare(
+            `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+             VALUES (?1, 'telegram:enabled', 'https://t.me/enabled/1', ?2, 'drop text', '[]', ?3, ?2)`,
+          )
+          .bind(`p:${i}`, NOW - 1_000, `c:${i}`),
+      );
+    }
+    await db2.batch(stmts);
+
+    let clampedCalls = 0;
+    await postProcessIngest(
+      makeEnv(
+        db2,
+        {
+          async run() {
+            clampedCalls++;
+            return JSON.stringify({ summary: 'Clamped AI summary.', taskTypes: ['quest'], chains: [] });
+          },
+        },
+        '250',
+      ),
+      [],
+      NOW,
+    );
+    expect(clampedCalls).toBe(100);
+    expect(queries.slice(before).some(q => q.includes('is_drop'))).toBe(true);
   });
 
   test('non-Latin ingested follow-ups never bypass ai_retry_after backoff, ai_attempts cap, or summary_source=ai', async () => {
     const db = createSqliteD1();
+    await seedEnabledSource(db);
     const t0 = NOW;
     const day = new Date(t0).toISOString().slice(0, 10);
 
@@ -751,5 +864,237 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
       { key: 'decay', last_run_at: t0 },
       { key: 'prune', last_run_at: t0 },
     ]);
+  });
+
+  test('scheduled */2 * * * * isolates postProcessIngest errors, defers surf snapshot reads on quiet ticks, and honors batch size 0', async () => {
+    const { db, queries } = createTestD1();
+    await upsertSnapshot(db, 'airdrops', { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }, NOW);
+
+    const failingAiDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/\bai_usage\b/i.test(sql)) {
+          return {
+            bind() {
+              return {
+                async first() {
+                  throw new Error('D1 1m ai_usage failure');
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    const origErr = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => logged.push(args);
+    try {
+      const requested: string[] = [];
+      const beforeQueries = queries.length;
+      await withStubbedFetch(
+        url => {
+          requested.push(url);
+          return new Response('offline', { status: 503 });
+        },
+        async () => {
+          await worker.scheduled(
+            { cron: '*/2 * * * *', scheduledTime: NOW, noRetry() {} } as ScheduledController,
+            {
+              DB: failingAiDb,
+              TG_BATCH_SIZE: '1',
+              AI: {
+                async run() {
+                  return '{}';
+                },
+              },
+            },
+            makeExecCtx(),
+          );
+        },
+      );
+      expect(logged.some(args => args[0] === 'cron-error:postProcessIngest:1m')).toBe(true);
+      // Quiet/failed TG tick must not read the 471KB airdrops snapshot from D1.
+      expect(queries.slice(beforeQueries).some(q => /\bFROM\s+snapshots\b/i.test(q))).toBe(false);
+
+      // TG_BATCH_SIZE='0' skips Telegram polling completely.
+      requested.length = 0;
+      await withStubbedFetch(
+        url => {
+          requested.push(url);
+          return new Response('ok', { status: 200 });
+        },
+        async () => {
+          await worker.scheduled(
+            { cron: '*/2 * * * *', scheduledTime: NOW, noRetry() {} } as ScheduledController,
+            { DB: db, TG_BATCH_SIZE: '0' },
+            makeExecCtx(),
+          );
+        },
+      );
+      expect(requested).toEqual([]);
+
+      // X_BATCH_SIZE='0' skips X polling completely during */5 cron.
+      requested.length = 0;
+      await withStubbedFetch(
+        url => {
+          requested.push(url);
+          return new Response('offline', { status: 503 });
+        },
+        async () => {
+          await worker.scheduled(
+            { cron: '*/5 * * * *', scheduledTime: NOW, noRetry() {} } as ScheduledController,
+            { DB: db, X_BATCH_SIZE: '0' },
+            makeExecCtx(),
+          );
+        },
+      );
+      expect(requested.some(u => /syndication\.twitter\.com|nitter/i.test(u))).toBe(false);
+    } finally {
+      console.error = origErr;
+    }
+  });
+});
+
+describe('HTTP hardening: health, CORS, Allow, HEAD, canonical cache keys, cold 304, Vary', () => {
+  test('/health reflects real snapshot health (false when empty or any snapshot failed, true when all ok)', async () => {
+    const { db } = createTestD1();
+
+    const emptyRes = await worker.fetch(new Request('https://radar.test/health'), { DB: db }, makeExecCtx());
+    expect(emptyRes.status).toBe(200);
+    expect(emptyRes.headers.get('Access-Control-Max-Age')).toBe('86400');
+    expect((await emptyRes.json()) as { ok: boolean }).toMatchObject({ ok: false, snapshots: {} });
+
+    await upsertSnapshot(db, 'airdrops', { cards: [] }, NOW);
+    const okRes = await worker.fetch(new Request('https://radar.test/health'), { DB: db }, makeExecCtx());
+    expect((await okRes.json()) as { ok: boolean }).toMatchObject({ ok: true });
+
+    await markSnapshotError(db, 'markets:crypto', new Error('429'), NOW + 1_000);
+    const degradedRes = await worker.fetch(new Request('https://radar.test/health'), { DB: db }, makeExecCtx());
+    expect((await degradedRes.json()) as { ok: boolean }).toMatchObject({ ok: false });
+  });
+
+  test('enforces CORS Max-Age, 405 Allow, HEAD empty body + Content-Length + stream cancel, canonical cache keys, cold 304 warming, and Vary', async () => {
+    const { db, queries } = createTestD1();
+    await upsertSnapshot(db, 'airdrops', { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }, NOW);
+
+    const pendingWaits: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil(p: Promise<unknown>) {
+        pendingWaits.push(p);
+      },
+      passThroughOnException() {},
+    } as unknown as ExecutionContext;
+
+    const g = globalThis as unknown as { caches?: CacheStorage };
+    const hadCaches = 'caches' in g;
+    const prevCaches = g.caches;
+    const store = new Map<string, { res: Response; bodyText: string }>();
+    const cancelledKeys: string[] = [];
+
+    const defaultCache = {
+      async match(req: RequestInfo | URL) {
+        const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+        const hit = store.get(key);
+        if (!hit) return undefined;
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(hit.bodyText));
+            c.close();
+          },
+          cancel() {
+            cancelledKeys.push(key);
+          },
+        });
+        return new Response(stream, { status: hit.res.status, headers: hit.res.headers });
+      },
+      async put(req: RequestInfo | URL, res: Response) {
+        const key = typeof req === 'string' ? req : req instanceof URL ? req.toString() : req.url;
+        const bodyText = await res.clone().text();
+        store.set(key, { res: res.clone(), bodyText });
+      },
+    };
+    g.caches = { default: defaultCache } as unknown as CacheStorage;
+
+    try {
+      // 1. OPTIONS has Access-Control-Max-Age: 86400
+      const optRes = await worker.fetch(new Request('https://radar.test/airdrops.json', { method: 'OPTIONS' }), { DB: db }, ctx);
+      expect(optRes.status).toBe(204);
+      expect(optRes.headers.get('Access-Control-Max-Age')).toBe('86400');
+
+      // 2. 405 has Allow: GET, HEAD, OPTIONS
+      const res405 = await worker.fetch(new Request('https://radar.test/airdrops.json', { method: 'POST' }), { DB: db }, ctx);
+      expect(res405.status).toBe(405);
+      expect(res405.headers.get('Allow')).toBe('GET, HEAD, OPTIONS');
+
+      // 3. HEAD on 404 returns empty body + Content-Length
+      const head404 = await worker.fetch(new Request('https://radar.test/missing', { method: 'HEAD' }), { DB: db }, ctx);
+      expect(head404.status).toBe(404);
+      expect(await head404.text()).toBe('');
+      expect(Number(head404.headers.get('Content-Length'))).toBe(JSON.stringify({ error: 'Not found' }).length);
+
+      // 4. Cold 304 warms caches.default and includes Vary: Accept-Encoding
+      const snapRow = await readSnapshot(db, 'airdrops');
+      const etag = snapRow!.etag;
+      const cold304 = await worker.fetch(
+        new Request('https://radar.test/airdrops.json?cb=first', { headers: { 'If-None-Match': etag } }),
+        { DB: db },
+        ctx,
+      );
+      await Promise.all(pendingWaits.splice(0));
+      expect(cold304.status).toBe(304);
+      expect(cold304.headers.get('Vary')).toBe('Accept-Encoding');
+      expect(cold304.headers.get('Access-Control-Max-Age')).toBe('86400');
+      expect(store.has('https://radar.test/airdrops.json')).toBe(true);
+
+      // 5. Subsequent GET with different query param hits canonical cache key with 0 D1 queries & Vary: Accept-Encoding
+      const beforeHit = queries.length;
+      const cacheHit = await worker.fetch(new Request('https://radar.test/airdrops.json?cb=second'), { DB: db }, ctx);
+      expect(cacheHit.status).toBe(200);
+      expect(cacheHit.headers.get('Vary')).toBe('Accept-Encoding');
+      expect(Number(cacheHit.headers.get('Content-Length'))).toBe(new TextEncoder().encode(snapRow!.body).byteLength);
+      expect(queries.length).toBe(beforeHit);
+
+      // 6. Cache-hit HEAD strips body, preserves Content-Length, and cancels cached stream
+      const headHit = await worker.fetch(
+        new Request('https://radar.test/airdrops.json?cb=third', { method: 'HEAD' }),
+        { DB: db },
+        ctx,
+      );
+      expect(headHit.status).toBe(200);
+      expect(await headHit.text()).toBe('');
+      expect(Number(headHit.headers.get('Content-Length'))).toBe(new TextEncoder().encode(snapRow!.body).byteLength);
+      expect(cancelledKeys).toContain('https://radar.test/airdrops.json');
+
+      // 7. /feed.json canonicalizes query params deterministically and ignores unknown params
+      await worker.fetch(new Request('https://radar.test/feed.json?sort=new&limit=20&utm=spam'), { DB: db }, ctx);
+      await Promise.all(pendingWaits.splice(0));
+      expect(store.has('https://radar.test/feed.json?limit=20&sort=new')).toBe(true);
+
+      const beforeFeedHit = queries.length;
+      const feedHit = await worker.fetch(
+        new Request('https://radar.test/feed.json?limit=20&sort=new&risk=include&since=0&other=1'),
+        { DB: db },
+        ctx,
+      );
+      expect(feedHit.status).toBe(200);
+      expect(feedHit.headers.get('Vary')).toBe('Accept-Encoding');
+      expect(queries.length).toBe(beforeFeedHit);
+
+      // Default params collapse to bare /feed.json; limit<=0 clamps to 1
+      await worker.fetch(new Request('https://radar.test/feed.json?limit=100&sort=score&risk=include&since=0&x=y'), { DB: db }, ctx);
+      await Promise.all(pendingWaits.splice(0));
+      expect(store.has('https://radar.test/feed.json')).toBe(true);
+
+      await worker.fetch(new Request('https://radar.test/feed.json?limit=0'), { DB: db }, ctx);
+      await Promise.all(pendingWaits.splice(0));
+      expect(store.has('https://radar.test/feed.json?limit=1')).toBe(true);
+    } finally {
+      if (hadCaches) g.caches = prevCaches;
+      else delete g.caches;
+    }
   });
 });

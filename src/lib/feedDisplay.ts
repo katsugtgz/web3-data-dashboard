@@ -463,12 +463,13 @@ export function prepareFeedLinks(
     const referralKind = isSocial ? null : referralPathKind(parsed.url.pathname);
     const matchesDomain = Boolean(item.domain && hostMatchesDomain(host, item.domain));
 
-    const tier = !isSocial ? (rawLink.known ? 0 : matchesDomain ? 1 : 2) : 3;
+    const known = rawLink.known === true && parsed.url.protocol === 'https:';
+    const tier = !isSocial ? (known ? 0 : matchesDomain ? 1 : 2) : 3;
     const candidate: LinkCandidate = {
       url: parsed.url,
       href: parsed.url.href,
       bareHost: host,
-      known: rawLink.known === true,
+      known,
       isSocial,
       isBioAggregator,
       referralKind,

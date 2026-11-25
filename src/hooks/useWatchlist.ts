@@ -16,6 +16,51 @@ export function cardStorageKey(card: Pick<Card, 'id' | 'n'>): string {
   return card.id ?? card.n;
 }
 
+export function cardLegacyStorageKey(card: Pick<Card, 'id' | 'n'>): string | undefined {
+  return card.id && card.id !== card.n ? card.n : undefined;
+}
+
+export function isCardSaved(saved: ReadonlySet<string>, card: Pick<Card, 'id' | 'n'>): boolean {
+  const primary = cardStorageKey(card);
+  const legacy = cardLegacyStorageKey(card);
+  return saved.has(primary) || (legacy !== undefined && saved.has(legacy));
+}
+
+export interface TaskKeyPair {
+  primary: string;
+  legacy: string | null;
+}
+
+export function getCardTaskKeyPairs(
+  card: Pick<Card, 'id' | 'n'>,
+  tasks: readonly { title: string; type: string }[],
+): TaskKeyPair[] {
+  const primaryKeys = getTaskStorageKeys(cardStorageKey(card), tasks);
+  const legacyProjectKey = cardLegacyStorageKey(card);
+  const legacyKeys = legacyProjectKey ? getTaskStorageKeys(legacyProjectKey, tasks) : null;
+  return primaryKeys.map((primary, i) => ({
+    primary,
+    legacy: legacyKeys ? legacyKeys[i] : null,
+  }));
+}
+
+export function isTaskKeyDone(doneTasks: ReadonlySet<string>, pair: TaskKeyPair): boolean {
+  return doneTasks.has(pair.primary) || (pair.legacy !== null && doneTasks.has(pair.legacy));
+}
+
+export function toggleStorageEntry(prev: ReadonlySet<string>, primaryKey: string, legacyKey?: string): Set<string> {
+  const next = new Set(prev);
+  const hasPrimary = next.has(primaryKey);
+  const hasLegacy = Boolean(legacyKey && legacyKey !== primaryKey && next.has(legacyKey));
+  if (hasPrimary || hasLegacy) {
+    next.delete(primaryKey);
+    if (legacyKey) next.delete(legacyKey);
+  } else {
+    next.add(primaryKey);
+  }
+  return next;
+}
+
 function readSet(key: string): Set<string> {
   try {
     const raw = localStorage.getItem(key);
@@ -70,58 +115,54 @@ export function getCardTasks(card: Card): CardTask[] {
 export function useWatchlist() {
   const [saved, setSaved] = useState<Set<string>>(() => readSet(SAVED_KEY));
   const [doneTasks, setDoneTasks] = useState<Set<string>>(() => readSet(TASKS_KEY));
-  const persistSavedRef = useRef(false);
-  const persistTasksRef = useRef(false);
+  // Monotonic mutation counters ensure cross-tab storage events never cancel
+  // pending local persistence before the effect commits.
+  const savedMutationRef = useRef(0);
+  const persistedSavedRef = useRef(0);
+  const tasksMutationRef = useRef(0);
+  const persistedTasksRef = useRef(0);
 
   useEffect(() => {
-    if (!persistSavedRef.current) return;
-    persistSavedRef.current = false;
+    if (savedMutationRef.current === persistedSavedRef.current) return;
+    persistedSavedRef.current = savedMutationRef.current;
     writeSet(SAVED_KEY, saved);
   }, [saved]);
 
   useEffect(() => {
-    if (!persistTasksRef.current) return;
-    persistTasksRef.current = false;
+    if (tasksMutationRef.current === persistedTasksRef.current) return;
+    persistedTasksRef.current = tasksMutationRef.current;
     writeSet(TASKS_KEY, doneTasks);
   }, [doneTasks]);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === null || e.key === SAVED_KEY) {
-        persistSavedRef.current = false;
-        setSaved(readSet(SAVED_KEY));
+        if (savedMutationRef.current === persistedSavedRef.current) {
+          setSaved(readSet(SAVED_KEY));
+        }
       }
       if (e.key === null || e.key === TASKS_KEY) {
-        persistTasksRef.current = false;
-        setDoneTasks(readSet(TASKS_KEY));
+        if (tasksMutationRef.current === persistedTasksRef.current) {
+          setDoneTasks(readSet(TASKS_KEY));
+        }
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  const toggleSaved = useCallback((projectName: string) => {
-    persistSavedRef.current = true;
-    setSaved(prev => {
-      const next = new Set(prev);
-      if (next.has(projectName)) next.delete(projectName);
-      else next.add(projectName);
-      return next;
-    });
+  const toggleSaved = useCallback((projectKey: string, legacyKey?: string) => {
+    savedMutationRef.current += 1;
+    setSaved(prev => toggleStorageEntry(prev, projectKey, legacyKey));
   }, []);
 
-  const toggleTaskDone = useCallback((taskKey: string) => {
-    persistTasksRef.current = true;
-    setDoneTasks(prev => {
-      const next = new Set(prev);
-      if (next.has(taskKey)) next.delete(taskKey);
-      else next.add(taskKey);
-      return next;
-    });
+  const toggleTaskDone = useCallback((taskKey: string, legacyKey?: string) => {
+    tasksMutationRef.current += 1;
+    setDoneTasks(prev => toggleStorageEntry(prev, taskKey, legacyKey));
   }, []);
 
   const clearSaved = useCallback(() => {
-    persistSavedRef.current = true;
+    savedMutationRef.current += 1;
     setSaved(new Set());
   }, []);
 

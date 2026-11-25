@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Full CJK coverage: Han + Hiragana + Katakana + Hangul. Han-only matching let
-# Japanese/Korean text through a gate that claims to reject CJK.
-CJK_RE='\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{FF01}-\x{FF9F}]'
+# Full CJK coverage: Han + Hiragana + Katakana + Hangul + Bopomofo plus CJK
+# symbols/punctuation, enclosed ideographs, compatibility forms, and fullwidth
+# forms (e.g. U+FFE5, U+3231, U+FE30).
+CJK_RE='\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{3200}-\x{32FF}\x{FE30}-\x{FE4F}\x{FF01}-\x{FFEF}]'
 
 set +e
-MATCHES=$(rg -n --pcre2 "$CJK_RE" src shared worker/src index.html --glob '!worker/src/normalize/i18n.ts')
+MATCHES=$(rg -n --pcre2 "$CJK_RE" src shared worker/src index.html scripts public worker/sources.json worker/migrations data/snapshot --glob '!worker/src/normalize/i18n.ts')
 STATUS=$?
 set -e
 
@@ -21,4 +22,3 @@ else
   echo "ERROR: ripgrep failed with exit code $STATUS"
   exit "$STATUS"
 fi
-

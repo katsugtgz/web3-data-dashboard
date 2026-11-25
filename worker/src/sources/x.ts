@@ -65,9 +65,12 @@ function extractTweetEntityUrls(entities?: NextTweetEntityUrl[]): string[] {
   return [...new Set(out)];
 }
 
-export function parseNextDataTimeline(html: string, handle: string): ParsedXPost[] {
-  const m = html.match(/<script\s+id="__NEXT_DATA__"\s+type="application\/json">([\s\S]*?)<\/script>/i);
+const MAX_FUTURE_SKEW_MS = 15 * 60_000;
+
+export function parseNextDataTimeline(html: string, handle: string, nowMs = Date.now()): ParsedXPost[] {
+  const m = html.match(/<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
   if (!m) return [];
+  const maxAllowedTs = nowMs + MAX_FUTURE_SKEW_MS;
   try {
     const json = JSON.parse(m[1]) as {
       props?: { pageProps?: { timeline?: { entries?: { content?: { tweet?: NextTweet } }[] } } };
@@ -81,10 +84,10 @@ export function parseNextDataTimeline(html: string, handle: string): ParsedXPost
       if (!idStr) continue;
       const text = (tweet.full_text ?? tweet.text ?? '').trim();
       if (!text) continue;
-      // Undated/invalid timestamps must be REJECTED, not stamped as now: the
-      // 14-day cutoff would otherwise admit stale undated tweets forever.
+      // Undated/invalid/future-skewed timestamps must be REJECTED, not stamped as now:
+      // the 14-day cutoff would otherwise admit stale undated tweets forever.
       const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
-      if (!Number.isFinite(parsedTime)) continue;
+      if (!Number.isFinite(parsedTime) || parsedTime > maxAllowedTs) continue;
       const urls = extractTweetEntityUrls(tweet.entities?.urls);
       const postUrl = tweet.permalink
         ? tweet.permalink.startsWith('http')
@@ -105,9 +108,10 @@ export function parseNextDataTimeline(html: string, handle: string): ParsedXPost
   }
 }
 
-export function parseCdnSyndication(body: string, handle: string): ParsedXPost[] {
+export function parseCdnSyndication(body: string, handle: string, nowMs = Date.now()): ParsedXPost[] {
   const trimmed = body.trim();
   if (!trimmed) return [];
+  const maxAllowedTs = nowMs + MAX_FUTURE_SKEW_MS;
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const data = JSON.parse(trimmed) as { entries?: NextTweet[] } | NextTweet[];
@@ -117,9 +121,9 @@ export function parseCdnSyndication(body: string, handle: string): ParsedXPost[]
           const idStr = String(tweet.id_str ?? tweet.id ?? '');
           const text = (tweet.full_text ?? tweet.text ?? '').trim();
           if (!idStr || !text) return null;
-          // Same rejection as the __NEXT_DATA__ path: no valid timestamp, no post.
+          // Same rejection as the __NEXT_DATA__ path: no valid non-future timestamp, no post.
           const parsedTime = tweet.created_at ? Date.parse(tweet.created_at) : NaN;
-          if (!Number.isFinite(parsedTime)) return null;
+          if (!Number.isFinite(parsedTime) || parsedTime > maxAllowedTs) return null;
           const urls = extractTweetEntityUrls(tweet.entities?.urls);
           return {
             idStr,
@@ -134,7 +138,7 @@ export function parseCdnSyndication(body: string, handle: string): ParsedXPost[]
       return [];
     }
   }
-  return parseNextDataTimeline(trimmed, handle);
+  return parseNextDataTimeline(trimmed, handle, nowMs);
 }
 
 const TWENTY_FOUR_H_MS = 24 * 3_600_000;
@@ -170,7 +174,7 @@ export function computeXBackoff(
   };
 }
 
-export async function fetchXTimelineBestEffort(handle: string): Promise<ParsedXPost[]> {
+export async function fetchXTimelineBestEffort(handle: string, nowMs = Date.now()): Promise<ParsedXPost[]> {
   const urls = [
     `https://cdn.syndication.twimg.com/timeline/profile?screen_name=${encodeURIComponent(handle)}`,
     `https://syndication.twitter.com/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`,
@@ -182,12 +186,15 @@ export async function fetchXTimelineBestEffort(handle: string): Promise<ParsedXP
         headers: { 'User-Agent': USER_AGENT },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        await res.body?.cancel();
+        continue;
+      }
       const body = await res.text();
       if (!body.trim()) continue;
       const parsed = endpoint.includes('cdn.syndication')
-        ? parseCdnSyndication(body, handle)
-        : parseNextDataTimeline(body, handle);
+        ? parseCdnSyndication(body, handle, nowMs)
+        : parseNextDataTimeline(body, handle, nowMs);
       if (parsed.length > 0) return parsed;
     } catch {
       // Expected failure on X syndication endpoints; try next or degrade cleanly
@@ -226,15 +233,19 @@ async function pollSingleXSource(
   projectDomains: Map<string, string>,
   platformDomains: Set<string> | undefined,
   nowMs: number,
-  fetcher: (handle: string) => Promise<ParsedXPost[]>,
+  fetcher: (handle: string, nowMs?: number) => Promise<ParsedXPost[]>,
 ): Promise<{ insertedPosts: number; degraded: boolean; ingestedResults: IngestPostResult[] }> {
   const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
+  const maxAllowedTs = nowMs + MAX_FUTURE_SKEW_MS;
+  let committedId = src.last_seen_id ?? '';
+  const ingestedResults: IngestPostResult[] = [];
   try {
-    const posts = await fetcher(src.handle);
-    if (posts.length === 0) throw new Error(`0 tweets parsed for @${src.handle}`);
+    const posts = await fetcher(src.handle, nowMs);
+    const validPosts = posts.filter(p => Number.isFinite(p.postedAt) && p.postedAt <= maxAllowedTs);
+    if (validPosts.length === 0) throw new Error(`0 tweets parsed for @${src.handle}`);
 
     let maxSeen = src.last_seen_id ?? '';
-    const newPosts = posts.filter(p => {
+    const newPosts = validPosts.filter(p => {
       if (!maxSeen || compareSnowflakeIds(p.idStr, maxSeen) > 0) maxSeen = p.idStr;
       if (src.last_seen_id && compareSnowflakeIds(p.idStr, src.last_seen_id) <= 0) return false;
       return p.postedAt >= cutoffMs;
@@ -247,13 +258,11 @@ async function pollSingleXSource(
       surfByTicker: surfIndex.byTicker,
     };
 
-    const relevantPosts = newPosts
-      .map(post => ({ post, parsed: parseDropPost(post.text, post.urls, sourceParseCtx) }))
-      .filter(entry => entry.parsed.isRelevantDrop);
-
-    const ingestedResults = await Promise.all(
-      relevantPosts.map(({ post: p, parsed }) =>
-        ingestPostIntoCluster(
+    const orderedPosts = [...newPosts].sort((a, b) => compareSnowflakeIds(a.idStr, b.idStr));
+    for (const p of orderedPosts) {
+      const parsed = parseDropPost(p.text, p.urls, sourceParseCtx);
+      if (parsed.isRelevantDrop) {
+        const res = await ingestPostIntoCluster(
           db,
           {
             postId: `x:${src.handle}:${p.idStr}`,
@@ -271,18 +280,37 @@ async function pollSingleXSource(
           platformDomains,
           nowMs,
           parsed,
-        ),
-      ),
-    );
+        );
+        ingestedResults.push(res);
+      }
+      if (!committedId || compareSnowflakeIds(p.idStr, committedId) > 0) {
+        committedId = p.idStr;
+      }
+    }
 
+    const finalSeen =
+      committedId && (!maxSeen || compareSnowflakeIds(committedId, maxSeen) > 0) ? committedId : maxSeen;
     await db
       .prepare(
         `UPDATE sources
-         SET last_seen_id = ?2, last_ok_at = ?3, last_polled_at = ?3,
-             status = 'ok', fail_count = 0, first_fail_at = NULL, next_poll_at = NULL
+         SET last_seen_id = CASE
+               WHEN ?2 IS NOT NULL AND ?2 != '' AND (
+                 last_seen_id IS NULL
+                 OR length(?2) > length(last_seen_id)
+                 OR (length(?2) = length(last_seen_id) AND ?2 > last_seen_id)
+               )
+               THEN ?2
+               ELSE last_seen_id
+             END,
+             last_ok_at = ?3,
+             last_polled_at = ?3,
+             status = 'ok',
+             fail_count = 0,
+             first_fail_at = NULL,
+             next_poll_at = NULL
          WHERE id = ?1`,
       )
-      .bind(src.id, maxSeen || src.last_seen_id, nowMs)
+      .bind(src.id, finalSeen || src.last_seen_id, nowMs)
       .run();
 
     return { insertedPosts: ingestedResults.length, degraded: false, ingestedResults };
@@ -292,12 +320,25 @@ async function pollSingleXSource(
     await db
       .prepare(
         `UPDATE sources
-         SET last_polled_at = ?2, fail_count = ?3, first_fail_at = ?4, status = ?5, next_poll_at = ?6
+         SET last_polled_at = ?2,
+             fail_count = ?3,
+             first_fail_at = ?4,
+             status = ?5,
+             next_poll_at = ?6,
+             last_seen_id = CASE
+               WHEN ?7 IS NOT NULL AND ?7 != '' AND (
+                 last_seen_id IS NULL
+                 OR length(?7) > length(last_seen_id)
+                 OR (length(?7) = length(last_seen_id) AND ?7 > last_seen_id)
+               )
+               THEN ?7
+               ELSE last_seen_id
+             END
          WHERE id = ?1`,
       )
-      .bind(src.id, nowMs, backoff.failCount, backoff.firstFailAt, backoff.status, backoff.nextPollAt)
+      .bind(src.id, nowMs, backoff.failCount, backoff.firstFailAt, backoff.status, backoff.nextPollAt, committedId || null)
       .run();
-    return { insertedPosts: 0, degraded: true, ingestedResults: [] };
+    return { insertedPosts: ingestedResults.length, degraded: true, ingestedResults };
   }
 }
 
@@ -306,7 +347,7 @@ export async function pollXBatch(
   batchSize = 3,
   nowMs = Date.now(),
   surfFeed?: AirdropFeed | null,
-  fetcher: (handle: string) => Promise<ParsedXPost[]> = fetchXTimelineBestEffort,
+  fetcher: (handle: string, nowMs?: number) => Promise<ParsedXPost[]> = fetchXTimelineBestEffort,
 ): Promise<XPollSummary> {
   const res = await db
     .prepare(
