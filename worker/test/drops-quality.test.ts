@@ -3037,7 +3037,7 @@ describe('Domain classification & i18n ASSO7878 regression fixes', () => {
     expect(getRegistrableDomain('http://1.1.1.1/')).toBe('1.1.1.1');
     expect(getRegistrableDomain('https://999.999.999.999/')).toBeUndefined();
     expect(getRegistrableDomain('https://bad host.com/')).toBeUndefined();
-    expect(getRegistrableDomain('https://bad..host.com/')).toBe('host.com');
+    expect(getRegistrableDomain('https://bad..host.com/')).toBeUndefined();
     expect(getRegistrableDomain('https://localhost/test')).toBeUndefined();
     expect(getRegistrableDomain('not-a-url')).toBeUndefined();
     expect(getRegistrableDomain('https://1inch.io/swap')).toBe('1inch.io');

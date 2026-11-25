@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { createDevLocalhostCspPlugin } from './src/lib/devCsp';
 
 const BASE = process.env.VITE_BASE || (process.env.GITHUB_ACTIONS ? '/web3-data-dashboard/' : '/');
 
@@ -66,8 +67,12 @@ function prefetchStaticSnapshots(): Plugin {
   };
 }
 
+export function devLocalhostCsp(): Plugin {
+  return createDevLocalhostCspPlugin();
+}
+
 export default defineConfig({
-  plugins: [react(), prefetchStaticSnapshots()],
+  plugins: [react(), prefetchStaticSnapshots(), devLocalhostCsp()],
   base: BASE,
   build: { target: 'esnext', outDir: 'dist' },
 });

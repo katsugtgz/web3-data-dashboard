@@ -784,4 +784,278 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
       globalThis.fetch = prevFetch;
     }
   });
+
+  test('normalizePostId keeps clean GUIDs verbatim and prevents distinct upstream GUIDs from colliding', () => {
+    const longSuffix = 'x'.repeat(80);
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+      <rss version="2.0"><channel><title>GuidCollisions</title>
+        <item>
+          <title>Campaign Dash A</title>
+          <link>https://example.com/1</link>
+          <guid>campaign-a</guid>
+          <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+          <description>Dash variant</description>
+        </item>
+        <item>
+          <title>Campaign Slash A</title>
+          <link>https://example.com/2</link>
+          <guid>campaign/a</guid>
+          <pubDate>Mon, 23 Nov 2026 10:01:00 GMT</pubDate>
+          <description>Slash variant</description>
+        </item>
+        <item>
+          <title>Https Scheme Guid</title>
+          <link>https://example.com/3</link>
+          <guid>https://feed.example/post/42</guid>
+          <pubDate>Mon, 23 Nov 2026 10:02:00 GMT</pubDate>
+          <description>HTTPS guid</description>
+        </item>
+        <item>
+          <title>Http Scheme Guid</title>
+          <link>https://example.com/4</link>
+          <guid>http://feed.example/post/42</guid>
+          <pubDate>Mon, 23 Nov 2026 10:03:00 GMT</pubDate>
+          <description>HTTP guid</description>
+        </item>
+        <item>
+          <title>Long Guid 1</title>
+          <link>https://example.com/5</link>
+          <guid>prefix-1-${longSuffix}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:04:00 GMT</pubDate>
+          <description>Long guid 1</description>
+        </item>
+        <item>
+          <title>Long Guid 2</title>
+          <link>https://example.com/6</link>
+          <guid>prefix-2-${longSuffix}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:05:00 GMT</pubDate>
+          <description>Long guid 2</description>
+        </item>
+        <item>
+          <title>Tilde Guid</title>
+          <link>https://example.com/7</link>
+          <guid>campaign-a~0123456789abcdef</guid>
+          <pubDate>Mon, 23 Nov 2026 10:06:00 GMT</pubDate>
+          <description>Contains tilde</description>
+        </item>
+      </channel></rss>`;
+
+    const first = parseRssOrAtomXml(rss);
+    const second = parseRssOrAtomXml(rss);
+
+    expect(first.length).toBe(7);
+    expect(new Set(first.map(p => p.id)).size).toBe(7);
+    expect(first.map(p => p.id)).toEqual(second.map(p => p.id));
+
+    const dashPost = first.find(p => p.postUrl === 'https://example.com/1')!;
+    const slashPost = first.find(p => p.postUrl === 'https://example.com/2')!;
+    expect(dashPost.id).toBe('campaign-a');
+    expect(slashPost.id).toMatch(/^campaign-a~[0-9a-f]{16}$/);
+    expect(slashPost.id).not.toBe(dashPost.id);
+  });
+
+  test('parsePendlePoints keeps deterministic card IDs stable when liquidity order flips', () => {
+    const highAPlusB = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 5_000_000 },
+          },
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: 'A-B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_500_000 },
+          },
+          {
+            name: 'sUSDe',
+            address: '0xc',
+            protocol: 'Ethena',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 2_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+
+    const highADashB = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: 'A-B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 8_000_000 },
+          },
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+          {
+            name: 'sUSDe',
+            address: '0xc',
+            protocol: 'Ethena',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 2_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+
+    const id1 = (name: string) => highAPlusB.cards.find(c => c.n === name)!.id;
+    const id2 = (name: string) => highADashB.cards.find(c => c.n === name)!.id;
+
+    expect(id1('Ethena')).toBe('pendle:ethena');
+    expect(id2('Ethena')).toBe('pendle:ethena');
+    expect(id1('A-B')).toBe('pendle:a-b');
+    expect(id2('A-B')).toBe('pendle:a-b');
+    expect(id1('A+B')).toMatch(/^pendle:a-b-[0-9a-f]{8}$/);
+    expect(id1('A+B')).toBe(id2('A+B'));
+    expect(id1('A+B')).not.toBe(id1('A-B'));
+  });
+
+  test('parseMerklOpportunities keeps deterministic card IDs stable across TVL swaps and protocol.id values', () => {
+    const highAPlusB = parseMerklOpportunities(
+      [
+        {
+          id: 'opp-1',
+          name: 'Pool 1',
+          chain: { name: 'Base' },
+          protocol: { name: 'A+B' },
+          status: 'LIVE',
+          tvl: 5_000_000,
+          depositUrl: 'https://ab1.xyz',
+        },
+        {
+          id: 'opp-2',
+          name: 'Pool 2',
+          chain: { name: 'Base' },
+          protocol: { name: 'A-B' },
+          status: 'LIVE',
+          tvl: 1_000_000,
+          depositUrl: 'https://ab2.xyz',
+        },
+        {
+          id: 'opp-3',
+          name: 'Morpho Vault',
+          chain: { name: 'Base' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          status: 'LIVE',
+          tvl: 2_000_000,
+          depositUrl: 'https://app.morpho.org/vault',
+        },
+        {
+          id: 'opp-4',
+          name: 'Alpha V1 Pool',
+          chain: { name: 'Arbitrum' },
+          protocol: { id: 'alpha-v1', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 4_000_000,
+          depositUrl: 'https://alpha-v1.xyz',
+        },
+        {
+          id: 'opp-5',
+          name: 'Alpha V2 Pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'alpha_v2', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 1_200_000,
+          depositUrl: 'https://alpha-v2.xyz',
+        },
+      ],
+      NOW,
+    );
+
+    const swappedTvl = parseMerklOpportunities(
+      [
+        {
+          id: 'opp-2',
+          name: 'Pool 2',
+          chain: { name: 'Base' },
+          protocol: { name: 'A-B' },
+          status: 'LIVE',
+          tvl: 6_000_000,
+          depositUrl: 'https://ab2.xyz',
+        },
+        {
+          id: 'opp-1',
+          name: 'Pool 1',
+          chain: { name: 'Base' },
+          protocol: { name: 'A+B' },
+          status: 'LIVE',
+          tvl: 900_000,
+          depositUrl: 'https://ab1.xyz',
+        },
+        {
+          id: 'opp-3',
+          name: 'Morpho Vault',
+          chain: { name: 'Base' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          status: 'LIVE',
+          tvl: 2_000_000,
+          depositUrl: 'https://app.morpho.org/vault',
+        },
+        {
+          id: 'opp-5',
+          name: 'Alpha V2 Pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'alpha_v2', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 7_000_000,
+          depositUrl: 'https://alpha-v2.xyz',
+        },
+        {
+          id: 'opp-4',
+          name: 'Alpha V1 Pool',
+          chain: { name: 'Arbitrum' },
+          protocol: { id: 'alpha-v1', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 800_000,
+          depositUrl: 'https://alpha-v1.xyz',
+        },
+      ],
+      NOW,
+    );
+
+    const byUrl1 = (url: string) => highAPlusB.cards.find(c => c.url === url)!.id;
+    const byUrl2 = (url: string) => swappedTvl.cards.find(c => c.url === url)!.id;
+
+    expect(byUrl1('https://app.morpho.org/vault')).toBe('merkl:morpho');
+    expect(byUrl2('https://app.morpho.org/vault')).toBe('merkl:morpho');
+    expect(byUrl1('https://ab2.xyz/')).toBe('merkl:a-b');
+    expect(byUrl2('https://ab2.xyz/')).toBe('merkl:a-b');
+    expect(byUrl1('https://ab1.xyz/')).toMatch(/^merkl:a-b-[0-9a-f]{8}$/);
+    expect(byUrl1('https://ab1.xyz/')).toBe(byUrl2('https://ab1.xyz/'));
+    expect(byUrl1('https://ab1.xyz/')).not.toBe(byUrl1('https://ab2.xyz/'));
+
+    // Distinct protocol.id values with the same display name stay distinct and TVL-order-independent
+    expect(byUrl1('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
+    expect(byUrl2('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
+    expect(byUrl1('https://alpha-v2.xyz/')).toMatch(/^merkl:alpha-v2-[0-9a-f]{8}$/);
+    expect(byUrl1('https://alpha-v2.xyz/')).toBe(byUrl2('https://alpha-v2.xyz/'));
+    expect(byUrl1('https://alpha-v1.xyz/')).not.toBe(byUrl1('https://alpha-v2.xyz/'));
+  });
 });

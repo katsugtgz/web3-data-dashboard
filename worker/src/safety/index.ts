@@ -3,6 +3,7 @@ import {
   BENIGN_DNS_IPS,
   canonicalLinkKey,
   cleanUrl,
+  CURATED_AGGREGATOR_DOMAINS,
   extractSuspiciousRawIpUrls,
   getRegistrableDomain,
   isAlwaysHttpsDomain,
@@ -401,6 +402,10 @@ export interface KnownDomainEntry {
 
 const UNTRUSTED_SHEET_SOURCES = new Set<string>(['asso7878', 'arndxt']);
 
+export function isUntrustedSheetSource(source?: string): boolean {
+  return Boolean(source && UNTRUSTED_SHEET_SOURCES.has(source.trim().toLowerCase()));
+}
+
 function hasPunycodeOrMixedHost(rawUrl: string, regDomain: string): boolean {
   if (isPunycodeOrMixedScript(regDomain)) return true;
   try {
@@ -413,12 +418,13 @@ function hasPunycodeOrMixedHost(rawUrl: string, regDomain: string): boolean {
 /**
  * Extracts the trusted registrable project domain for a non-risk curated/Surf card.
  * Only `card.url` may represent the card; third-party task links, platform hosts,
- * curated aggregators (for non-self cards), punycode/IDN, and shorteners are never trusted.
+ * curated aggregators (for non-self cards), editable sheet sources, punycode/IDN,
+ * and shorteners are never trusted.
  */
 export function getTrustedSurfCardDomain(
   card: Pick<Card, 'b' | 'url' | 'tasks'> & { n?: string; source?: string },
 ): string | undefined {
-  if (card.b?.includes('risk')) return undefined;
+  if (card.b?.includes('risk') || isUntrustedSheetSource(card.source)) return undefined;
   if (!card.url) return undefined;
   const cardDom = getRegistrableDomain(card.url);
   if (!cardDom || isPlatformDomain(cardDom) || URL_SHORTENERS[cardDom]) return undefined;
@@ -469,7 +475,7 @@ export function collectKnownDomainEntries(
     for (const card of surfFeed.cards) {
       if (card.b.includes('risk')) continue;
       if (!card.source || card.source === 'Surf') continue;
-      if (UNTRUSTED_SHEET_SOURCES.has(card.source.trim().toLowerCase())) continue;
+      if (isUntrustedSheetSource(card.source)) continue;
       const dom = getTrustedSurfCardDomain(card);
       if (!dom || map.has(dom)) continue;
       if (findLookalikeDomain(dom, verifiedBaseline)) continue;
@@ -540,6 +546,35 @@ export async function seedKnownDomains(
         )
         .bind(platformDomainsJson),
     ];
+
+    const curatedAggregatorsJson = JSON.stringify([...CURATED_AGGREGATOR_DOMAINS]);
+    const legacyCandidates = await db
+      .prepare(
+        `SELECT domain, project, origin
+         FROM known_domains
+         WHERE origin != 'platform'
+           AND (
+             rtrim(lower(domain), '.') IN (SELECT value FROM json_each(?1))
+             OR EXISTS (
+               SELECT 1 FROM json_each(?1) AS a
+               WHERE substr(rtrim(lower(known_domains.domain), '.'), -length(a.value) - 1) = '.' || a.value
+             )
+             OR lower(domain) LIKE '%xn--%'
+             OR domain GLOB '*[^ -~]*'
+           )`,
+      )
+      .bind(curatedAggregatorsJson)
+      .all<{ domain: string; project: string; origin: string }>();
+
+    for (const row of legacyCandidates.results ?? []) {
+      if (isCuratedAggregatorDomain(row.domain, { n: row.project }) || isPunycodeOrMixedScript(row.domain)) {
+        pruneStmts.push(
+          db
+            .prepare(`DELETE FROM known_domains WHERE domain = ?1 AND origin = ?2 AND project = ?3`)
+            .bind(row.domain, row.origin, row.project),
+        );
+      }
+    }
 
     if (surfFeed?.cards.some(c => !c.source || c.source === 'Surf')) {
       const surfDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'surf').map(e => e.domain.toLowerCase()));

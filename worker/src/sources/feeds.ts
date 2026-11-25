@@ -229,14 +229,39 @@ function extractAtomLink(block: string, entryBase?: string): string {
   return resolveAtomHref(extractXmlTag(block, 'link'), entryBase);
 }
 
+const UTF8_ENCODER = new TextEncoder();
+const CLEAN_POST_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+
+function fnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of UTF8_ENCODER.encode(input)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function fnv1a64Hex(input: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of UTF8_ENCODER.encode(input)) {
+    hash ^= BigInt(byte);
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
 function normalizePostId(raw: string): string {
-  const cleaned = raw
-    .trim()
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (CLEAN_POST_ID_RE.test(trimmed)) return trimmed;
+
+  const sanitized = trimmed
     .replace(/^https?:\/\//i, '')
     .replace(/[^A-Za-z0-9._:-]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  if (!cleaned) return '';
-  return cleaned.length > 80 ? cleaned.slice(-80) : cleaned;
+  if (!sanitized) return '';
+  const prefix = sanitized.slice(0, 48).replace(/-+$/, '') || sanitized.slice(0, 48);
+  return `${prefix}~${fnv1a64Hex(trimmed)}`;
 }
 
 function slugify(raw: string): string {
@@ -246,6 +271,18 @@ function slugify(raw: string): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'item'
   );
+}
+
+function buildStableCardId(prefix: string, identityKey: string, seenCardIds: Set<string>): string {
+  const slug = slugify(identityKey);
+  let cardId =
+    identityKey === slug ? `${prefix}:${slug}` : `${prefix}:${slug}-${fnv1a32Hex(identityKey)}`;
+  if (seenCardIds.has(cardId)) {
+    // Defensive fallback only if an impossible 32-bit hash collision occurs
+    cardId = `${prefix}:${slug}-${fnv1a64Hex(identityKey)}`;
+  }
+  seenCardIds.add(cardId);
+  return cardId;
 }
 
 /**
@@ -558,6 +595,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
   const grouped = new Map<
     string,
     {
+      key: string;
       name: string;
       chains: Set<string>;
       liquidity: number;
@@ -593,6 +631,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
     let bucket = grouped.get(key);
     if (!bucket) {
       bucket = {
+        key,
         name: protoName,
         chains: new Set<string>(),
         liquidity: 0,
@@ -634,13 +673,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
       if (g.isNew) badges.push('early');
       const best = tasks[0];
 
-      const baseId = `pendle:${slugify(g.name)}`;
-      let cardId = baseId;
-      let suffix = 2;
-      while (seenCardIds.has(cardId)) {
-        cardId = `${baseId}-${suffix++}`;
-      }
-      seenCardIds.add(cardId);
+      const cardId = buildStableCardId('pendle', g.key, seenCardIds);
 
       return {
         r: idx + 1,
@@ -689,7 +722,7 @@ interface MerklOpportunity {
   identifier?: string;
   name?: string;
   chain?: { name?: string };
-  protocol?: { name?: string; icon?: string };
+  protocol?: { id?: string; name?: string; icon?: string };
   action?: string;
   status?: string;
   tvl?: number;
@@ -714,6 +747,8 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
   const grouped = new Map<
     string,
     {
+      key: string;
+      rawProtoId: string;
       name: string;
       icon: string;
       chains: Set<string>;
@@ -738,13 +773,16 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
     const opName = stripOrTranslateCjk(op.name ?? protoName) || protoName;
     const apr = typeof op.apr === 'number' && Number.isFinite(op.apr) ? op.apr : null;
     const type = mapMerklAction(op.action);
-    const key = protoName.toLowerCase();
+    const rawProtoId = typeof op.protocol?.id === 'string' ? op.protocol.id.trim() : '';
+    const key = (rawProtoId || protoName).toLowerCase();
 
     let bucket = grouped.get(key);
     if (!bucket) {
       const cleanedIcon = op.protocol?.icon ? cleanUrl(op.protocol.icon) : null;
       const icon = cleanedIcon && cleanedIcon.startsWith('https://') ? cleanedIcon : '';
       bucket = {
+        key,
+        rawProtoId,
         name: protoName,
         icon,
         chains: new Set<string>(),
@@ -755,6 +793,8 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         primaryUrl: url,
       };
       grouped.set(key, bucket);
+    } else if (!bucket.rawProtoId && rawProtoId) {
+      bucket.rawProtoId = rawProtoId;
     }
     bucket.chains.add(chainName);
     bucket.tvl += tvl;
@@ -784,13 +824,8 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
       const sc = grade === 'S' ? 82 : grade === 'A' ? 72 : grade === 'B' ? 58 : 46;
       const best = g.tasks[0];
 
-      const baseId = `merkl:${slugify(g.name)}`;
-      let cardId = baseId;
-      let suffix = 2;
-      while (seenCardIds.has(cardId)) {
-        cardId = `${baseId}-${suffix++}`;
-      }
-      seenCardIds.add(cardId);
+      const identityKey = g.rawProtoId ? g.rawProtoId.toLowerCase() : g.key;
+      const cardId = buildStableCardId('merkl', identityKey, seenCardIds);
 
       return {
         r: idx + 1,

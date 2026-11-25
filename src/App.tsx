@@ -21,10 +21,12 @@ import { useTheme } from './hooks/useTheme';
 import { isCardSaved, useWatchlist } from './hooks/useWatchlist';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
+const EMPTY_CARDS: Card[] = [];
 
 export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed();
+  const cards = airdrops.feed?.cards ?? EMPTY_CARDS;
   const {
     markets,
     loading: marketsLoading,
@@ -33,7 +35,7 @@ export default function App() {
     refresh: refreshMarkets,
   } = useMarkets();
   const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
-  const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
+  const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist(cards);
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
 
@@ -50,7 +52,6 @@ export default function App() {
   });
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
 
-  const cards = airdrops.feed?.cards ?? [];
   const tgeItems = airdrops.feed?.tge ?? [];
   const detail = detailRef
     ? (cards.find(c => (detailRef.id ? c.id === detailRef.id : c.n === detailRef.name)) ?? null)

@@ -9,7 +9,7 @@ import type {
   TaskType,
 } from '../../../shared/types';
 import { sha1Hex } from '../lib/hash';
-import { evaluateSafety, getTrustedSurfCardDomain, reconcileSafetyReasons } from '../safety';
+import { evaluateSafety, getTrustedSurfCardDomain, isUntrustedSheetSource, reconcileSafetyReasons } from '../safety';
 import {
   getRegistrableDomain,
   isNewsDomain,
@@ -91,7 +91,7 @@ export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   if (!feed) return { byDomain, byTicker };
 
   for (const card of feed.cards) {
-    if (card.b?.includes('risk')) continue;
+    if (card.b?.includes('risk') || isUntrustedSheetSource(card.source)) continue;
     const match: SurfMatch = { name: card.n, tier: card.g, cardRank: card.r };
     if (card.t) byTicker.set(card.t.toUpperCase(), match);
     const dom = getTrustedSurfCardDomain(card);
