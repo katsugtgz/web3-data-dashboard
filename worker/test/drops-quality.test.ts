@@ -910,6 +910,57 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     expect(subImpersonation.level).toBe('risk');
     expect(subImpersonation.reasons.some(r => r.includes('lookalike') && r.includes('arbitrum.io'))).toBe(true);
 
+    // Shared PaaS hosting tenants (e.g. pages.dev, vercel.app) stay excluded from trusted
+    // project identity (isPlatformDomain === true) while still running lookalike checks!
+    expect(isPlatformDomain('pages.dev')).toBe(true);
+    const pagesImpersonation = evaluateSafety({
+      urls: ['https://arbitrum.attacker.pages.dev/claim'],
+      text: 'Arbitrum rewards live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    });
+    expect(pagesImpersonation.level).toBe('risk');
+    expect(
+      pagesImpersonation.reasons.some(
+        r => r.includes('lookalike') && r.includes('arbitrum.attacker.pages.dev') && r.includes('arbitrum.io'),
+      ),
+    ).toBe(true);
+
+    const pagesHyphenImpersonation = evaluateSafety({
+      urls: ['https://arbitrum-claim.pages.dev/'],
+      text: 'Arbitrum rewards live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    });
+    expect(pagesHyphenImpersonation.level).toBe('risk');
+    expect(pagesHyphenImpersonation.reasons.some(r => r.includes('lookalike') && r.includes('arbitrum.io'))).toBe(true);
+
+    // Non-impersonating tenant on pages.dev and legitimate content host subdomains stay clean.
+    const benignPages = evaluateSafety({
+      urls: ['https://mynewproject.pages.dev/testnet'],
+      text: 'MyNewProject testnet live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    });
+    expect(benignPages.level).toBe('ok');
+    expect(benignPages.reasons).toEqual([]);
+
+    const legitBlog = evaluateSafety({
+      urls: ['https://arbitrum.substack.com/p/update'],
+      text: 'Arbitrum newsletter update',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    });
+    expect(legitBlog.level).toBe('ok');
+
     // M-07c: expanded DRAINER_RE catches "claim sol ... connect ... wallet" and "connect active ... wallet" without benign FPs.
     expect(DRAINER_RE.test('Claim SOL now and connect your wallet')).toBe(true);
     expect(DRAINER_RE.test('Claim 5 SOL — connect wallet to receive')).toBe(true);
@@ -2964,6 +3015,68 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     const httpItem = feed.items.find(i => i.id === 'c_http_known');
     expect(httpItem).toBeDefined();
     expect(httpItem!.links).toEqual([{ url: 'http://httpknown.xyz/claim', known: false }]);
+  });
+
+  test('queryFeed filters, orders, and cursors using enabled-post timestamps when a disabled source has newer posts', async () => {
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:en1', 'telegram', 'en1', 'en', 0.8, 1),
+                ('telegram:dis1', 'telegram', 'dis1', 'en', 0.8, 0)`,
+      )
+      .run();
+
+    // Cluster A: enabled post at 100, disabled post at 300 -> stored clusters.last_seen = 300.
+    // Cluster B: enabled post at 200 -> stored clusters.last_seen = 200.
+    // Cluster C: enabled post at 150 -> stored clusters.last_seen = 150.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_a', 'AlphaProto', '[]', '["testnet"]', 'Alpha testnet', 'rule', 'ok', '[]', 0.8, 2, 100, 300, 1),
+                ('c_b', 'BetaProto', '[]', '["testnet"]', 'Beta testnet', 'rule', 'ok', '[]', 0.8, 1, 200, 200, 1),
+                ('c_c', 'GammaProto', '[]', '["testnet"]', 'Gamma testnet', 'rule', 'ok', '[]', 0.8, 1, 150, 150, 1)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('pa_en', 'telegram:en1', 'https://t.me/en1/1', 100, 'Alpha testnet', '[]', 'c_a', 100),
+                ('pa_dis', 'telegram:dis1', 'https://t.me/dis1/1', 300, 'Alpha update', '[]', 'c_a', 300),
+                ('pb_en', 'telegram:en1', 'https://t.me/en1/2', 200, 'Beta testnet', '[]', 'c_b', 200),
+                ('pc_en', 'telegram:en1', 'https://t.me/en1/3', 150, 'Gamma testnet', '[]', 'c_c', 150)`,
+      )
+      .run();
+
+    // 1. sort: 'new' must order strictly by enabled max posted_at: B (200), C (150), A (100).
+    const byNew = await queryFeed(db, new Set(), { sort: 'new', risk: 'include' });
+    expect(byNew.items.map(i => [i.id, i.lastSeen])).toEqual([
+      ['c_b', 200],
+      ['c_c', 150],
+      ['c_a', 100],
+    ]);
+
+    // 2. sort: 'score' tie-breaks by enabled max posted_at: B (200), C (150), A (100).
+    const byScore = await queryFeed(db, new Set(), { sort: 'score', risk: 'include' });
+    expect(byScore.items.map(i => [i.id, i.lastSeen])).toEqual([
+      ['c_b', 200],
+      ['c_c', 150],
+      ['c_a', 100],
+    ]);
+
+    // 3. since: 150 must exclude A (enabled lastSeen 100 < 150) even though stored clusters.last_seen is 300.
+    const since150 = await queryFeed(db, new Set(), { since: 150, sort: 'new', risk: 'include' });
+    expect(since150.items.map(i => [i.id, i.lastSeen])).toEqual([
+      ['c_b', 200],
+      ['c_c', 150],
+    ]);
+
+    // 4. Cursor pagination under sort: 'new' resumes cleanly using enabled lastSeen.
+    const cursorAfterB = await queryFeed(db, new Set(), { sort: 'new', cursor: 'new|200|0.8|c_b', risk: 'include' });
+    expect(cursorAfterB.items.map(i => [i.id, i.lastSeen])).toEqual([
+      ['c_c', 150],
+      ['c_a', 100],
+    ]);
   });
 });
 

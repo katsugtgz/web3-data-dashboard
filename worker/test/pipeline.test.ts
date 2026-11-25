@@ -1946,4 +1946,115 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       expect(row).toEqual({ domain: 'pendle.finance', project: 'Pendle', origin });
     }
   });
+
+  test('reconciliation score write does not overwrite a concurrent writer risk-escalated score', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_200_000_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
+                ('telegram:ch2', 'telegram', 'ch2', 'en', 0.8, 1)`,
+      )
+      .run();
+
+    const known = new Map([['novaprotocol.xyz', 'Nova Protocol']]);
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const seeded = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:100',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/100',
+        postedAt: now - 3600_000,
+        text: 'Nova Protocol testnet live https://novaprotocol.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const cid = seeded.clusterId;
+
+    // Force the reconciliation path (source_count < COUNT(DISTINCT source_id)) to run when ch2 lands,
+    // and simulate a concurrent risk escalation + penalized score write right before the final reconciled score UPDATE.
+    const penalizedScore = computeScore({
+      trustMax: 0.8,
+      sourceCount: 2,
+      lastSeen: now - 1800_000,
+      nowMs: now,
+      surfTier: null,
+      riskLevel: 'risk',
+    });
+    let injectedStaleSourceCount = false;
+    let escalatedBeforeScoreWrite = false;
+    const racingDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/SET\s+source_count\s*=\s*\(SELECT\s+COUNT\(DISTINCT\s+source_id\)/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              return {
+                async run() {
+                  if (!injectedStaleSourceCount) {
+                    injectedStaleSourceCount = true;
+                    await db.prepare('UPDATE clusters SET source_count = 1 WHERE id = ?1').bind(cid).run();
+                  }
+                  return stmt.bind(...args).run();
+                },
+              };
+            },
+          };
+        }
+        if (/^\s*UPDATE\s+clusters\s+SET\s+score\s*=\s*\?2\s+WHERE\s+id\s*=\s*\?1/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              return {
+                async run() {
+                  if (!escalatedBeforeScoreWrite) {
+                    escalatedBeforeScoreWrite = true;
+                    await db
+                      .prepare(`UPDATE clusters SET risk_level = 'risk', score = ?2 WHERE id = ?1`)
+                      .bind(cid, penalizedScore)
+                      .run();
+                  }
+                  return stmt.bind(...args).run();
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await ingestPostIntoCluster(
+      racingDb,
+      {
+        postId: 'telegram:ch2:101',
+        sourceId: 'telegram:ch2',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch2/101',
+        postedAt: now - 1800_000,
+        text: 'Nova Protocol quest live https://novaprotocol.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+
+    expect(escalatedBeforeScoreWrite).toBe(true);
+    const row = await db
+      .prepare('SELECT risk_level, score FROM clusters WHERE id = ?1')
+      .bind(cid)
+      .first<{ risk_level: string; score: number }>();
+    expect(row?.risk_level).toBe('risk');
+    expect(row?.score).toBeCloseTo(penalizedScore, 6);
+  });
 });

@@ -153,18 +153,22 @@ function mapTasks(tasks?: UpstreamTask[]): CardTask[] | undefined {
   for (const t of tasks) {
     const title = stripOrTranslateCjk(t.title || 'Task') || 'Task';
     const type = normalizeTaskType(t.type);
+    const status = stripOrTranslateCjk(t.status || 'OPEN') || 'OPEN';
+    const cost = safeNum(t.cost, 0);
+    const timeMinutes = typeof t.time_minutes === 'number' && t.time_minutes > 0 ? t.time_minutes : null;
     const url = normalizeExternalUrl(t.external_link);
-    const key = `${title.toLowerCase()}\0${type.toLowerCase()}\0${url ?? ''}`;
+    const isExclusive = Boolean(t.is_exclusive);
+    const key = `${title.toLowerCase()}\0${type.toLowerCase()}\0${status.toLowerCase()}\0${cost}\0${timeMinutes ?? ''}\0${url ?? ''}\0${isExclusive ? '1' : '0'}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
       title,
       type,
-      status: stripOrTranslateCjk(t.status || 'OPEN') || 'OPEN',
-      cost: safeNum(t.cost, 0),
-      timeMinutes: typeof t.time_minutes === 'number' && t.time_minutes > 0 ? t.time_minutes : null,
+      status,
+      cost,
+      timeMinutes,
       url,
-      isExclusive: Boolean(t.is_exclusive),
+      isExclusive,
     });
   }
   return out;

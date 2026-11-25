@@ -21,6 +21,26 @@ export const SOCIAL_PLATFORM_DOMAINS = new Set<string>([
   'bsky.app',
 ]);
 
+/**
+ * Shared PaaS / static hosting domains where each subdomain is an independent
+ * untrusted tenant. Included in PLATFORM_DOMAINS so they can never be trusted
+ * as a project's canonical identity, while safety checks still run lookalike
+ * detection against their tenant hostnames (e.g. `arbitrum.attacker.pages.dev`).
+ */
+export const SHARED_HOSTING_DOMAINS = new Set<string>([
+  'vercel.app',
+  'netlify.app',
+  'github.io',
+  'pages.dev',
+  'workers.dev',
+  'web.app',
+  'firebaseapp.com',
+  'onrender.com',
+  'fly.dev',
+  'railway.app',
+  'herokuapp.com',
+]);
+
 /** General hosting, forms, link-in-bio, event, and mobile deep-link wrappers. */
 export const CONTENT_HOST_DOMAINS = new Set<string>([
   'medium.com',
@@ -53,18 +73,7 @@ export const CONTENT_HOST_DOMAINS = new Set<string>([
   'tokopedia.com',
   'bitget.cloud',
   'thedefinvestor.com',
-  // Shared PaaS / static hosting domains (never a project's trusted registrable domain)
-  'vercel.app',
-  'netlify.app',
-  'github.io',
-  'pages.dev',
-  'workers.dev',
-  'web.app',
-  'firebaseapp.com',
-  'onrender.com',
-  'fly.dev',
-  'railway.app',
-  'herokuapp.com',
+  ...SHARED_HOSTING_DOMAINS,
 ]);
 
 /** Quest / bounty / allowlist / claim platforms shared across many projects. */
@@ -432,6 +441,10 @@ export function getRegistrableDomain(rawUrl: string): string | undefined {
 
 export function isPlatformDomain(domain: string): boolean {
   return matchesDomainSet(domain, PLATFORM_DOMAINS);
+}
+
+export function isSharedHostingDomain(domain: string): boolean {
+  return matchesDomainSet(domain, SHARED_HOSTING_DOMAINS);
 }
 
 export function isNewsDomain(domain: string): boolean {

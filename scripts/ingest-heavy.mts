@@ -56,11 +56,13 @@ function formatErrorMessage(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 400);
 }
 
-function buildErrorTelemetrySql(key: string, errMsg: string): string {
+function buildErrorTelemetrySql(key: string, errMsg: string, nowMs: number): string {
+  const safeNowMs = Number.isFinite(nowMs) ? Math.trunc(nowMs) : 0;
   return `INSERT INTO snapshots (key, body, etag, fetched_at, ok, error) VALUES (${sqlQuote(key)}, '{}', '"empty"', 0, 0, ${sqlQuote(errMsg)})
 ON CONFLICT(key) DO UPDATE SET
   ok = 0,
-  error = excluded.error;`;
+  error = excluded.error
+WHERE ${safeNowMs} >= snapshots.fetched_at;`;
 }
 
 async function buildSuccessSql(key: string, section: unknown, nowMs: number): Promise<string> {
@@ -175,7 +177,7 @@ export async function runHeavyIngest(deps: HeavyIngestDeps = {}): Promise<HeavyI
       }
     } else {
       const errMsg = formatErrorMessage(outcome.reason);
-      statements.push(buildErrorTelemetrySql(spec.key, errMsg));
+      statements.push(buildErrorTelemetrySql(spec.key, errMsg, nowMs));
       failedKeys.push({ key: spec.key, error: errMsg });
       summaryParts.push(`${spec.label}: FAILED (${errMsg})`);
     }

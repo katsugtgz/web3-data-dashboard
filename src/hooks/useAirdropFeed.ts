@@ -16,7 +16,7 @@ export interface AirdropFeedState {
 }
 
 /** Polls /airdrops.json with ETag support. Pauses in background tabs and keeps the last loaded list on error. */
-export function useAirdropFeed(): AirdropFeedState {
+export function useAirdropFeed(onCardsChange?: (cards: readonly Card[]) => void): AirdropFeedState {
   const [feed, setFeed] = useState<AirdropFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -26,6 +26,11 @@ export function useAirdropFeed(): AirdropFeedState {
   const etagRef = useRef<string | null>(null);
   const hasLiveRef = useRef(false);
   const cardsRef = useRef<Card[]>([]);
+  const onCardsChangeRef = useRef(onCardsChange);
+
+  useEffect(() => {
+    onCardsChangeRef.current = onCardsChange;
+  }, [onCardsChange]);
 
   const fetchNow = useCallback((mode: PollMode) => {
     if (mode !== 'background') setLoading(true);
@@ -47,6 +52,7 @@ export function useAirdropFeed(): AirdropFeedState {
           cardsRef.current = res.body.cards;
           setFeed(res.body);
           setIsLiveApi(res.source === 'api');
+          onCardsChangeRef.current?.(res.body.cards);
         }
         poll.settle(true);
         setFailed(false);

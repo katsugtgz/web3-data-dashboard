@@ -43,7 +43,7 @@ const DEV_FILE_SUFFIXES = new Set(['js', 'ts', 'py', 'rs', 'sol', 'json', 'md'])
 const DOMAIN_LIKE_RE = /\b[\w-]+(?:\.[\w-]+)*\.([a-z]{2,24})\b/gi;
 const RAW_IPV4_RE =
   /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:[:/]\S*)?(?![\d.])/;
-const DANGEROUS_SCHEME_RE = /(?:https?|tg):\/\/|\b(?:javascript|data):/i;
+const DANGEROUS_SCHEME_RE = /[a-z][a-z0-9+.-]*:\/\/|\b(?:javascript|data):/i;
 const HANDLE_MENTION_RE = /(?:^|[\s([{"'])@[a-z0-9_]{3,}/i;
 const AI_UNSAFE_PHRASE_RE =
   /\b(?:connect|visit|open|verify|approve|validate|confirm)\b[^.!?]{0,40}\bwallets?\b|\bconfirm\s+in\s+(?:your\s+)?wallets?\b|\b(?:seed\s+phrase|recovery\s+phrase|private\s+key|mnemonic)\b/i;
@@ -137,15 +137,20 @@ const AI_RETRY_FIRST_MS = 6 * 3_600_000;
 const AI_RETRY_NEXT_MS = 24 * 3_600_000;
 const AI_LEASE_MS = 120_000;
 
-async function recordAiAttemptFailure(db: D1Database, clusterId: string, nowMs: number): Promise<void> {
+async function recordAiAttemptFailure(
+  db: D1Database,
+  clusterId: string,
+  nowMs: number,
+  leaseUntil: number,
+): Promise<void> {
   await db
     .prepare(
       `UPDATE clusters
        SET ai_attempts = ai_attempts + 1,
            ai_retry_after = CASE WHEN ai_attempts = 0 THEN ?2 ELSE ?3 END
-       WHERE id = ?1 AND summary_source = 'rule'`,
+       WHERE id = ?1 AND summary_source = 'rule' AND ai_retry_after = ?4`,
     )
-    .bind(clusterId, nowMs + AI_RETRY_FIRST_MS, nowMs + AI_RETRY_NEXT_MS)
+    .bind(clusterId, nowMs + AI_RETRY_FIRST_MS, nowMs + AI_RETRY_NEXT_MS, leaseUntil)
     .run();
 }
 
@@ -183,21 +188,26 @@ export async function summarizeClusterWithAi(
     riskLevel: 'ok' | 'warn' | 'risk';
     dailyMax?: number;
     nowMs?: number;
+    /** Injectable clock for lease acquisition; defaults to `Date.now`. */
+    clock?: () => number;
   },
 ): Promise<AiSummaryPayload | null> {
   if (!ai) return null;
   if (opts.riskLevel === 'risk') return null;
   if (!opts.isNewCluster && !opts.isNonLatinSource) return null;
 
-  const nowMs = opts.nowMs ?? Date.now();
-  const day = utcDayKey(nowMs);
   const dailyMax = opts.dailyMax ?? 300;
-
   if (dailyMax <= 0) return null;
 
   // Claim a short per-cluster row lease before reserving daily quota or calling
   // Workers AI so overlapping */2 and */5 crons never double-run the same cluster.
-  const leaseUntil = nowMs + AI_LEASE_MS;
+  // Base lease expiry on the current acquisition clock rather than a caller's
+  // potentially stale nowMs captured before slow source polling.
+  const acquisitionNowMs = opts.clock ? opts.clock() : Math.max(opts.nowMs ?? 0, Date.now());
+  const nowMs = opts.nowMs ?? acquisitionNowMs;
+  const leaseCheckNowMs = opts.clock ? acquisitionNowMs : nowMs;
+  const day = utcDayKey(nowMs);
+  const leaseUntil = acquisitionNowMs + AI_LEASE_MS;
   const claimed = await db
     .prepare(
       `UPDATE clusters
@@ -209,7 +219,7 @@ export async function summarizeClusterWithAi(
          AND ai_retry_after <= ?3
        RETURNING id`,
     )
-    .bind(opts.clusterId, leaseUntil, nowMs)
+    .bind(opts.clusterId, leaseUntil, leaseCheckNowMs)
     .first<{ id: string }>();
   if (!claimed) return null;
 
@@ -263,11 +273,11 @@ export async function summarizeClusterWithAi(
   const text = extractAiTextResponse(rawOut);
   const validated = text ? parseAndValidateAiJson(text) : null;
   if (!validated) {
-    await recordAiAttemptFailure(db, opts.clusterId, nowMs);
+    await recordAiAttemptFailure(db, opts.clusterId, nowMs, leaseUntil);
     return null;
   }
 
-  await db
+  const persisted = await db
     .prepare(
       `UPDATE clusters
        SET summary = ?2,
@@ -295,10 +305,18 @@ export async function summarizeClusterWithAi(
                SELECT value FROM json_each(?4)
              )
            )
-       WHERE id = ?1`,
+       WHERE id = ?1
+         AND ai_retry_after = ?5
+       RETURNING id`,
     )
-    .bind(opts.clusterId, validated.summary, JSON.stringify(validated.chains), JSON.stringify(validated.taskTypes))
-    .run();
+    .bind(
+      opts.clusterId,
+      validated.summary,
+      JSON.stringify(validated.chains),
+      JSON.stringify(validated.taskTypes),
+      leaseUntil,
+    )
+    .first<{ id: string }>();
 
-  return validated;
+  return persisted ? validated : null;
 }

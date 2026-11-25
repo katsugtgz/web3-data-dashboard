@@ -10,6 +10,7 @@ import {
   isCuratedAggregatorDomain,
   isPlatformDomain,
   isRawIpHost,
+  isSharedHostingDomain,
   PLATFORM_DOMAINS,
 } from '../normalize/domains';
 import { URL_SHORTENERS } from './shorteners';
@@ -109,13 +110,22 @@ export function findLookalikeDomain(hostOrDomain: string, knownDomains: Map<stri
   const reg = getRegistrableDomain(`https://${lower}`) ?? lower;
   if (knownDomains.has(lower) || knownDomains.has(reg)) return null;
 
+  const isSharedHost = isSharedHostingDomain(reg);
   const regLabel = reg.split('.')[0] ?? reg;
   const subPart =
     lower.length > reg.length && lower.endsWith(`.${reg}`)
       ? lower.slice(0, lower.length - reg.length - 1)
       : '';
+  if (isSharedHost && !subPart) return null;
+
   const subLabels = subPart ? subPart.split('.') : [];
   const subLabelSet = subPart ? new Set(subLabels) : null;
+  const subHyphenGroups = isSharedHost
+    ? subLabels
+        .filter(lbl => lbl.includes('-'))
+        .map(lbl => lbl.split('-').filter(Boolean))
+        .filter(tokens => tokens.length >= 2)
+    : [];
   const hyphenTokens = regLabel.includes('-') ? regLabel.split('-').filter(Boolean) : [];
   const hyphenTokenSet = hyphenTokens.length >= 2 ? new Set(hyphenTokens) : null;
 
@@ -127,7 +137,8 @@ export function findLookalikeDomain(hostOrDomain: string, knownDomains: Map<stri
     const knownLabel = knownReg.split('.')[0] ?? knownReg;
 
     // 1. Subdomain impersonation: full known domain (`arbitrum.io.evil.xyz`) or
-    //    non-generic known brand label (`galxe.claim-drop.xyz`) in subdomain prefix.
+    //    non-generic known brand label (`galxe.claim-drop.xyz`, `arbitrum.attacker.pages.dev`)
+    //    in subdomain prefix.
     if (subPart) {
       if (
         subPart === knownReg ||
@@ -144,7 +155,22 @@ export function findLookalikeDomain(hostOrDomain: string, knownDomains: Map<stri
       ) {
         return known;
       }
+      if (
+        isSharedHost &&
+        knownLabel.length >= 4 &&
+        !GENERIC_SUBDOMAIN_LABELS.has(knownLabel) &&
+        subHyphenGroups.some(
+          tokens => tokens.includes(knownLabel) && tokens.some(tok => tok !== knownLabel && SCAM_DOMAIN_WORDS.has(tok)),
+        )
+      ) {
+        return known;
+      }
     }
+
+    // For shared PaaS hosting domains (pages.dev, vercel.app, ...), only check
+    // tenant subdomain impersonation; never compare the hosting provider's own
+    // registrable domain against project domains.
+    if (isSharedHost) continue;
 
     // 2. Exact SLD cross-TLD mismatch (`uniswap.com` vs `uniswap.org`) for label len >= 4.
     if (regLabel.length >= 4 && regLabel === knownLabel && reg !== knownReg) {
@@ -269,13 +295,17 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
       if (reg && URL_SHORTENERS[reg]) {
         bump('warn', `URL shortener used: ${reg}`);
       }
-      if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) {
+      if (reg && !URL_SHORTENERS[reg]) {
+        const isPlatform = isPlatformDomain(reg);
         const cleanHost = host.replace(/^www\./, '');
-        const similar = findLookalikeDomain(cleanHost, lookalikeBaseline);
-        if (similar) {
-          bump('risk', `Possible lookalike domain (${cleanHost} vs ${similar})`);
+        const isSharedTenant = isSharedHostingDomain(reg) && cleanHost !== reg;
+        if (!isPlatform || isSharedTenant) {
+          const similar = findLookalikeDomain(cleanHost, lookalikeBaseline);
+          if (similar) {
+            bump('risk', `Possible lookalike domain (${cleanHost} vs ${similar})`);
+          }
         }
-        if (!input.knownProjectDomains.has(reg.toLowerCase())) {
+        if (!isPlatform && !input.knownProjectDomains.has(reg.toLowerCase())) {
           bump('warn', `Domain not in verified registry: ${reg}`);
         }
       }
@@ -292,16 +322,22 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
     bump('risk', 'Crypto doubling / advance-fee scam phrasing');
   }
 
-  if (input.domain && !isPlatformDomain(input.domain)) {
-    if (isPunycodeOrMixedScript(input.domain)) {
-      bump('risk', `Punycode or mixed-script project domain: ${input.domain}`);
-    } else {
-      const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
-      if (similar) {
-        bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
-      }
-      if (!input.knownProjectDomains.has(input.domain.toLowerCase())) {
-        bump('warn', `Domain not in verified registry: ${input.domain}`);
+  if (input.domain) {
+    const normInputDomain = input.domain.trim().toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
+    const inputReg = getRegistrableDomain(`https://${normInputDomain}`) ?? normInputDomain;
+    const isPlatform = isPlatformDomain(normInputDomain);
+    const isSharedTenant = isSharedHostingDomain(inputReg) && normInputDomain !== inputReg;
+    if (!isPlatform || isSharedTenant) {
+      if (isPunycodeOrMixedScript(input.domain)) {
+        bump('risk', `Punycode or mixed-script project domain: ${input.domain}`);
+      } else {
+        const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
+        if (similar) {
+          bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
+        }
+        if (!isPlatform && !input.knownProjectDomains.has(normInputDomain)) {
+          bump('warn', `Domain not in verified registry: ${input.domain}`);
+        }
       }
     }
   }

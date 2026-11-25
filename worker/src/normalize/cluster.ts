@@ -940,8 +940,8 @@ export async function ingestPostIntoCluster(
               riskLevel: synced.risk_level,
             });
             await db
-              .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1')
-              .bind(clusterId, syncedScore)
+              .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND risk_level = ?3')
+              .bind(clusterId, syncedScore, synced.risk_level)
               .run();
           }
         }
@@ -1086,7 +1086,7 @@ export async function queryFeed(
   const safeLimit = Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 100;
   const limit = Math.min(100, Math.max(1, safeLimit));
   const since = Number.isFinite(opts.since) ? Number(opts.since) : 0;
-  const riskClause = opts.risk === 'exclude' ? `AND risk_level != 'risk'` : '';
+  const riskClause = opts.risk === 'exclude' ? `AND c.risk_level != 'risk'` : '';
   const sortByNew = opts.sort === 'new';
   const orderCol = sortByNew
     ? 'last_seen DESC, score DESC, id ASC'
@@ -1108,18 +1108,29 @@ export async function queryFeed(
 
     const clusterRows: D1Result<ClusterFeedRow> = await db
       .prepare(
-        `SELECT id, project, ticker, domain, chains, task_types, summary, summary_source,
+        `WITH enabled_clusters AS MATERIALIZED (
+           SELECT c.id, c.project, c.ticker, c.domain, c.chains, c.task_types, c.summary, c.summary_source,
+                  c.risk_level, c.risk_reasons, c.score, c.source_count, c.surf_tier, c.surf_rank,
+                  c.first_seen,
+                  (
+                    SELECT p.posted_at
+                    FROM posts p
+                    LEFT JOIN sources s ON s.id = p.source_id
+                    WHERE p.cluster_id = c.id AND COALESCE(s.enabled, 1) = 1
+                    ORDER BY p.posted_at DESC
+                    LIMIT 1
+                  ) AS last_seen,
+                  c.is_drop
+           FROM clusters c
+           WHERE COALESCE(c.is_drop, 1) = 1
+             ${riskClause}
+         )
+         SELECT id, project, ticker, domain, chains, task_types, summary, summary_source,
                 risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen, is_drop
-         FROM clusters
-         WHERE last_seen >= ?1
-           AND COALESCE(is_drop, 1) = 1
-           ${riskClause}
+         FROM enabled_clusters
+         WHERE last_seen IS NOT NULL
+           AND last_seen >= ?1
            ${cursorClause}
-           AND EXISTS (
-             SELECT 1 FROM posts p
-             LEFT JOIN sources s ON s.id = p.source_id
-             WHERE p.cluster_id = clusters.id AND COALESCE(s.enabled, 1) = 1
-           )
          ORDER BY ${orderCol}
          LIMIT ?2`,
       )

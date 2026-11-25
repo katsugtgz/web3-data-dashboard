@@ -224,6 +224,12 @@ export async function upsertGithubIssue(
     return { action: 'updated', number: existingIssue.number };
   }
 
+  if (nextUrl) {
+    throw new Error(
+      `Reached maxPages (${maxPages}) before exhausting open source-discovery issues; refusing to create a duplicate`,
+    );
+  }
+
   const createRes = await fetchImpl(`https://api.github.com/repos/${repo}/issues`, {
     method: 'POST',
     headers: writeHeaders,

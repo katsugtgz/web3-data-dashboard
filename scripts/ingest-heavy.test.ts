@@ -246,4 +246,70 @@ describe('ingest-heavy independent settlement & D1 error telemetry', () => {
     );
     expect(keys).toEqual(['airdrops:asso7878', 'airdrops:defillama', 'markets:defi', 'markets:yields']);
   });
+
+  test('older failed run cannot overwrite newer success telemetry while newer failure still marks older snapshot failed', async () => {
+    const { sqlite } = createTestD1();
+    sqlite.exec(
+      `INSERT INTO snapshots (key, body, etag, fetched_at, ok, error)
+       VALUES ('markets:yields', '{"id":"yields","rows":[{"id":"fresh"}]}', '"fresh-etag"', 1900000000000, 1, NULL);`,
+    );
+
+    // 1. Delayed older failure (nowMs = 1.8e12 < stored fetched_at = 1.9e12) must not clobber ok=1/error=NULL.
+    let olderSql = '';
+    await expect(
+      runHeavyIngest({
+        nowMs: 1_800_000_000_000,
+        dryRun: false,
+        fetchJson: async url => {
+          if (url.includes('protocols')) return SAMPLE_PROTOCOLS;
+          throw new Error('stale 503 failure');
+        },
+        executeSqlFile: async sqlPath => {
+          olderSql = await readFile(sqlPath, 'utf8');
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/markets:yields/);
+
+    sqlite.exec(olderSql);
+    const afterOlderFail = sqlite
+      .query("SELECT body, etag, fetched_at, ok, error FROM snapshots WHERE key = 'markets:yields'")
+      .get() as { body: string; etag: string; fetched_at: number; ok: number; error: string | null };
+    expect(afterOlderFail).toEqual({
+      body: '{"id":"yields","rows":[{"id":"fresh"}]}',
+      etag: '"fresh-etag"',
+      fetched_at: 1_900_000_000_000,
+      ok: 1,
+      error: null,
+    });
+
+    // 2. Newer failure (nowMs = 2.0e12 >= stored fetched_at = 1.9e12) still updates ok=0 and error, preserving body/etag/fetched_at.
+    let newerSql = '';
+    await expect(
+      runHeavyIngest({
+        nowMs: 2_000_000_000_000,
+        dryRun: false,
+        fetchJson: async url => {
+          if (url.includes('protocols')) return SAMPLE_PROTOCOLS;
+          throw new Error('current 502 failure');
+        },
+        executeSqlFile: async sqlPath => {
+          newerSql = await readFile(sqlPath, 'utf8');
+        },
+        log: () => {},
+      }),
+    ).rejects.toThrow(/markets:yields/);
+
+    sqlite.exec(newerSql);
+    const afterNewerFail = sqlite
+      .query("SELECT body, etag, fetched_at, ok, error FROM snapshots WHERE key = 'markets:yields'")
+      .get() as { body: string; etag: string; fetched_at: number; ok: number; error: string | null };
+    expect(afterNewerFail).toEqual({
+      body: '{"id":"yields","rows":[{"id":"fresh"}]}',
+      etag: '"fresh-etag"',
+      fetched_at: 1_900_000_000_000,
+      ok: 0,
+      error: 'current 502 failure',
+    });
+  });
 });
