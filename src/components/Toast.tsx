@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { AlertTriangleIcon, CheckCircle2Icon, XIcon } from './Icons';
 
 export interface ToastState {
   message: string;
@@ -17,9 +18,16 @@ export function Toast({ toast, onDismiss }: { toast: ToastState | null; onDismis
       <span ref={announcer} className="sr" role="status" aria-atomic="true" />
       {toast && (
         <div className={`toast-banner toast-${toast.tone}`}>
-          <span aria-hidden="true">{toast.message}</span>
+          {toast.tone === 'ok' ? (
+            <CheckCircle2Icon size={16} className="toast-icon" />
+          ) : (
+            <AlertTriangleIcon size={16} className="toast-icon" />
+          )}
+          <span className="toast-msg" aria-hidden="true">
+            {toast.message}
+          </span>
           <button type="button" className="toast-x" onClick={onDismiss} aria-label="Dismiss notification">
-            ×
+            <XIcon size={15} />
           </button>
         </div>
       )}

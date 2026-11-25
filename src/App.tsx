@@ -5,14 +5,14 @@ import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
 import { DashboardFooter } from './components/DashboardFooter';
 import { DashboardHeader } from './components/DashboardHeader';
-import { MainPanels, TabNav } from './components/DashboardPanels';
+import { AppSidebarNav, MainPanels } from './components/DashboardPanels';
 import { Toast } from './components/Toast';
 import { useAgentProfile } from './hooks/useAgentProfile';
 import { useAirdropFeed } from './hooks/useAirdropFeed';
 import { useAirdropFilters } from './hooks/useAirdropFilters';
 import { useCopyBriefController } from './hooks/useCopyBriefController';
 import { useDashboardDerived } from './hooks/useDashboardDerived';
-import { useDashboardTabs } from './hooks/useDashboardTabs';
+import { getTabGroupMeta, useDashboardTabs } from './hooks/useDashboardTabs';
 import { useDropsFilters } from './hooks/useDropsFilters';
 import { useFeed } from './hooks/useFeed';
 import { useMarkets } from './hooks/useMarkets';
@@ -25,7 +25,13 @@ const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({
 export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed();
-  const { markets, loading: marketsLoading, failed: marketsFailed, isLiveApi: marketsIsLiveApi, refresh: refreshMarkets } = useMarkets();
+  const {
+    markets,
+    loading: marketsLoading,
+    failed: marketsFailed,
+    isLiveApi: marketsIsLiveApi,
+    refresh: refreshMarkets,
+  } = useMarkets();
   const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
   const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
@@ -65,9 +71,10 @@ export default function App() {
 
   const dropsSearchRef = useRef<HTMLInputElement>(null);
   const airdropSearchRef = useRef<HTMLInputElement>(null);
+  const marketSearchRef = useRef<HTMLInputElement>(null);
 
   const { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey } = useDashboardTabs({
-    searchRefs: { drops: dropsSearchRef, airdrops: airdropSearchRef },
+    searchRefs: { drops: dropsSearchRef, airdrops: airdropSearchRef, markets: marketSearchRef },
     isModalOpen: () => Boolean(detail) || copyFlow.profileOpen,
   });
 
@@ -83,7 +90,16 @@ export default function App() {
     refreshSources();
   }, [drops, airdrops, refreshMarkets, refreshSources]);
 
-  const { xUnavailable, mountedMarkets, totalCount, headerFetchedAt, headerFailed, headerIsLiveApi } = useDashboardDerived({
+  const {
+    xUnavailable,
+    mountedMarkets,
+    totalCount,
+    headerFetchedAt,
+    headerFailed,
+    headerIsLiveApi,
+    headerStale,
+    isMarketTab,
+  } = useDashboardDerived({
     sources,
     marketSections: markets?.sections ?? null,
     marketsGeneratedAt: markets?.generatedAt ?? null,
@@ -100,6 +116,7 @@ export default function App() {
     airdropsIsLiveApi: airdrops.isLiveApi,
     cardsCount: cards.length,
   });
+  const activeTabMeta = getTabGroupMeta(tab);
 
   return (
     <>
@@ -107,66 +124,82 @@ export default function App() {
         Skip to content
       </a>
 
-      <DashboardHeader
-        cardCount={totalCount}
-        fetchedAt={headerFetchedAt}
-        loading={drops.loading || airdrops.loading || marketsLoading}
-        failed={headerFailed}
-        isLiveApi={headerIsLiveApi}
-        resolvedTheme={theme.resolved}
-        onRefresh={handleRefresh}
-        onOpenProfile={copyFlow.openProfile}
-        onToggleTheme={theme.toggle}
-      />
+      <div className="app-shell">
+        <AppSidebarNav
+          tab={tab}
+          counts={{ drops: drops.items.length, airdrops: cards.length }}
+          tabRefs={tabRefs}
+          tabbarRef={tabbarRef}
+          onSelectTab={selectTab}
+          onTabKey={onTabKey}
+        />
 
-      <TabNav
-        tab={tab}
-        tabRefs={tabRefs}
-        tabbarRef={tabbarRef}
-        onSelectTab={selectTab}
-        onTabKey={onTabKey}
-      />
+        <div className="app-main-col">
+          <DashboardHeader
+            activeTabLabel={activeTabMeta.label}
+            activeSectionGroup={activeTabMeta.group}
+            cardCount={totalCount}
+            fetchedAt={headerFetchedAt}
+            loading={drops.loading || airdrops.loading || marketsLoading}
+            failed={headerFailed}
+            isLiveApi={headerIsLiveApi}
+            isStale={headerStale}
+            isMarketTab={isMarketTab}
+            resolvedTheme={theme.resolved}
+            onRefresh={handleRefresh}
+            onOpenProfile={copyFlow.openProfile}
+            onToggleTheme={theme.toggle}
+          />
 
-      <MainPanels
-        tab={tab}
-        visitedTabs={visitedTabs}
-        mainRef={mainRef}
-        dropsProps={{
-          filters: dropsFilters,
-          totalCount: drops.items.length,
-          pendingCount: drops.pendingCount,
-          generatedAt: drops.generatedAt,
-          xUnavailable,
-          loading: drops.loading,
-          failed: drops.failed,
-          searchRef: dropsSearchRef,
-          onApplyPending: drops.applyPending,
-          onCopyBrief: handleCopyBrief,
-        }}
-        airdropsProps={{
-          filters: airdropFilters,
-          cardCount: cards.length,
-          tgeItems,
-          fetchedAt: airdrops.feed?.fetchedAt ?? null,
-          hasFeed: airdrops.feed !== null,
-          loading: airdrops.loading,
-          failed: airdrops.failed,
-          isLive: airdrops.isLiveApi,
-          saved,
-          doneTasks,
-          searchRef: airdropSearchRef,
-          onToggleSaved: toggleSaved,
-          onSelectDetail: handleSelectDetail,
-          onCopyBrief: (card: Card) => handleCopyBrief(card, 'page'),
-        }}
-        mountedMarkets={mountedMarkets}
-        marketsLoading={marketsLoading}
-        marketsFailed={marketsFailed}
-        sectors={markets?.sectors}
-      />
+          <MainPanels
+            tab={tab}
+            visitedTabs={visitedTabs}
+            mainRef={mainRef}
+            dropsProps={{
+              filters: dropsFilters,
+              totalCount: drops.items.length,
+              pendingCount: drops.pendingCount,
+              generatedAt: drops.generatedAt,
+              xUnavailable,
+              loading: drops.loading,
+              failed: drops.failed,
+              searchRef: dropsSearchRef,
+              onApplyPending: drops.applyPending,
+              onCopyBrief: handleCopyBrief,
+            }}
+            airdropsProps={{
+              filters: airdropFilters,
+              cardCount: cards.length,
+              tgeItems,
+              fetchedAt: airdrops.feed?.fetchedAt ?? null,
+              hasFeed: airdrops.feed !== null,
+              loading: airdrops.loading,
+              failed: airdrops.failed,
+              isLive: airdrops.isLiveApi,
+              saved,
+              doneTasks,
+              searchRef: airdropSearchRef,
+              onToggleSaved: toggleSaved,
+              onSelectDetail: handleSelectDetail,
+              onCopyBrief: (card: Card) => handleCopyBrief(card, 'page'),
+            }}
+            mountedMarkets={mountedMarkets}
+            marketsLoading={marketsLoading}
+            marketsFailed={marketsFailed}
+            marketSearchRef={marketSearchRef}
+            sectors={markets?.sectors}
+          />
 
-      <DashboardFooter preCount={airdropFilters.counts.pre} dropsCount={drops.items.length} sources={sources} sourcesLoading={sourcesLoading} sourcesIsLiveApi={sourcesIsLiveApi} sourcesFailed={sourcesFailed} />
-
+          <DashboardFooter
+            preCount={airdropFilters.counts.pre}
+            dropsCount={drops.items.length}
+            sources={sources}
+            sourcesLoading={sourcesLoading}
+            sourcesIsLiveApi={sourcesIsLiveApi}
+            sourcesFailed={sourcesFailed}
+          />
+        </div>
+      </div>
 
       <AgentProfileDialog
         open={copyFlow.profileOpen}

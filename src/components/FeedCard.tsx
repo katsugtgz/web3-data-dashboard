@@ -12,12 +12,27 @@ import {
   type FormattedSummary,
 } from '../lib/feedDisplay';
 import { formatRelativeTime, isHttpUrl } from '../lib/format';
+import {
+  AlertTriangleIcon,
+  CheckCircle2Icon,
+  ChevronDownIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  LockIcon,
+  ShieldAlertIcon,
+  SparklesIcon,
+} from './Icons';
 
 const MAX_VISIBLE_RISK_NOTES = 2;
+const ROUTINE_CAUTION_RE = /(?:not in verified registry|unverified domain|shortener|shortened url)/i;
 
 interface Props {
   item: FeedItem;
   onCopyBrief: (item: FeedItem) => void;
+}
+
+function StatusDot({ tone }: { tone: 'ok' | 'degraded' | 'down' }) {
+  return <span className={`status-dot status-dot-${tone}`} aria-hidden="true" />;
 }
 
 function RiskBadge({ level, notes }: { level: FeedItem['risk']['level']; notes: DisplayRiskNote[] }) {
@@ -27,7 +42,8 @@ function RiskBadge({ level, notes }: { level: FeedItem['risk']['level']; notes: 
     (level === 'risk' ? 'High risk signals detected' : 'Caution advised');
   return (
     <span className={`badge ${level === 'risk' ? 'badge-risk' : 'badge-warn'}`} title={title}>
-      {level === 'risk' ? '⚠ RISK' : '! Warn'}
+      <StatusDot tone={level === 'risk' ? 'down' : 'degraded'} />
+      <span>{level === 'risk' ? 'RISK' : 'Warn'}</span>
     </span>
   );
 }
@@ -52,12 +68,28 @@ function SafetyNotes({ level, notes }: { level: FeedItem['risk']['level']; notes
   const [expanded, setExpanded] = useState(false);
   if (notes.length === 0) return null;
 
+  const isRisk = level === 'risk';
+  const isRoutineCaution = level === 'warn' && notes.length === 1 && ROUTINE_CAUTION_RE.test(notes[0].text);
+
+  if (isRoutineCaution) {
+    return (
+      <div className="risk-box is-caution-quiet" aria-label="Safety note">
+        <AlertTriangleIcon size={13} className="risk-quiet-icon" />
+        <span className="risk-quiet-text">{notes[0].text}</span>
+      </div>
+    );
+  }
+
   const hiddenCount = Math.max(0, notes.length - MAX_VISIBLE_RISK_NOTES);
   const visible = expanded ? notes : notes.slice(0, MAX_VISIBLE_RISK_NOTES);
-  const toneClass = level === 'risk' ? 'is-risk' : 'is-warn';
+  const toneClass = isRisk ? 'is-risk' : 'is-warn';
 
   return (
     <div className={`risk-box ${toneClass}`}>
+      <div className="risk-box-head">
+        {isRisk ? <ShieldAlertIcon size={14} /> : <AlertTriangleIcon size={14} />}
+        <span>{isRisk ? 'High risk signals' : 'Safety notice'}</span>
+      </div>
       <ul className="risk-reasons" aria-label="Safety notes">
         {visible.map(note => (
           <li key={note.id}>{note.text}</li>
@@ -77,26 +109,58 @@ function SafetyNotes({ level, notes }: { level: FeedItem['risk']['level']; notes
   );
 }
 
+function cleanLinkLabel(label: string): string {
+  return label.replace(/[-/_]+(?=\u2026$)/, '').replace(/[-_]+$/, '\u2026');
+}
+
 function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectTitle: string }) {
   if (links.length === 0) return null;
   return (
     <div className="feed-links">
-      {links.map(link => (
-        <a
-          key={link.url}
-          href={link.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={link.url}
-          className={`feed-link${link.known ? ' is-known' : ''}`}
-        >
-          {link.known && <span aria-hidden="true">✓</span>}
-          <span className="feed-link-label">{link.label}</span>
-          <span className="sr"> — {projectTitle} (opens in a new tab)</span>
-          <span aria-hidden="true">↗</span>
-        </a>
-      ))}
+      {links.map(link => {
+        const displayLabel = cleanLinkLabel(link.label);
+        return (
+          <a
+            key={link.url}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={link.url}
+            className={`feed-link${link.known ? ' is-known' : ''}`}
+          >
+            {link.known && <CheckCircle2Icon size={13} className="feed-link-verified" />}
+            <span className="feed-link-label">{displayLabel}</span>
+            <span className="sr"> — {projectTitle} (opens in a new tab)</span>
+            <ExternalLinkIcon size={12} className="feed-link-ext" />
+          </a>
+        );
+      })}
     </div>
+  );
+}
+
+function FeedSourceRefs({ sources }: { sources: FeedItem['sources'] }) {
+  return (
+    <ul className="source-refs" aria-label="Source posts">
+      {sources.map(src => {
+        const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
+        const label = `${formatSourceHandle(src.platform, src.handle) || src.platform} (${src.platform})`;
+        return (
+          <li key={src.postUrl}>
+            {safePostUrl ? (
+              <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
+                <span>{label}</span>
+                <span className="sr"> post (opens in a new tab)</span>
+                <ExternalLinkIcon size={11} />
+              </a>
+            ) : (
+              <span>{label}</span>
+            )}
+            <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -132,24 +196,32 @@ export function FeedCard({ item, onCopyBrief }: Props) {
             {item.domain && (
               <>
                 {' · '}
-                <span className="mono">{item.domain}</span>
+                <span className="mono feed-domain">{item.domain}</span>
               </>
             )}
             {item.summarySource === 'ai' && (
               <>
                 {' · '}
-                <span className="ai-tag">AI summary</span>
+                <span className="ai-tag">
+                  <SparklesIcon size={11} />
+                  <span>AI summary</span>
+                </span>
               </>
             )}
           </p>
         </div>
-        <div className="card-actions">
+
+        <div className="card-actions feed-head-right">
           {item.surf?.tier && (
-            <span className={`gradetip ${item.surf.tier}`} title={`Curated Tier ${item.surf.tier}`}>
-              {item.surf.tier}
+            <span className={`gradetip tier-pill ${item.surf.tier}`} title={`Curated Tier ${item.surf.tier}`}>
+              Tier {item.surf.tier}
             </span>
           )}
           <RiskBadge level={item.risk.level} notes={riskNotes} />
+          <span className="feed-score-pill mono" title={`Signal confidence score ${item.score.toFixed(2)}`}>
+            <span className="feed-score-lbl">Score</span>
+            <span className="feed-score-val">{item.score.toFixed(2)}</span>
+          </span>
         </div>
       </div>
 
@@ -158,14 +230,14 @@ export function FeedCard({ item, onCopyBrief }: Props) {
       <SafetyNotes level={item.risk.level} notes={riskNotes} />
 
       {(chains.length > 0 || taskTypes.length > 0) && (
-        <div className="chipline">
+        <div className="chipline feed-tags">
           {chains.map(c => (
             <span key={c} className="typetip">
               {c}
             </span>
           ))}
           {taskTypes.map(t => (
-            <span key={t} className="badge">
+            <span key={t} className="badge feed-task-tag">
               {t}
             </span>
           ))}
@@ -178,48 +250,41 @@ export function FeedCard({ item, onCopyBrief }: Props) {
         <div className="feed-foot-left">
           <button
             type="button"
-            className="link-btn"
+            className="link-btn feed-sources-btn"
             aria-expanded={showSources}
             onClick={() => setShowSources(v => !v)}
           >
-            Seen in {item.sourceCount} {item.sourceCount === 1 ? 'source' : 'sources'}
+            <ChevronDownIcon size={14} className={showSources ? 'chev-open' : undefined} />
+            <span>
+              Seen in {item.sourceCount} {item.sourceCount === 1 ? 'source' : 'sources'}
+            </span>
           </button>
-          <span className="note mono">
-            {formatRelativeTime(item.lastSeen)} · score {item.score.toFixed(2)}
+          <span className="feed-foot-sep" aria-hidden="true">
+            ·
           </span>
+          <span className="note mono feed-time">{formatRelativeTime(item.lastSeen)}</span>
         </div>
+
         {isRisk ? (
-          <span className="note risk-blocked">⚠ Not available for RISK items</span>
+          <span
+            className="status-pill risk-blocked-status"
+            aria-disabled="true"
+            title="Blocked: high risk / agent guardrail"
+            aria-label={`Copy agent brief blocked for ${title}: high risk`}
+          >
+            <LockIcon size={13} />
+            <span>Risk blocked</span>
+          </span>
         ) : (
-          <button type="button" className="chip" onClick={() => onCopyBrief(item)}>
-            Copy agent brief
+          <button type="button" className="chip feed-copy-btn" onClick={() => onCopyBrief(item)}>
+            <CopyIcon size={13} />
+            <span>Copy agent brief</span>
             <span className="sr"> for {title}</span>
           </button>
         )}
       </div>
 
-      {showSources && sources.length > 0 && (
-        <ul className="source-refs" aria-label="Source posts">
-          {sources.map(src => {
-            const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
-            const label = `${formatSourceHandle(src.platform, src.handle) || src.platform} (${src.platform})`;
-            return (
-              <li key={src.postUrl}>
-                {safePostUrl ? (
-                  <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
-                    {label}
-                    <span className="sr"> post (opens in a new tab)</span>
-                    <span aria-hidden="true"> ↗</span>
-                  </a>
-                ) : (
-                  <span>{label}</span>
-                )}
-                <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {showSources && sources.length > 0 && <FeedSourceRefs sources={sources} />}
     </article>
   );
 }
