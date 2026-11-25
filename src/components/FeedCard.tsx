@@ -5,6 +5,7 @@ import {
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
+  formatSourceHandle,
   prepareFeedLinks,
   type DisplayLink,
   type DisplayRiskNote,
@@ -144,7 +145,7 @@ export function FeedCard({ item, onCopyBrief }: Props) {
         </div>
         <div className="card-actions">
           {item.surf?.tier && (
-            <span className={`gradetip ${item.surf.tier}`} title={`Surf Tier ${item.surf.tier}`}>
+            <span className={`gradetip ${item.surf.tier}`} title={`Curated Tier ${item.surf.tier}`}>
               {item.surf.tier}
             </span>
           )}
@@ -202,7 +203,7 @@ export function FeedCard({ item, onCopyBrief }: Props) {
           {sources.map(src => (
             <li key={src.postUrl}>
               <a href={src.postUrl} target="_blank" rel="noopener noreferrer">
-                @{src.handle} ({src.platform})
+                {formatSourceHandle(src.platform, src.handle) || src.platform} ({src.platform})
                 <span className="sr"> post (opens in a new tab)</span>
                 <span aria-hidden="true"> ↗</span>
               </a>

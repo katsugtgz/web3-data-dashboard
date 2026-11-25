@@ -71,6 +71,14 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
               </span>
             </>
           )}
+          {c.source && (
+            <>
+              {' · '}
+              <span className="mono" title={`Source: ${c.source}`}>
+                {c.source}
+              </span>
+            </>
+          )}
         </p>
       </div>
       <div className="card-actions">

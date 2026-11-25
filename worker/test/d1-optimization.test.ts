@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { runIfDue } from '../src/lib/cronGate';
-import { listSnapshotsByPrefix, upsertSnapshot } from '../src/lib/db';
+import { listSnapshotsByPrefix, readSnapshotMeta, upsertSnapshot } from '../src/lib/db';
 import { applyMigrations, createTestD1, MIGRATION_FILES } from './helpers';
 
 describe('migration 0005 backfill and columns', () => {
@@ -67,6 +67,29 @@ describe('listSnapshotsByPrefix', () => {
       'markets_extra',
       'marketz',
     ]);
+  });
+
+  test('readSnapshotMeta returns metadata + body_len without reading full body column', async () => {
+    const { db, queries } = createTestD1();
+    const now = 1_795_240_000_000;
+    const payload = { cards: [{ n: 'Alpha' }], tge: [], counts: { active: 1, preToken: 1 }, fetchedAt: now };
+    await upsertSnapshot(db, 'airdrops', payload, now);
+
+    const before = queries.length;
+    const meta = await readSnapshotMeta(db, 'airdrops');
+    const metaQueries = queries.slice(before);
+    expect(metaQueries).toHaveLength(1);
+    expect(metaQueries[0]).toContain('length(body) AS body_len');
+    expect(metaQueries[0]).not.toMatch(/\bSELECT\b[^;]*,\s*body\b/i);
+    expect(meta).toEqual({
+      key: 'airdrops',
+      fetched_at: now,
+      ok: 1,
+      error: null,
+      body_len: JSON.stringify(payload).length,
+    });
+
+    expect(await readSnapshotMeta(db, 'missing:key')).toBeNull();
   });
 });
 

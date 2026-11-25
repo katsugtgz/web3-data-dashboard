@@ -28,6 +28,7 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
     ['Updated', card.u === 'today' ? 'Today' : card.u],
     ['Best for', card.fit.map(f => fit[f]).join(', ') || '—'],
     ...(card.x ? [['Code', card.x] as [string, string]] : []),
+    ...(card.source ? [['Source', card.source] as [string, string]] : []),
     ['Status flags', flags || '—'],
   ];
 }

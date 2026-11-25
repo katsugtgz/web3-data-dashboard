@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import type { Grade, MarketSection, RiskLevel } from '../../shared/types';
 import { createTestD1 } from './helpers';
-import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
+import { buildSurfIndex, computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import { HAN_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
 import { cleanUrl, extractUrls, getRegistrableDomain, parseDropPost } from '../src/normalize/parse';
 import { computeScore, decayClusterScores } from '../src/normalize/score';
 import {
+  collectKnownDomainEntries,
   evaluateSafety,
   findLookalikeDomain,
   isPunycodeOrMixedScript,
@@ -1127,5 +1128,146 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(await pruneOldPosts(db, now + 60_000)).toEqual({ deletedPosts: 1, deletedClusters: 1 });
     const remaining = await db.prepare('SELECT id FROM clusters ORDER BY id ASC').all<{ id: string }>();
     expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
+  });
+
+  test('collectKnownDomainEntries, seedKnownDomains, and buildSurfIndex enforce trust boundaries and prune stale curated rows', async () => {
+    const makeCard = (overrides: Record<string, unknown>) => ({
+      r: 1,
+      n: 'Proto',
+      t: null,
+      g: 'A' as Grade,
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 70,
+      sub: [7, 7, null],
+      url: null,
+      ...overrides,
+    });
+
+    const defiSection: MarketSection = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: [{ cells: ['Arbitrum'], href: 'https://arbitrum.io/' }],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: 1000,
+      stale: false,
+    };
+
+    const feed = {
+      cards: [
+        makeCard({ n: 'SurfGood', t: 'SGOOD', source: 'Surf', url: 'https://surfgood.xyz/' }),
+        makeCard({ n: 'SurfRisk', t: 'SRISK', source: 'Surf', b: ['live', 'risk'], url: 'https://surfrisk.xyz/' }),
+        makeCard({ n: 'AssoSheet', source: 'ASSO7878', url: 'https://assosheet.io/' }),
+        makeCard({ n: 'ArndxtSheet', source: 'arndxt', url: 'https://arndxtsheet.io/' }),
+        makeCard({ n: 'Ethena', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0x1' }),
+        makeCard({ n: 'Pendle', source: 'Pendle', url: 'https://pendle.finance/' }),
+        makeCard({ n: 'Uniswap', source: 'Merkl', url: 'https://app.merkl.xyz/opportunities/1' }),
+        makeCard({ n: 'DefiGood', source: 'DefiLlama', url: 'https://defigood.fi/' }),
+        makeCard({ n: 'DefiRisk', source: 'DefiLlama', b: ['risk'], url: 'https://defirisk.fi/' }),
+        makeCard({ n: 'PunyBad', source: 'DefiLlama', url: 'https://xn--arbitrm-91a.io/' }),
+        makeCard({ n: 'LookalikeDefi', source: 'DefiLlama', url: 'https://arbitrurn.io/' }),
+        makeCard({ n: 'LookalikePlatform', source: 'DefiLlama', url: 'https://zea1y.io/' }),
+      ],
+      tge: [],
+      counts: { active: 12, preToken: 12 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    const entries = collectKnownDomainEntries(feed, defiSection);
+    const byDom = new Map(entries.map(e => [e.domain, e]));
+
+    expect(byDom.get('surfgood.xyz')?.origin).toBe('surf');
+    expect(byDom.get('arbitrum.io')?.origin).toBe('defi');
+    expect(byDom.get('defigood.fi')?.origin).toBe('curated');
+    expect(byDom.get('pendle.finance')?.project).toBe('Pendle');
+    expect(byDom.get('pendle.finance')?.origin).toBe('curated');
+
+    // Excluded: risk cards, editable sheets, aggregator hosts for 3rd-party cards, punycode, lookalikes.
+    expect(byDom.has('surfrisk.xyz')).toBe(false);
+    expect(byDom.has('defirisk.fi')).toBe(false);
+    expect(byDom.has('assosheet.io')).toBe(false);
+    expect(byDom.has('arndxtsheet.io')).toBe(false);
+    expect(byDom.has('merkl.xyz')).toBe(false);
+    expect(byDom.has('xn--arbitrm-91a.io')).toBe(false);
+    expect(byDom.has('arbitrurn.io')).toBe(false);
+    expect(byDom.has('zea1y.io')).toBe(false);
+
+    // buildSurfIndex skips risk cards and curated aggregator domains for 3rd-party cards.
+    const surfIndex = buildSurfIndex(feed);
+    expect(surfIndex.byDomain.get('surfgood.xyz')?.name).toBe('SurfGood');
+    expect(surfIndex.byTicker.get('SGOOD')?.name).toBe('SurfGood');
+    expect(surfIndex.byDomain.has('surfrisk.xyz')).toBe(false);
+    expect(surfIndex.byTicker.has('SRISK')).toBe(false);
+    expect(surfIndex.byDomain.get('pendle.finance')?.name).toBe('Pendle');
+    expect(surfIndex.byDomain.has('merkl.xyz')).toBe(false);
+
+    // seedKnownDomains prunes stale origin='curated' rows while preserving surf/defi/platform.
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('stale-curated.io', 'OldCurated', 'curated'),
+                ('keep-surf.io', 'KeepSurf', 'surf'),
+                ('keep-defi.io', 'KeepDefi', 'defi')`,
+      )
+      .run();
+
+    await seedKnownDomains(db, feed, defiSection);
+    const rows = await db
+      .prepare('SELECT domain, origin FROM known_domains ORDER BY domain ASC')
+      .all<{ domain: string; origin: string }>();
+    const domSet = new Set(rows.results.map(r => r.domain));
+    expect(domSet.has('stale-curated.io')).toBe(false);
+    expect(domSet.has('defigood.fi')).toBe(true);
+    expect(domSet.has('keep-surf.io')).toBe(true);
+    expect(domSet.has('keep-defi.io')).toBe(true);
+    expect(domSet.has('galxe.com')).toBe(true);
+
+    // Merged Surf + Pendle and ASSO7878 + Pendle cards must never poison known_domains or surfIndex with pendle.finance/merkl.xyz.
+    const mergedAggFeed = {
+      cards: [
+        makeCard({
+          n: 'Ethena',
+          source: 'Surf',
+          url: 'https://ethena.fi/',
+          tasks: [
+            { title: 'Stake USDe', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://ethena.fi/stake' },
+            { title: 'Pendle YT USDe', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.pendle.finance/trade/markets/0x1' },
+            { title: 'Merkl USDe', type: 'liquidity', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.merkl.xyz/opportunities/1' },
+          ],
+        }),
+        makeCard({
+          n: 'xStocks',
+          source: 'ASSO7878',
+          url: null,
+          tasks: [
+            { title: 'Pendle YT xStocks', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.pendle.finance/trade/markets/0x2' },
+          ],
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    const mergedKnown = new Map(collectKnownDomainEntries(mergedAggFeed, null).map(e => [e.domain, e]));
+    expect(mergedKnown.get('ethena.fi')?.origin).toBe('surf');
+    expect(mergedKnown.has('pendle.finance')).toBe(false);
+    expect(mergedKnown.has('merkl.xyz')).toBe(false);
+
+    const mergedSurfIdx = buildSurfIndex(mergedAggFeed);
+    expect(mergedSurfIdx.byDomain.get('ethena.fi')?.name).toBe('Ethena');
+    expect(mergedSurfIdx.byDomain.has('pendle.finance')).toBe(false);
+    expect(mergedSurfIdx.byDomain.has('merkl.xyz')).toBe(false);
   });
 });

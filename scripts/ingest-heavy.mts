@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
+import { extractDefiLlamaTokenlessAirdrops } from '../worker/src/sources/curated';
+import { fetchDuneAirdrops } from '../worker/src/sources/dune';
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
+import { fetchArndxtSheet, fetchAsso7878Sheet } from '../worker/src/sources/sheets';
 
 const dryRun = process.argv.includes('--dry-run');
 const nowMs = Date.now();
@@ -22,20 +25,61 @@ function sqlQuote(str: string): string {
 }
 
 async function main() {
-  const [protocolsRaw, yieldsRaw] = await Promise.all([
+  // Fetch heavy DefiLlama payloads and Google Sheets concurrently outside the
+  // Worker's 10 ms free-tier CPU budget; sheet failures are non-fatal so
+  // DefiLlama snapshots still refresh.
+  const [protocolsRaw, yieldsRaw, asso7878Feed, arndxtFeed] = await Promise.all([
     fetchJson('https://api.llama.fi/protocols'),
     fetchJson('https://yields.llama.fi/pools'),
+    fetchAsso7878Sheet(undefined, nowMs).catch(err => {
+      console.warn('Optional ASSO7878 sheet fetch failed (continuing with other snapshots):', err);
+      return null;
+    }),
+    fetchArndxtSheet(undefined, nowMs).catch(err => {
+      console.warn('Optional arndxt sheet fetch failed (continuing with other snapshots):', err);
+      return null;
+    }),
   ]);
 
   const defi = normalizeDefiProtocols(protocolsRaw, nowMs);
   const yields = normalizeDefiYields(yieldsRaw, nowMs);
+  // Zero extra requests: reuse protocolsRaw to extract tokenless protocols (symbol === "-", TVL >= $5M).
+  const defiLlamaAirdrops = extractDefiLlamaTokenlessAirdrops(protocolsRaw, nowMs);
 
-  console.log(`Normalized DeFi: ${defi.rows.length} rows, Yields: ${yields.rows.length} rows`);
+  console.log(
+    `Normalized DeFi: ${defi.rows.length} rows, Yields: ${yields.rows.length} rows, Tokenless Airdrops: ${defiLlamaAirdrops.cards.length} cards, ASSO7878: ${asso7878Feed?.cards.length ?? 0} cards/${asso7878Feed?.tge.length ?? 0} tge, arndxt: ${arndxtFeed?.cards.length ?? 0} cards/${arndxtFeed?.tge.length ?? 0} tge`,
+  );
 
   // An empty/filtered-out section would overwrite the last good snapshot with
   // `rows: []` and ok=1; fail before any write so the old data ages out instead.
   if (defi.rows.length === 0 || yields.rows.length === 0) {
     throw new Error(`Empty DefiLlama section (defi=${defi.rows.length}, yields=${yields.rows.length}) — refusing to overwrite D1 snapshots`);
+  }
+
+  const snapshotsToWrite: [string, unknown][] = [
+    ['markets:defi', defi],
+    ['markets:yields', yields],
+  ];
+  if (defiLlamaAirdrops.cards.length > 0) {
+    snapshotsToWrite.push(['airdrops:defillama', defiLlamaAirdrops]);
+  }
+  if (asso7878Feed && (asso7878Feed.cards.length > 0 || asso7878Feed.tge.length > 0)) {
+    snapshotsToWrite.push(['airdrops:asso7878', asso7878Feed]);
+  }
+  if (arndxtFeed && (arndxtFeed.cards.length > 0 || arndxtFeed.tge.length > 0)) {
+    snapshotsToWrite.push(['airdrops:arndxt', arndxtFeed]);
+  }
+
+  // Strictly opt-in paid Dune integration: 100% keyless $0 when DUNE_API_KEY is unset.
+  const duneApiKey = process.env.DUNE_API_KEY?.trim();
+  if (duneApiKey) {
+    try {
+      const duneSnapshot = await fetchDuneAirdrops(duneApiKey, undefined, nowMs);
+      snapshotsToWrite.push(['airdrops:dune', duneSnapshot]);
+      console.log(`Fetched Dune airdrop snapshot: ${duneSnapshot.queries.length} queries`);
+    } catch (err) {
+      console.warn('Optional Dune airdrop fetch failed (continuing with DefiLlama snapshots):', err);
+    }
   }
 
   if (dryRun) {
@@ -44,10 +88,7 @@ async function main() {
   }
 
   const statements: string[] = [];
-  for (const [key, section] of [
-    ['markets:defi', defi],
-    ['markets:yields', yields],
-  ] as const) {
+  for (const [key, section] of snapshotsToWrite) {
     const body = JSON.stringify(section);
     const etag = `"${await sha1Hex(body)}"`;
     // Same fetched_at guard as the Worker's upsertSnapshot (worker/src/lib/db.ts):

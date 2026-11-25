@@ -98,9 +98,9 @@ export function DropsPanel({
         <div>
           <h2 className="section">Live Drops Feed</h2>
           <p className="note">
-            Real-time deduplicated signals from public Telegram channels &amp; best-effort X, safety-screened in English
+            Real-time deduplicated signals from public Telegram channels, RSS/API trackers &amp; best-effort X, safety-screened in English
             {generatedAt ? ` · latest activity ${formatRelativeTime(generatedAt)}` : ''}.
-            {xUnavailable && <span className="x-unavail"> · X unavailable (Telegram unaffected)</span>}
+            {xUnavailable && <span className="x-unavail"> · X unavailable (Telegram &amp; feeds unaffected)</span>}
           </p>
         </div>
         {pendingCount > 0 && (

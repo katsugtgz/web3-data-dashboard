@@ -92,6 +92,19 @@ export interface SnapshotMetaRow {
   error: string | null;
 }
 
+export interface SnapshotMetaWithLenRow extends SnapshotMetaRow {
+  body_len: number;
+}
+
+/** Metadata-only snapshot lookup (skips transferring full body blob). */
+export async function readSnapshotMeta(db: D1Database, key: string): Promise<SnapshotMetaWithLenRow | null> {
+  const row = await db
+    .prepare('SELECT key, fetched_at, ok, error, length(body) AS body_len FROM snapshots WHERE key = ?1')
+    .bind(key)
+    .first<SnapshotMetaWithLenRow>();
+  return row ?? null;
+}
+
 /** /health only: skips the (large) body column so the no-store endpoint does
  *  not read both full payloads on every request. */
 export async function listSnapshotMeta(db: D1Database): Promise<SnapshotMetaRow[]> {

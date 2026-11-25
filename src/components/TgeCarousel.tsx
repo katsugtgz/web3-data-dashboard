@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
+import { normalizeExternalUrl } from '../lib/format';
 import { formatTgeStatus } from '../lib/labels';
 import { Avatar } from './ProjectCard';
 
@@ -23,7 +24,15 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
             ticker = m[2];
           }
         }
-        return { ...it, name, ticker, statusLabel: st.label, statusKind: st.kind, claimable: st.claimable };
+        return {
+          ...it,
+          name,
+          ticker,
+          href: normalizeExternalUrl(it.url),
+          statusLabel: st.label,
+          statusKind: st.kind,
+          claimable: st.claimable,
+        };
       }),
     [items],
   );
@@ -101,7 +110,7 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           tabIndex={0}
         >
           {visible.map(it => (
-            <article key={`${it.name}-${it.d}`} className="tge-card">
+            <article key={`${it.name}-${it.d}-${it.source ?? ''}`} className="tge-card">
               <div className="tge-card-top">
                 <Avatar name={it.name} src={it.logo ?? ''} size={30} />
                 <div className="tge-card-title">
@@ -114,9 +123,14 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
                 <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
                 <span className="tt mono">{it.d}</span>
                 {it.raise && <span className="tt mono">{it.raise}</span>}
+                {it.source && (
+                  <span className="typetip mono" title={`Source: ${it.source}`}>
+                    {it.source}
+                  </span>
+                )}
               </div>
-              {it.url && (
-                <a className="tge-link" href={it.url} target="_blank" rel="noopener noreferrer">
+              {it.href && (
+                <a className="tge-link" href={it.href} target="_blank" rel="noopener noreferrer">
                   Open link
                   <span className="sr"> for {it.name} (opens in a new tab)</span>
                   <span aria-hidden="true"> ↗</span>

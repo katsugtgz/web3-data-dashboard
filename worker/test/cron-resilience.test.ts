@@ -752,4 +752,438 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
       { key: 'prune', last_run_at: t0 },
     ]);
   });
+
+  test('*/2 cron reads only airdrops snapshot (never markets:defi), and */5 cron gates TTL via metadata and seedKnownDomains via known_domains_seed', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = NOW;
+    const sampleAirdrops = {
+      cards: [
+        {
+          r: 1,
+          n: 'AlphaProto',
+          id: 'surf:alpha',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://alphaproto.xyz/',
+          source: 'Surf',
+        },
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: t0,
+    };
+    const sampleDefi = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: [{ cells: ['BetaDefi'], href: 'https://betadefi.io/' }],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: t0,
+      stale: false,
+    };
+    await upsertSnapshot(db, 'airdrops', sampleAirdrops, t0);
+    await upsertSnapshot(db, 'markets:defi', sampleDefi, t0);
+    await upsertSnapshot(db, 'markets:github', { id: 'github', title: 'GH', blurb: '', cols: [], rows: [], source: 'GH', sourceUrl: 'https://github.com', fetchedAt: t0, stale: false }, t0);
+
+    // 1. */2 cron: must NOT read markets:defi.
+    const beforeTwoMin = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/2 * * * *', scheduledTime: t0 + 60_000, noRetry() {} } as ScheduledController,
+          { DB: db, TG_BATCH_SIZE: '1' },
+          makeExecCtx(),
+        );
+      },
+    );
+    const twoMinSnapReads = queries
+      .slice(beforeTwoMin)
+      .filter(q => /FROM\s+snapshots/i.test(q));
+    expect(twoMinSnapReads.length).toBe(1);
+
+    // 2. */5 cron tick 1 (t0 + 5m): airdrops & github TTL fresh -> uses readSnapshotMeta;
+    //    known_domains_seed missing -> seeds known_domains once and records t0.
+    const beforeFive1 = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0 + 5 * 60_000, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '1', FEED_BATCH_SIZE: '1' },
+          makeExecCtx(),
+        );
+      },
+    );
+    const five1Queries = queries.slice(beforeFive1);
+    expect(five1Queries.some(q => q.includes('length(body) AS body_len'))).toBe(true);
+    expect(five1Queries.some(q => /INSERT\s+INTO\s+known_domains/i.test(q))).toBe(true);
+
+    const seedState = await db
+      .prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed'`)
+      .first<{ last_run_at: number }>();
+    expect(seedState?.last_run_at).toBe(t0);
+
+    // 3. */5 cron tick 2 (t0 + 10m): neither airdrops nor markets:defi advanced -> skips seedKnownDomains!
+    const beforeFive2 = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0 + 10 * 60_000, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '1', FEED_BATCH_SIZE: '1' },
+          makeExecCtx(),
+        );
+      },
+    );
+    const five2Queries = queries.slice(beforeFive2);
+    expect(five2Queries.some(q => /INSERT\s+INTO\s+known_domains/i.test(q))).toBe(false);
+
+    // 4. Advance markets:defi fetched_at -> next */5 tick re-runs seedKnownDomains and advances known_domains_seed.
+    const tDefiNew = t0 + 15 * 60_000;
+    await upsertSnapshot(
+      db,
+      'markets:defi',
+      { ...sampleDefi, rows: [{ cells: ['GammaDefi'], href: 'https://gammadefi.io/' }], fetchedAt: tDefiNew },
+      tDefiNew,
+    );
+    const beforeFive3 = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: tDefiNew + 1_000, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '1', FEED_BATCH_SIZE: '1' },
+          makeExecCtx(),
+        );
+      },
+    );
+    const five3Queries = queries.slice(beforeFive3);
+    expect(five3Queries.some(q => /INSERT\s+INTO\s+known_domains/i.test(q))).toBe(true);
+    const gammaRow = await db
+      .prepare(`SELECT domain FROM known_domains WHERE domain = 'gammadefi.io'`)
+      .first<{ domain: string }>();
+    expect(gammaRow?.domain).toBe('gammadefi.io');
+    const seedState2 = await db
+      .prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed'`)
+      .first<{ last_run_at: number }>();
+    expect(seedState2?.last_run_at).toBe(tDefiNew);
+  });
+
+  test('*/5 cron reuses freshly built airdrops in memory without re-reading snapshots body after upsert', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = NOW;
+    const surfPayload = {
+      active: [
+        {
+          project_id: 'fresh-surf',
+          project_name: 'FreshSurf',
+          grade: 'A',
+          score: 85,
+          best_task: { title: 'Testnet swap', type: 'testnet', external_link: 'https://freshsurf.xyz/app' },
+          tasks: [{ title: 'Testnet swap', type: 'testnet', external_link: 'https://freshsurf.xyz/app' }],
+        },
+      ],
+      tge: [],
+    };
+
+    const before = queries.length;
+    await withStubbedFetch(
+      url => {
+        if (url.includes('surf.computer') || url.includes('surf.test')) {
+          return new Response(JSON.stringify(surfPayload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('offline', { status: 503 });
+      },
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          { DB: db, SURF_AIRDROPS_URL: 'https://surf.test/airdrops', X_BATCH_SIZE: '1', FEED_BATCH_SIZE: '1' },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    const tickQueries = queries.slice(before);
+    const upsertIdx = tickQueries.findIndex(q => /INSERT\s+INTO\s+snapshots/i.test(q));
+    expect(upsertIdx).toBeGreaterThan(-1);
+    const fullBodyReadsAfterUpsert = tickQueries
+      .slice(upsertIdx + 1)
+      .filter(q => /SELECT\s+key,\s+body/i.test(q));
+    expect(fullBodyReadsAfterUpsert).toEqual([]);
+
+    const seededDom = await db
+      .prepare(`SELECT domain, origin FROM known_domains WHERE domain = 'freshsurf.xyz'`)
+      .first<{ domain: string; origin: string }>();
+    expect(seededDom).toEqual({ domain: 'freshsurf.xyz', origin: 'surf' });
+  });
+
+  test('*/5 cron honors D1 sources enabled/next_poll_at for curated sources and preserves deferred/failed prior cards', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    await ensureSourcesSynced(db);
+    await db.prepare(`UPDATE sources SET enabled = 0 WHERE id = 'sheet:asso7878_sheet'`).run();
+    await db
+      .prepare(`UPDATE sources SET next_poll_at = ?1 WHERE id = 'feed:pendle_points'`)
+      .bind(t0 + 10 * 60_000)
+      .run();
+
+    const makeCard = (n: string, source: string, url: string) => ({
+      r: 1,
+      n,
+      id: `${source.toLowerCase()}:${n.toLowerCase()}`,
+      t: null,
+      g: 'A',
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 80,
+      sub: [8, 8, null],
+      url,
+      source,
+    });
+
+    await upsertSnapshot(
+      db,
+      'airdrops',
+      {
+        cards: [
+          makeCard('DisabledSheetCard', 'ASSO7878', 'https://disabled-sheet.xyz/'),
+          makeCard('DeferredPendleCard', 'Pendle', 'https://app.pendle.finance/trade/markets/0x1'),
+          makeCard('FailedMerklCard', 'Merkl', 'https://merkl-proto.xyz/'),
+        ],
+        tge: [],
+        counts: { active: 3, preToken: 3 },
+        fetchedAt: t0 - 31 * 60_000,
+      },
+      t0 - 31 * 60_000,
+    );
+
+    const fetchedUrls: string[] = [];
+    const surfPayload = {
+      active: [
+        {
+          project_id: 'live-surf',
+          project_name: 'LiveSurf',
+          grade: 'S',
+          score: 90,
+          best_task: { title: 'Swap', type: 'testnet', external_link: 'https://livesurf.xyz/' },
+          tasks: [{ title: 'Swap', type: 'testnet', external_link: 'https://livesurf.xyz/' }],
+        },
+      ],
+      tge: [],
+    };
+
+    await withStubbedFetch(
+      url => {
+        fetchedUrls.push(url);
+        if (url === 'https://surf.test/airdrops') {
+          return new Response(JSON.stringify(surfPayload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('offline', { status: 503 });
+      },
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          {
+            DB: db,
+            SURF_AIRDROPS_URL: 'https://surf.test/airdrops',
+            ASSO7878_SHEET_URL: 'https://asso.test/csv',
+            PENDLE_POINTS_URL: 'https://pendle.test/markets',
+            MERKL_OPPORTUNITIES_URL: 'https://merkl.test/opps',
+            X_BATCH_SIZE: '1',
+            FEED_BATCH_SIZE: '1',
+          },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    expect(fetchedUrls).toContain('https://surf.test/airdrops');
+    expect(fetchedUrls).toContain('https://merkl.test/opps');
+    expect(fetchedUrls).not.toContain('https://asso.test/csv');
+    expect(fetchedUrls).not.toContain('https://pendle.test/markets');
+
+    const snap = await readSnapshot(db, 'airdrops');
+    const saved = JSON.parse(snap!.body) as { cards: { n: string; source?: string }[] };
+    const names = saved.cards.map(c => c.n);
+    expect(names).toContain('LiveSurf');
+    expect(names).toContain('DeferredPendleCard');
+    expect(names).toContain('FailedMerklCard');
+    expect(names).not.toContain('DisabledSheetCard');
+  });
+
+  test('*/5 cron uses fresh cached airdrops:asso7878 and airdrops:arndxt snapshots without live sheet fetch, updates sheet health, and falls back when stale', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    const cachedAt = t0 - 15 * 60_000;
+    await ensureSourcesSynced(db);
+
+    const makeCard = (n: string, source: string, url: string) => ({
+      r: 1,
+      n,
+      id: `${source.toLowerCase()}:${n.toLowerCase()}`,
+      t: null,
+      g: 'A',
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 80,
+      sub: [8, 8, null],
+      url,
+      source,
+    });
+
+    await upsertSnapshot(
+      db,
+      'airdrops:asso7878',
+      {
+        cards: [makeCard('CachedAssoCard', 'ASSO7878', 'https://cached-asso.xyz/')],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: cachedAt,
+      },
+      cachedAt,
+    );
+    await upsertSnapshot(
+      db,
+      'airdrops:arndxt',
+      {
+        cards: [makeCard('CachedArndxtCard', 'arndxt', 'https://cached-arndxt.xyz/')],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: cachedAt,
+      },
+      cachedAt,
+    );
+    // Mark sheet sources previously degraded to confirm fresh cached snapshots restore ok health.
+    await db
+      .prepare(`UPDATE sources SET status = 'degraded', fail_count = 2, first_fail_at = ?1 WHERE id IN ('sheet:asso7878_sheet', 'sheet:arndxt_sheet')`)
+      .bind(cachedAt - 60_000)
+      .run();
+
+    const surfPayload = {
+      active: [
+        {
+          project_id: 'live-surf-2',
+          project_name: 'LiveSurf2',
+          grade: 'S',
+          score: 90,
+          best_task: { title: 'Swap', type: 'testnet', external_link: 'https://livesurf2.xyz/' },
+          tasks: [{ title: 'Swap', type: 'testnet', external_link: 'https://livesurf2.xyz/' }],
+        },
+      ],
+      tge: [],
+    };
+
+    const fetchedFresh: string[] = [];
+    await withStubbedFetch(
+      url => {
+        fetchedFresh.push(url);
+        if (url === 'https://surf.test/airdrops') {
+          return new Response(JSON.stringify(surfPayload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('offline', { status: 503 });
+      },
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          {
+            DB: db,
+            SURF_AIRDROPS_URL: 'https://surf.test/airdrops',
+            ASSO7878_SHEET_URL: 'https://asso.test/csv',
+            ARNDXT_SHEET_URL: 'https://arndxt.test/csv',
+            X_BATCH_SIZE: '1',
+            FEED_BATCH_SIZE: '1',
+          },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    expect(fetchedFresh).toContain('https://surf.test/airdrops');
+    expect(fetchedFresh).not.toContain('https://asso.test/csv');
+    expect(fetchedFresh).not.toContain('https://arndxt.test/csv');
+
+    const saved = JSON.parse((await readSnapshot(db, 'airdrops'))!.body) as { cards: { n: string }[] };
+    const names = saved.cards.map(c => c.n);
+    expect(names).toContain('LiveSurf2');
+    expect(names).toContain('CachedAssoCard');
+    expect(names).toContain('CachedArndxtCard');
+
+    const sheetRows = await db
+      .prepare(`SELECT id, status, fail_count, first_fail_at, last_ok_at FROM sources WHERE platform = 'sheet' ORDER BY id ASC`)
+      .all<{ id: string; status: string; fail_count: number; first_fail_at: number | null; last_ok_at: number | null }>();
+    expect(sheetRows.results).toEqual([
+      { id: 'sheet:arndxt_sheet', status: 'ok', fail_count: 0, first_fail_at: null, last_ok_at: cachedAt },
+      { id: 'sheet:asso7878_sheet', status: 'ok', fail_count: 0, first_fail_at: null, last_ok_at: cachedAt },
+    ]);
+
+    // Stale (>6h) cached sheet snapshot falls back to live sheet fetch.
+    const tLater = t0 + 7 * 3_600_000;
+    const fetchedStale: string[] = [];
+    await withStubbedFetch(
+      url => {
+        fetchedStale.push(url);
+        if (url === 'https://surf.test/airdrops') {
+          return new Response(JSON.stringify(surfPayload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('offline', { status: 503 });
+      },
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: tLater, noRetry() {} } as ScheduledController,
+          {
+            DB: db,
+            SURF_AIRDROPS_URL: 'https://surf.test/airdrops',
+            ASSO7878_SHEET_URL: 'https://asso.test/csv',
+            ARNDXT_SHEET_URL: 'https://arndxt.test/csv',
+            X_BATCH_SIZE: '1',
+            FEED_BATCH_SIZE: '1',
+          },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    expect(fetchedStale).toContain('https://asso.test/csv');
+    expect(fetchedStale).toContain('https://arndxt.test/csv');
+  });
 });

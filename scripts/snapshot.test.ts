@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  finalizeSnapshotCluster,
   fixtureFallbackNeeded,
   isEnglishText,
   mergePostsStable,
@@ -44,6 +45,29 @@ describe('mergePostsStable', () => {
     ];
     const merged = mergePostsStable([{ handle: 'alpha', posts }], 350);
     expect(merged.map(p => p.msgId)).toEqual(['2']);
+  });
+
+  test('merges telegram and feed platform posts deterministically regardless of input order', () => {
+    const tg = {
+      handle: 'airdrops_io',
+      posts: [{ ...post('airdrops_io', '10', 500), platform: 'telegram' as const }],
+    };
+    const feed = {
+      handle: 'airdroptracker_rss',
+      posts: [
+        {
+          platform: 'feed' as const,
+          handle: 'airdroptracker_rss',
+          msgId: 'rss-1',
+          postUrl: 'https://www.airdroptracker.io/guide',
+          postedAt: 500,
+          text: 'Testnet guide',
+          urls: [],
+        },
+      ],
+    };
+    expect(mergePostsStable([tg, feed], 0)).toEqual(mergePostsStable([feed, tg], 0));
+    expect(mergePostsStable([tg, feed], 0).map(p => p.platform)).toEqual(['feed', 'telegram']);
   });
 });
 
@@ -113,5 +137,115 @@ describe('mergeSectionsWithPrior (reduced-markets guard)', () => {
   test('no prior and all fresh present passes through', () => {
     const merged = mergeSectionsWithPrior([section('defi'), section('crypto')], [], required);
     expect(merged?.map(s => s.id)).toEqual(['crypto', 'defi']);
+  });
+});
+
+describe('finalizeSnapshotCluster (Worker safety & link parity)', () => {
+  test('flags quest-platform lookalikes via platformDomains, uses selectFeedLinks(maxLinks=6), and reconciles safety reasons', () => {
+    const now = 1_795_240_000_000;
+    const lookalikeItem = finalizeSnapshotCluster(
+      {
+        id: 'c-lookalike',
+        project: 'Zea1y',
+        domain: 'zea1y.io',
+        chains: new Set(['Base']),
+        taskTypes: new Set(['quest']),
+        summary: 'Complete quests at zea1y.io',
+        urls: new Set([
+          'https://zea1y.io/quest',
+          'https://t.me/airdropfind?boost',
+          'https://linktr.ee/airdropfind',
+        ]),
+        rawIpUrls: new Set(),
+        sources: [{ platform: 'telegram', handle: 'airdropfind', postUrl: 'https://t.me/airdropfind/1', postedAt: now }],
+        sourceIds: new Set(['telegram:airdropfind']),
+        sourceHandles: new Set(['airdropfind']),
+        trustMax: 0.85,
+        firstSeen: now,
+        lastSeen: now,
+        texts: ['Complete quests at https://zea1y.io/quest'],
+      },
+      {
+        projectDomains: new Map([['arbitrum.io', 'Arbitrum']]),
+        platformDomains: new Set(['zealy.io', 'galxe.com']),
+        allKnownDomains: new Set(['arbitrum.io', 'zealy.io', 'galxe.com']),
+        nowMs: now,
+      },
+    );
+
+    expect(lookalikeItem.risk.level).toBe('risk');
+    expect(lookalikeItem.risk.reasons.some(r => r.includes('zea1y.io vs zealy.io'))).toBe(true);
+    expect(lookalikeItem.links.some(l => l.url.includes('t.me/') || l.url.includes('linktr.ee'))).toBe(false);
+
+    // Caps selected links at 6 (matching Worker maxLinks: 6) and keeps known flag accurate.
+    const manyUrls = [
+      'https://alphaproto.xyz/claim',
+      'https://betavault.io/quest',
+      'https://gammaswap.fi/stake',
+      'https://deltamint.app/mint',
+      'https://epsilonbridge.net/bridge',
+      'https://zetaquest.org/tasks',
+      'https://thetapool.com/farm',
+      'https://kappafarm.co/points',
+    ];
+    const cappedItem = finalizeSnapshotCluster(
+      {
+        id: 'c-cap',
+        project: 'AlphaProto',
+        domain: 'alphaproto.xyz',
+        chains: new Set(['Ethereum']),
+        taskTypes: new Set(['testnet', 'other']),
+        summary: 'AlphaProto testnet claim',
+        urls: new Set(manyUrls),
+        rawIpUrls: new Set(),
+        sources: [{ platform: 'feed', handle: 'airdrops_io_rss', postUrl: 'https://airdrops.io/p/1', postedAt: now }],
+        sourceIds: new Set(['feed:airdrops_io_rss']),
+        sourceHandles: new Set(['airdrops_io_rss']),
+        trustMax: 0.8,
+        firstSeen: now,
+        lastSeen: now,
+        texts: ['AlphaProto testnet claim'],
+      },
+      {
+        projectDomains: new Map([['alphaproto.xyz', 'AlphaProto']]),
+        platformDomains: new Set(['zealy.io']),
+        allKnownDomains: new Set(['alphaproto.xyz', 'zealy.io']),
+        nowMs: now,
+      },
+    );
+
+    expect(cappedItem.links.length).toBe(6);
+    expect(cappedItem.links[0]).toEqual({ url: 'https://alphaproto.xyz/claim', known: true });
+    expect(cappedItem.risk.level).toBe('ok');
+    expect(cappedItem.taskTypes).toEqual(['testnet']);
+
+    // Reconciles plain-http exact https twin cleanly (no stale Insecure transport warning).
+    const twinItem = finalizeSnapshotCluster(
+      {
+        id: 'c-twin',
+        project: 'AlphaProto',
+        domain: 'alphaproto.xyz',
+        chains: new Set(['Base']),
+        taskTypes: new Set(['testnet']),
+        summary: 'AlphaProto claim',
+        urls: new Set(['http://alphaproto.xyz/claim', 'https://alphaproto.xyz/claim']),
+        rawIpUrls: new Set(),
+        sources: [{ platform: 'telegram', handle: 'airdropfind', postUrl: 'https://t.me/airdropfind/2', postedAt: now }],
+        sourceIds: new Set(['telegram:airdropfind']),
+        sourceHandles: new Set(['airdropfind']),
+        trustMax: 0.85,
+        firstSeen: now,
+        lastSeen: now,
+        texts: ['AlphaProto claim https://alphaproto.xyz/claim'],
+      },
+      {
+        projectDomains: new Map([['alphaproto.xyz', 'AlphaProto']]),
+        platformDomains: new Set(['zealy.io']),
+        allKnownDomains: new Set(['alphaproto.xyz', 'zealy.io']),
+        nowMs: now,
+      },
+    );
+    expect(twinItem.risk.level).toBe('ok');
+    expect(twinItem.risk.reasons).toEqual([]);
   });
 });

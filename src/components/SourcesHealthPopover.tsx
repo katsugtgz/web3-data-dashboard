@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SourceHealth } from '../../shared/types';
+import { formatSourceHandle, formatSourcesSummary } from '../lib/feedDisplay';
 import { formatRelativeTime } from '../lib/format';
 
 interface Props {
@@ -13,10 +14,7 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
   const [open, setOpen] = useState(false);
 
   const okCount = sources.filter(s => s.status === 'ok').length;
-  const degradedCount = sources.filter(s => s.status === 'degraded').length;
-  const downCount = sources.filter(s => s.status === 'down').length;
-  const tgCount = sources.filter(s => s.platform === 'telegram').length;
-  const xCount = sources.filter(s => s.platform === 'x').length;
+  const summary = formatSourcesSummary(sources);
 
   const label =
     sources.length === 0
@@ -41,9 +39,7 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
       {open && (
         <div className="sources-popover" role="region" aria-label="Configured feed sources health">
           <div className="sources-popover-head">
-            <strong>
-              TG {tgCount} · X {xCount} — {okCount} ok · {degradedCount} degraded · {downCount} down
-            </strong>
+            <strong>{summary}</strong>
             <button type="button" className="link-btn" onClick={() => setOpen(false)}>
               Close
             </button>
@@ -60,7 +56,7 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
               {sources.map(src => (
                 <li key={src.id} className="source-item">
                   <span>
-                    <span className="mono">@{src.handle}</span>{' '}
+                    <span className="mono">{formatSourceHandle(src.platform, src.handle) || src.id}</span>{' '}
                     <span className="note">({src.platform})</span>
                   </span>
                   <span className="source-item-meta">

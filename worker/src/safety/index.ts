@@ -6,6 +6,7 @@ import {
   extractSuspiciousRawIpUrls,
   getRegistrableDomain,
   isAlwaysHttpsDomain,
+  isCuratedAggregatorDomain,
   isPlatformDomain,
   isRawIpHost,
 } from '../normalize/domains';
@@ -296,7 +297,18 @@ export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResul
 export interface KnownDomainEntry {
   domain: string;
   project: string;
-  origin: 'surf' | 'defi' | 'platform';
+  origin: 'surf' | 'curated' | 'defi' | 'platform';
+}
+
+const UNTRUSTED_SHEET_SOURCES = new Set<string>(['asso7878', 'arndxt']);
+
+function hasPunycodeOrMixedHost(rawUrl: string, regDomain: string): boolean {
+  if (isPunycodeOrMixedScript(regDomain)) return true;
+  try {
+    return isPunycodeOrMixedScript(new URL(rawUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function collectKnownDomainEntries(
@@ -309,13 +321,18 @@ export function collectKnownDomainEntries(
     map.set(domain, { domain, project, origin: 'platform' });
   }
 
+  // Pass 1: Verified registries (platform, Surf non-risk cards, DefiLlama DeFi).
   if (surfFeed) {
     for (const card of surfFeed.cards) {
+      if (card.b.includes('risk')) continue;
+      if (card.source && card.source !== 'Surf') continue;
       const candidates = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
       for (const raw of candidates) {
         if (!raw) continue;
         const dom = getRegistrableDomain(raw);
         if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+        if (isCuratedAggregatorDomain(dom, card)) continue;
+        if (hasPunycodeOrMixedHost(raw, dom)) continue;
         if (!map.has(dom)) map.set(dom, { domain: dom, project: card.n, origin: 'surf' });
       }
     }
@@ -326,7 +343,35 @@ export function collectKnownDomainEntries(
       if (!row.href) continue;
       const dom = getRegistrableDomain(row.href);
       if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+      if (hasPunycodeOrMixedHost(row.href, dom)) continue;
       if (!map.has(dom)) map.set(dom, { domain: dom, project: row.cells[0] ?? dom, origin: 'defi' });
+    }
+  }
+
+  const verifiedBaseline = new Map<string, string>();
+  for (const [dom, entry] of map) {
+    verifiedBaseline.set(dom, entry.project);
+  }
+
+  // Pass 2: Curated non-sheet sources (e.g. DefiLlama tokenless, Pendle/Merkl own protocol).
+  // Editable third-party sheets (ASSO7878, arndxt), risk-badged cards, aggregator wrappers,
+  // punycode/IDN domains, and lookalikes of verified domains are strictly excluded.
+  if (surfFeed) {
+    for (const card of surfFeed.cards) {
+      if (card.b.includes('risk')) continue;
+      if (!card.source || card.source === 'Surf') continue;
+      if (UNTRUSTED_SHEET_SOURCES.has(card.source.trim().toLowerCase())) continue;
+      const candidates = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
+      for (const raw of candidates) {
+        if (!raw) continue;
+        const dom = getRegistrableDomain(raw);
+        if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+        if (isCuratedAggregatorDomain(dom, card)) continue;
+        if (hasPunycodeOrMixedHost(raw, dom)) continue;
+        if (map.has(dom)) continue;
+        if (findLookalikeDomain(dom, verifiedBaseline)) continue;
+        map.set(dom, { domain: dom, project: card.n, origin: 'curated' });
+      }
     }
   }
 
@@ -358,6 +403,27 @@ export async function seedKnownDomains(
   }
   try {
     await Promise.all(chunks);
+    // Prune stale origin = 'curated' rows when an authoritative curated feed was supplied;
+    // keep surf, defi, and platform rows untouched.
+    if (surfFeed != null) {
+      const existingCurated = await db
+        .prepare(`SELECT domain FROM known_domains WHERE origin = 'curated'`)
+        .all<{ domain: string }>();
+      const activeDomains = new Set(entries.map(e => e.domain.toLowerCase()));
+      const staleDomains = (existingCurated.results ?? [])
+        .map(r => r.domain)
+        .filter(d => !activeDomains.has(d.toLowerCase()));
+      if (staleDomains.length > 0) {
+        const delStmts = staleDomains.map(d =>
+          db.prepare(`DELETE FROM known_domains WHERE domain = ?1 AND origin = 'curated'`).bind(d),
+        );
+        const delChunks = [];
+        for (let i = 0; i < delStmts.length; i += 40) {
+          delChunks.push(db.batch(delStmts.slice(i, i + 40)));
+        }
+        await Promise.all(delChunks);
+      }
+    }
   } finally {
     knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
     knownDomainsCache.delete(db);

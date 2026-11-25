@@ -1,12 +1,19 @@
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
-import { formatProjectTitle, formatRiskReasons, prepareFeedLinks } from './feedDisplay';
+import {
+  dedupeFeedSources,
+  formatProjectTitle,
+  formatRiskReasons,
+  formatSourceHandle,
+  prepareFeedLinks,
+} from './feedDisplay';
 import { formatRelativeTime, isHttpUrl, normalizeExternalUrl, parseCost } from './format';
 
 const HUMAN_REQUIRED_RE =
   /captcha|turnstile|verify (?:you are )?human|kyc|identity|selfie|passport|sign (?:the )?message|signature|approve|permit|allowance|connect (?:your )?wallet|wallet connection|login|oauth|phone (?:number|verification)|sms|withdraw|transfer|send (?:funds|tokens|eth|btc|usdc|usdt)|buy|purchase|lend|borrow|repay|claim|redeem|seed phrase|private key|mnemonic/i;
 
 const ONCHAIN_TX_RE = /\b(?:swap|bridge|stake|restake|deposit|mint|wrap|unwrap|deploy|liquidity|sell|transaction)\b/i;
-const HAN_RE = /\p{Script=Han}/gu;
+const FORBIDDEN_CJK_RE =
+  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\uFF01-\uFF9F]/gu;
 
 const AGENT_PREAMBLE: Record<AgentProfile['agent'], string> = {
   hermes: 'You are Hermes running with tool access; follow each step strictly in order and pause on checkpoints.',
@@ -32,7 +39,7 @@ const TASK_TEMPLATES: Record<string, string> = {
 };
 
 function sanitizeEnglish(input: string): string {
-  return input.replace(HAN_RE, '').replace(/\s+/g, ' ').trim();
+  return input.replace(FORBIDDEN_CJK_RE, '').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -167,7 +174,11 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
   if (isFeedItem(item)) {
     if (item.risk.level === 'risk') return null;
     const project = sanitizeEnglish(formatProjectTitle(item.project)) || 'Web3 Project';
-    const taskTypes = item.taskTypes.join(', ') || 'other';
+    const taskTypes =
+      item.taskTypes
+        .map(t => sanitizeEnglish(stripMdChars(t)))
+        .filter(Boolean)
+        .join(', ') || 'other';
     const chains = item.chains.map(sanitizeEnglish).filter(Boolean).join(', ') || 'Not specified';
     const cleanedLinks = prepareFeedLinks(item, { max: 8 });
     const verifiedLinks: string[] = [];
@@ -178,13 +189,11 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
       else if (isHttpUrl(link.url)) unverifiedLinks.push(`- ${link.url}`);
     }
     const steps = buildStepsForFeedItem(item);
-    const seenSources = new Set<string>();
-    const sources: string[] = [];
-    for (const s of item.sources) {
-      if (seenSources.has(s.postUrl)) continue;
-      seenSources.add(s.postUrl);
-      sources.push(`- @${s.handle} (${s.platform}) — ${s.postUrl} (${formatRelativeTime(s.postedAt)})`);
-    }
+    const sources = dedupeFeedSources(item.sources).map(s => {
+      const platform = sanitizeEnglish(stripMdChars(s.platform)) || 'source';
+      const displayHandle = sanitizeEnglish(stripMdChars(formatSourceHandle(s.platform, s.handle))) || platform;
+      return `- ${displayHandle} (${platform}) — ${s.postUrl} (${formatRelativeTime(s.postedAt)})`;
+    });
     const warnNotes = formatRiskReasons(item)
       .map(n => sanitizeEnglish(n.text))
       .filter(Boolean)
@@ -228,7 +237,10 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
 
   if (item.b.includes('risk')) return null;
   const project = sanitizeEnglish(item.n) || 'Web3 Project';
-  const taskTypes = (item.taskTypes?.length ? item.taskTypes : [item.best.ty || 'airdrop']).join(', ');
+  const rawTaskTypes = item.taskTypes?.length ? item.taskTypes : [item.best.ty];
+  const cleanTaskTypes = rawTaskTypes.map(t => sanitizeEnglish(stripMdChars(t ?? ''))).filter(Boolean);
+  const fallbackTaskType = sanitizeEnglish(stripMdChars(item.best.ty ?? '')) || 'airdrop';
+  const taskTypes = cleanTaskTypes.length > 0 ? cleanTaskTypes.join(', ') : fallbackTaskType;
   const chains =
     (item.chains?.length ? item.chains : item.chain ? [item.chain] : [])
       .map(sanitizeEnglish)
@@ -243,6 +255,7 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
   }
   const unverifiedLinks = [...linkSet].map(u => `- ${u}`);
   const steps = buildStepsForCard(item);
+  const cardSource = item.source ? sanitizeEnglish(stripMdChars(item.source)) : '';
 
   const lines = sharedHeaderLines(project, taskTypes, null, profile);
 
@@ -262,6 +275,7 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
     '',
     '## Sources',
     `- Curated Airdrop Radar (Rank #${item.r}, Tier ${item.g})`,
+    ...(cardSource ? [`- Source: ${cardSource}`] : []),
   );
 
   return lines.join('\n');

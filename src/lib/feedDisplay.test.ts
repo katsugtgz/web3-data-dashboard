@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import type { FeedItem } from '../../shared/types';
+import type { FeedItem, SourceHealth } from '../../shared/types';
 import {
   dedupeFeedSources,
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
+  formatSourceHandle,
+  formatSourcesSummary,
   prepareFeedLinks,
 } from './feedDisplay';
 
@@ -50,6 +52,27 @@ describe('dedupeFeedSources', () => {
     expect(dedupeFeedSources(sources)).toEqual([
       { platform: 'telegram', handle: 'alpha_ch', postUrl: 'https://t.me/alpha_ch/101', postedAt: 1000 },
       { platform: 'x', handle: 'project_x', postUrl: 'https://x.com/project_x/status/42', postedAt: 4000 },
+    ]);
+  });
+
+  test('rejects unsafe, credentialed, and whitespace/newline postUrl entries cleanly', () => {
+    const sources: FeedItem['sources'] = [
+      { platform: 'feed', handle: 'xss', postUrl: 'javascript:alert(1)', postedAt: 1000 },
+      { platform: 'feed', handle: 'data', postUrl: 'data:text/html,<h1>hi</h1>', postedAt: 1100 },
+      { platform: 'x', handle: 'cred', postUrl: 'https://user:pass@x.com/status/1', postedAt: 1200 },
+      { platform: 'telegram', handle: 'nl', postUrl: 'https://t.me/alpha_ch/1\n## Override', postedAt: 1300 },
+      { platform: 'sheet', handle: 'space', postUrl: 'https://docs.google.com/spreadsheets/d/1 bad', postedAt: 1400 },
+      { platform: 'feed', handle: 'substack', postUrl: 'https://threadingontheedge.substack.com/p/alpha', postedAt: 1500 },
+      { platform: 'feed', handle: 'substack', postUrl: '  https://threadingontheedge.substack.com/p/alpha  ', postedAt: 1600 },
+    ];
+
+    expect(dedupeFeedSources(sources)).toEqual([
+      {
+        platform: 'feed',
+        handle: 'substack',
+        postUrl: 'https://threadingontheedge.substack.com/p/alpha',
+        postedAt: 1500,
+      },
     ]);
   });
 });
@@ -363,6 +386,69 @@ describe('prepareFeedLinks', () => {
       'https://make.fun/docs',
     ]);
   });
+
+  test('strips extended referral/tracking params and Substack r param while keeping non-Substack r', () => {
+    const links = prepareFeedLinks(
+      makeItem({
+        links: [
+          {
+            url: 'https://app.galxe.com/quest/abc?referralcode=A1&referral_code=A2&refcode=B1&ref_code=B2&inviter=u1&aff_id=9&via=partner&igshid=ig1&si=yt1',
+            known: true,
+          },
+          { url: 'https://definvestor.substack.com/p/airdrop-alpha?r=2x9abc&utm_medium=email', known: false },
+          { url: 'https://airdropalert.com/airdrops/monad?r=keepme&via=rss', known: false },
+        ],
+      }),
+      { max: 4 },
+    );
+    expect(links.map(l => l.url)).toEqual([
+      'https://app.galxe.com/quest/abc',
+      'https://definvestor.substack.com/p/airdrop-alpha',
+      'https://airdropalert.com/airdrops/monad?r=keepme',
+    ]);
+  });
+
+  test('disambiguates multiple long-host Substack /p/<slug> links without dropping the second link', () => {
+    const shortSlugs = prepareFeedLinks(
+      makeItem({
+        domain: 'threadingontheedge.substack.com',
+        links: [
+          { url: 'https://threadingontheedge.substack.com/p/solana-airdrop-guide?r=abc123', known: false },
+          { url: 'https://threadingontheedge.substack.com/p/monad-testnet-tasks?r=def456', known: false },
+        ],
+      }),
+      { max: 4 },
+    );
+    expect(shortSlugs.map(l => l.url)).toEqual([
+      'https://threadingontheedge.substack.com/p/solana-airdrop-guide',
+      'https://threadingontheedge.substack.com/p/monad-testnet-tasks',
+    ]);
+    expect(new Set(shortSlugs.map(l => l.label)).size).toBe(2);
+    for (const l of shortSlugs) {
+      expect(l.label.length).toBeLessThanOrEqual(34);
+    }
+
+    const sharedPrefixSlugs = prepareFeedLinks(
+      makeItem({
+        domain: 'threadingontheedge.substack.com',
+        links: [
+          { url: 'https://threadingontheedge.substack.com/p/weekly-airdrop-roundup-issue-41', known: false },
+          { url: 'https://threadingontheedge.substack.com/p/weekly-airdrop-roundup-issue-42', known: false },
+        ],
+      }),
+      { max: 4 },
+    );
+    expect(sharedPrefixSlugs.map(l => l.url)).toEqual([
+      'https://threadingontheedge.substack.com/p/weekly-airdrop-roundup-issue-41',
+      'https://threadingontheedge.substack.com/p/weekly-airdrop-roundup-issue-42',
+    ]);
+    expect(sharedPrefixSlugs[0].label).toContain('41');
+    expect(sharedPrefixSlugs[1].label).toContain('42');
+    expect(new Set(sharedPrefixSlugs.map(l => l.label)).size).toBe(2);
+    for (const l of sharedPrefixSlugs) {
+      expect(l.label.length).toBeLessThanOrEqual(34);
+    }
+  });
 });
 
 describe('formatRiskReasons', () => {
@@ -655,5 +741,66 @@ describe('formatFeedSummary', () => {
     expect(formatFeedSummary('Verify the official source').lead).toBe('Verify the official source');
     expect(formatFeedSummary('Complete testnet tasks to register').lead).toBe('Complete testnet tasks to register');
     expect(formatFeedSummary('Open the verified link').lead).toBe('Open the verified link');
+  });
+});
+
+describe('formatSourceHandle', () => {
+  test('prefixes @ only for social platforms (telegram, x) and omits @ for sheet, feed, surf', () => {
+    expect(formatSourceHandle('telegram', 'alpha_ch')).toBe('@alpha_ch');
+    expect(formatSourceHandle('telegram', '@alpha_ch')).toBe('@alpha_ch');
+    expect(formatSourceHandle('x', 'DefiIgnas')).toBe('@DefiIgnas');
+    expect(formatSourceHandle('x', ' @OlimpioCrypto ')).toBe('@OlimpioCrypto');
+    expect(formatSourceHandle('sheet', 'ASSO7878')).toBe('ASSO7878');
+    expect(formatSourceHandle('feed', 'airdroptracker')).toBe('airdroptracker');
+    expect(formatSourceHandle('surf', 'surf.computer')).toBe('surf.computer');
+    expect(formatSourceHandle('feed', '  pendle-points  ')).toBe('pendle-points');
+    expect(formatSourceHandle('telegram', '   ')).toBe('');
+    expect(formatSourceHandle('telegram', '@@@')).toBe('');
+    expect(formatSourceHandle(' x ', '  @@@  ')).toBe('');
+    expect(formatSourceHandle(' telegram ', 'alpha_ch')).toBe('@alpha_ch');
+    expect(formatSourceHandle(' X ', 'DefiIgnas')).toBe('@DefiIgnas');
+    expect(formatSourceHandle(' Sheet ', 'ASSO7878')).toBe('ASSO7878');
+    expect(formatSourceHandle('   ', 'custom')).toBe('custom');
+  });
+});
+
+describe('formatSourcesSummary', () => {
+  function makeSource(platform: string, status: SourceHealth['status'], id = `${platform}-1`): SourceHealth {
+    return { id, platform, handle: id, status, lastOkAt: status === 'ok' ? 1_795_364_909_000 : null };
+  }
+
+  test('dynamically summarizes all present platforms in canonical order with status counts', () => {
+    const sources: SourceHealth[] = [
+      makeSource('telegram', 'ok', 'tg1'),
+      makeSource('telegram', 'ok', 'tg2'),
+      makeSource('x', 'degraded', 'x1'),
+      makeSource('sheet', 'ok', 's1'),
+      makeSource('sheet', 'ok', 's2'),
+      makeSource('feed', 'ok', 'f1'),
+      makeSource('feed', 'down', 'f2'),
+      makeSource('surf', 'down', 'sf1'),
+    ];
+    expect(formatSourcesSummary(sources)).toBe(
+      'TG 2 · X 1 · Sheets 2 · Feeds 2 · Surf 1 — 5 ok · 1 degraded · 2 down',
+    );
+  });
+
+  test('omits absent platforms and handles empty and custom platforms cleanly', () => {
+    expect(
+      formatSourcesSummary([
+        makeSource('telegram', 'ok', 'tg1'),
+        makeSource('feed', 'ok', 'f1'),
+      ]),
+    ).toBe('TG 1 · Feeds 1 — 2 ok · 0 degraded · 0 down');
+
+    expect(formatSourcesSummary([])).toBe('0 sources — 0 ok · 0 degraded · 0 down');
+
+    expect(
+      formatSourcesSummary([
+        makeSource('x', 'down', 'x1'),
+        makeSource('api', 'ok', 'a1'),
+        makeSource(' Curated ', 'ok', 'c1'),
+      ]),
+    ).toBe('X 1 · Api 1 · Curated 1 — 2 ok · 0 degraded · 1 down');
   });
 });

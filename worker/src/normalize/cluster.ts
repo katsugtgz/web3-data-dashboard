@@ -12,6 +12,7 @@ import { sha1Hex } from '../lib/hash';
 import { evaluateSafety, reconcileSafetyReasons } from '../safety';
 import {
   getRegistrableDomain,
+  isCuratedAggregatorDomain,
   isNewsDomain,
   isPlatformDomain,
   selectFeedLinks,
@@ -90,13 +91,16 @@ export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   if (!feed) return { byDomain, byTicker };
 
   for (const card of feed.cards) {
+    if (card.b.includes('risk')) continue;
     const match: SurfMatch = { name: card.n, tier: card.g, cardRank: card.r };
     if (card.t) byTicker.set(card.t.toUpperCase(), match);
     const urls = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
     for (const raw of urls) {
       if (!raw) continue;
       const dom = getRegistrableDomain(raw);
-      if (dom && !isPlatformDomain(dom) && !byDomain.has(dom)) byDomain.set(dom, match);
+      if (dom && !isPlatformDomain(dom) && !isCuratedAggregatorDomain(dom, card) && !byDomain.has(dom)) {
+        byDomain.set(dom, match);
+      }
     }
   }
   return { byDomain, byTicker };
@@ -987,7 +991,7 @@ interface FeedPostRow {
   post_url: string;
   posted_at: number;
   urls: string;
-  platform: 'telegram' | 'x' | 'surf' | null;
+  platform: FeedSourceRef['platform'] | null;
   handle: string | null;
 }
 

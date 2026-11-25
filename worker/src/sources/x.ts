@@ -8,12 +8,16 @@ import {
 } from '../normalize/cluster';
 import {
   BENIGN_DNS_IPS,
+  cleanUrl,
   extractBareDomainUrls,
+  extractSuspiciousRawIpUrls,
+  extractUrls,
   getRegistrableDomain,
   isRawIpHost,
 } from '../normalize/domains';
 import { parseDropPost, type ParseContext } from '../normalize/parse';
 import { loadKnownDomains, URL_SHORTENERS } from '../safety';
+import { decodeHtmlEntities } from './telegram';
 
 export interface ParsedXPost {
   idStr: string;
@@ -140,6 +144,37 @@ export function parseCdnSyndication(body: string, handle: string): ParsedXPost[]
 const TWENTY_FOUR_H_MS = 24 * 3_600_000;
 const SIX_H_MS = 6 * 3_600_000;
 const FOURTEEN_DAYS_MS = 14 * 86_400_000;
+const MAX_POSTS_PER_POLL = 10;
+const MIRROR_TIMEOUT_MS = Math.min(FETCH_TIMEOUT_MS, 7000);
+
+function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: string; reg: string } | null {
+  const trimmed = rssMirrorBase?.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:') return null;
+  if (u.username || u.password || u.search || u.hash) return null;
+  const host = u.hostname.toLowerCase();
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    !host.includes('.') ||
+    host.includes(':') ||
+    isRawIpHost(host)
+  ) {
+    return null;
+  }
+  const reg = getRegistrableDomain(u.origin);
+  if (!reg) return null;
+  const pathname = u.pathname.replace(/\/+$/, '');
+  return { base: `${u.origin}${pathname}`, host, reg };
+}
 
 export function computeXBackoff(
   prevFailCount: number,
@@ -170,29 +205,151 @@ export function computeXBackoff(
   };
 }
 
-export async function fetchXTimelineBestEffort(handle: string): Promise<ParsedXPost[]> {
-  const urls = [
-    `https://cdn.syndication.twimg.com/timeline/profile?screen_name=${encodeURIComponent(handle)}`,
-    `https://syndication.twitter.com/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`,
-  ];
+export function parseXRssTimeline(xml: string, handle: string, mirrorHost?: string | string[]): ParsedXPost[] {
+  const items = xml.match(/<item(?:\s[^>]*)?>[\s\S]*?<\/item>/gi) ?? [];
+  const out: ParsedXPost[] = [];
+  const seenIds = new Set<string>();
+  const rawMirrorHosts = Array.isArray(mirrorHost) ? mirrorHost : mirrorHost ? [mirrorHost] : [];
+  const mirrorHostsLower = new Set<string>();
+  const mirrorRegs = new Set<string>();
+  for (const h of rawMirrorHosts) {
+    const lower = h.trim().toLowerCase();
+    if (!lower) continue;
+    mirrorHostsLower.add(lower);
+    const reg = getRegistrableDomain(`https://${lower}`);
+    if (reg) mirrorRegs.add(reg);
+  }
 
-  for (const endpoint of urls) {
+  const isMirrorUrl = (u: string): boolean => {
+    if (mirrorHostsLower.size === 0) return false;
     try {
-      const res = await fetch(endpoint, {
-        headers: { 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!res.ok) continue;
-      const body = await res.text();
-      if (!body.trim()) continue;
-      const parsed = endpoint.includes('cdn.syndication')
-        ? parseCdnSyndication(body, handle)
-        : parseNextDataTimeline(body, handle);
-      if (parsed.length > 0) return parsed;
+      const host = new URL(u).hostname.toLowerCase();
+      if (mirrorHostsLower.has(host)) return true;
+      const reg = getRegistrableDomain(u);
+      return Boolean(reg && mirrorRegs.has(reg));
     } catch {
-      // Expected failure on X syndication endpoints; try next or degrade cleanly
+      return true;
+    }
+  };
+
+  for (const block of items) {
+    const getTag = (name: string): string => {
+      const m = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, 'i'));
+      return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').trim() : '';
+    };
+
+    const rawDate = getTag('pubDate');
+    const postedAt = rawDate ? Date.parse(decodeHtmlEntities(rawDate)) : NaN;
+    if (!Number.isFinite(postedAt)) continue;
+
+    const rawLink = decodeHtmlEntities(getTag('link'));
+    const rawGuid = decodeHtmlEntities(getTag('guid'));
+    const statusMatch =
+      rawLink.match(/(?:status|statuses)\/(\d{5,})/i) ?? rawGuid.match(/(?:status|statuses)\/(\d{5,})/i);
+    const idStr = statusMatch?.[1] ?? '';
+    if (!idStr || seenIds.has(idStr)) continue;
+    seenIds.add(idStr);
+
+    const rawTitle = decodeHtmlEntities(getTag('title'));
+    const rawDesc = decodeHtmlEntities(getTag('description'));
+    const hrefs: string[] = [];
+    const rawIpHrefs: string[] = [];
+    for (const m of rawDesc.matchAll(/href\s*=\s*["'](https?:\/\/[^"'\s>]+)["']/gi)) {
+      const rawHref = decodeHtmlEntities(m[1]).trim();
+      try {
+        const parsedHref = new URL(rawHref);
+        const host = parsedHref.hostname.toLowerCase();
+        if (isRawIpHost(host)) {
+          if (!BENIGN_DNS_IPS.has(host)) {
+            rawIpHrefs.push(parsedHref.toString());
+          }
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      const cleaned = cleanUrl(rawHref);
+      if (!cleaned || isMirrorUrl(cleaned)) continue;
+      hrefs.push(cleaned);
+    }
+
+    const plainDesc = rawDesc
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|li)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+    const text = (plainDesc || rawTitle).trim();
+    if (!text) continue;
+
+    const cleanUrls = extractUrls(text, hrefs).filter(u => !isMirrorUrl(u));
+    const rawIpUrls = extractSuspiciousRawIpUrls(text, rawIpHrefs);
+    const urls = [...cleanUrls, ...rawIpUrls];
+
+    out.push({
+      idStr,
+      postUrl: `https://x.com/${handle}/status/${idStr}`,
+      postedAt,
+      text,
+      urls,
+    });
+  }
+
+  return out;
+}
+
+export async function fetchXTimelineBestEffort(handle: string, rssMirrorBase?: string): Promise<ParsedXPost[]> {
+  const mirror = parseSafeMirrorBase(rssMirrorBase);
+  if (mirror) {
+    try {
+      const mirrorUrl = `${mirror.base}/${encodeURIComponent(handle)}/rss`;
+      const res = await fetch(mirrorUrl, {
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
+        signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
+      });
+      if (res.ok) {
+        const body = await res.text();
+        const mirrorHosts: string[] = [mirror.host];
+        if (res.url) {
+          try {
+            const finalHost = new URL(res.url).hostname.toLowerCase();
+            if (finalHost) mirrorHosts.push(finalHost);
+          } catch {
+            // Ignore unparseable res.url
+          }
+        }
+        const parsed = parseXRssTimeline(body, handle, mirrorHosts);
+        if (parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Optional RSS mirror unavailable; fall through to syndication
     }
   }
+
+  // Only syndication.twitter.com is attempted (cdn.syndication.twimg.com returns
+  // 200 with empty 0B body and was removed to avoid wasted subrequests).
+  const syndicationUrl = `https://syndication.twitter.com/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`;
+  try {
+    const res = await fetch(syndicationUrl, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const body = await res.text();
+      if (body.trim()) {
+        const parsed = parseNextDataTimeline(body, handle);
+        if (parsed.length > 0) return parsed;
+      }
+    }
+  } catch {
+    // Expected failure on X syndication endpoint; degrade cleanly
+  }
+
   throw new Error(`X endpoints unavailable for @${handle}`);
 }
 
@@ -247,9 +404,11 @@ async function pollSingleXSource(
       surfByTicker: surfIndex.byTicker,
     };
 
-    const relevantPosts = newPosts
+    const relevantPosts = [...newPosts]
+      .sort((a, b) => b.postedAt - a.postedAt || compareSnowflakeIds(b.idStr, a.idStr))
       .map(post => ({ post, parsed: parseDropPost(post.text, post.urls, sourceParseCtx) }))
-      .filter(entry => entry.parsed.isRelevantDrop);
+      .filter(entry => entry.parsed.isRelevantDrop)
+      .slice(0, MAX_POSTS_PER_POLL);
 
     const ingestedResults = await Promise.all(
       relevantPosts.map(({ post: p, parsed }) =>
@@ -306,8 +465,10 @@ export async function pollXBatch(
   batchSize = 3,
   nowMs = Date.now(),
   surfFeed?: AirdropFeed | null,
-  fetcher: (handle: string) => Promise<ParsedXPost[]> = fetchXTimelineBestEffort,
+  fetcher?: (handle: string) => Promise<ParsedXPost[]>,
+  rssMirrorBase?: string,
 ): Promise<XPollSummary> {
+  const effectiveFetcher = fetcher ?? (handle => fetchXTimelineBestEffort(handle, rssMirrorBase));
   const res = await db
     .prepare(
       `SELECT id, handle, lang, trust, last_seen_id, fail_count, first_fail_at
@@ -347,7 +508,16 @@ export async function pollXBatch(
     await Promise.all(
       sources.map(async src => {
         try {
-          return await pollSingleXSource(db, src, parseCtx, surfIndex, projectDomains, platformDomains, nowMs, fetcher);
+          return await pollSingleXSource(
+            db,
+            src,
+            parseCtx,
+            surfIndex,
+            projectDomains,
+            platformDomains,
+            nowMs,
+            effectiveFetcher,
+          );
         } catch (err) {
           console.error(`x-poll-error:${src.id}`, err);
           return { insertedPosts: 0, degraded: true, ingestedResults: [] };
