@@ -1433,6 +1433,237 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
     expect(snap2!.etag).toBe(snap!.etag);
   });
 
+  test('*/5 cron persists pending domain cleanup across failed seedKnownDomains and guards filtered fallback writes by etag and matched rows', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = NOW;
+    const tPrev = t0 - 31 * 60_000;
+    await ensureSourcesSynced(db);
+
+    await db.prepare(`UPDATE sources SET enabled = 0 WHERE id = 'feed:merkl_opportunities'`).run();
+
+    const makeFeed = (extraCard?: { id: string; n: string; url: string; source: string }) => ({
+      cards: [
+        {
+          r: 1,
+          n: 'SurfKeep',
+          id: 'surf:keep',
+          t: null,
+          g: 'S',
+          b: ['live'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Surf task', ty: 'testnet', c: 'Free', m: '5m' },
+          sc: 90,
+          sub: [9, 9, null],
+          url: 'https://surf-keep.xyz/',
+          source: 'Surf',
+        },
+        ...(extraCard
+          ? [
+              {
+                r: 2,
+                n: extraCard.n,
+                id: extraCard.id,
+                t: null,
+                g: 'A',
+                b: ['live'],
+                x: null,
+                img: '',
+                f: '—',
+                tk: '1/1',
+                h: 10,
+                u: 'today',
+                fit: ['small'],
+                best: { n: 'LP', ty: 'liquidity', c: '$100', m: '5m' },
+                sc: 80,
+                sub: [8, 8, null],
+                url: extraCard.url,
+                source: extraCard.source,
+              },
+            ]
+          : []),
+      ],
+      tge: [],
+      counts: { active: extraCard ? 2 : 1, preToken: extraCard ? 2 : 1 },
+      fetchedAt: tPrev,
+    });
+
+    await upsertSnapshot(
+      db,
+      'airdrops',
+      makeFeed({ id: 'merkl:disabled', n: 'DisabledMerkl', url: 'https://disabled-merkl.xyz/', source: 'Merkl' }),
+      tPrev,
+    );
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('surf-keep.xyz', 'SurfKeep', 'surf'),
+                ('disabled-merkl.xyz', 'DisabledMerkl', 'curated')`,
+      )
+      .run();
+    await db
+      .prepare(`INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)`)
+      .bind(tPrev)
+      .run();
+
+    // 1. Filtered UPDATE succeeds, but seedKnownDomains throws on tick 1 -> pending marker stays persisted.
+    let failKnownDomainsBatchOnce = false;
+    const knownDomainStmts = new WeakSet<object>();
+    const failSeedDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/DELETE\s+FROM\s+known_domains/i.test(sql)) {
+          const wrapBound = (bound: D1PreparedStatement) => {
+            knownDomainStmts.add(bound);
+            return bound;
+          };
+          knownDomainStmts.add(stmt);
+          return {
+            ...stmt,
+            bind(...args: unknown[]) {
+              return wrapBound(stmt.bind(...args));
+            },
+          };
+        }
+        return stmt;
+      },
+      async batch(stmts: D1PreparedStatement[]) {
+        if (failKnownDomainsBatchOnce && stmts.some(s => knownDomainStmts.has(s))) {
+          failKnownDomainsBatchOnce = false;
+          throw new Error('transient known_domains batch failure');
+        }
+        return db.batch(stmts);
+      },
+    } as unknown as D1Database;
+    await ensureSourcesSynced(failSeedDb);
+    await db.prepare(`UPDATE sources SET enabled = 0 WHERE id = 'feed:merkl_opportunities'`).run();
+    failKnownDomainsBatchOnce = true;
+
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await expect(
+          worker.scheduled(
+            { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+            { DB: failSeedDb, X_BATCH_SIZE: '0', FEED_BATCH_SIZE: '0' },
+            makeExecCtx(),
+          ),
+        ).rejects.toThrow('transient known_domains batch failure');
+      },
+    );
+
+    const pendingAfterFail = await db
+      .prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed_pending'`)
+      .first<{ last_run_at: number }>();
+    expect(pendingAfterFail?.last_run_at).toBeGreaterThan(0);
+    // Disabled domain still present because tick 1 seed failed.
+    expect(
+      await db.prepare(`SELECT domain FROM known_domains WHERE domain = 'disabled-merkl.xyz'`).first(),
+    ).not.toBeNull();
+
+    // Tick 2: snapshot is already filtered (no snapshot body rewrite), yet pending marker retries seedKnownDomains and clears!
+    const beforeTick2 = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0 + 5 * 60_000, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '0', FEED_BATCH_SIZE: '0' },
+          makeExecCtx(),
+        );
+      },
+    );
+    expect(queries.slice(beforeTick2).filter(q => /UPDATE\s+snapshots\s+SET\s+body/i.test(q))).toEqual([]);
+    expect(await db.prepare(`SELECT domain FROM known_domains WHERE domain = 'disabled-merkl.xyz'`).first()).toBeNull();
+    expect(
+      await db.prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed_pending'`).first(),
+    ).toBeNull();
+
+    // 2. Concurrent same-fetched_at etag change blocks stale filtered overwrite AND prevents seeding from stale fallback.
+    await upsertSnapshot(
+      db,
+      'airdrops',
+      makeFeed({ id: 'merkl:disabled', n: 'DisabledMerkl', url: 'https://disabled-merkl.xyz/', source: 'Merkl' }),
+      tPrev,
+    );
+    const newerSameTsFeed = makeFeed({
+      id: 'defillama:fresh',
+      n: 'FreshConcurrent',
+      url: 'https://fresh-concurrent.xyz/',
+      source: 'DefiLlama',
+    });
+    const newerBody = JSON.stringify(newerSameTsFeed);
+    const newerEtag = await bodyEtag(newerBody);
+
+    await db
+      .prepare(`INSERT OR REPLACE INTO known_domains (domain, project, origin) VALUES ('fresh-concurrent.xyz', 'FreshConcurrent', 'curated')`)
+      .run();
+
+    let racedOnce = false;
+    const filterUpdateStmts = new WeakSet<object>();
+    const racingDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/UPDATE\s+snapshots\s+SET\s+body\s*=/i.test(sql)) {
+          filterUpdateStmts.add(stmt);
+          return {
+            ...stmt,
+            bind(...args: unknown[]) {
+              const bound = stmt.bind(...args);
+              filterUpdateStmts.add(bound);
+              return bound;
+            },
+          };
+        }
+        return stmt;
+      },
+      async batch(stmts: D1PreparedStatement[]) {
+        if (!racedOnce && stmts.some(s => filterUpdateStmts.has(s))) {
+          racedOnce = true;
+          await db
+            .prepare(`UPDATE snapshots SET body = ?2, etag = ?3 WHERE key = 'airdrops' AND fetched_at = ?1`)
+            .bind(tPrev, newerBody, newerEtag)
+            .run();
+        }
+        return db.batch(stmts);
+      },
+    } as unknown as D1Database;
+    await ensureSourcesSynced(racingDb);
+    await db.prepare(`UPDATE sources SET enabled = 0 WHERE id = 'feed:merkl_opportunities'`).run();
+
+    const beforeRace = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0 + 10 * 60_000, noRetry() {} } as ScheduledController,
+          { DB: racingDb, X_BATCH_SIZE: '0', FEED_BATCH_SIZE: '0' },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    // Concurrent same-fetched_at body must NOT be overwritten by stale etag write.
+    const racedSnap = await readSnapshot(db, 'airdrops');
+    expect(racedSnap!.etag).toBe(newerEtag);
+    expect(racedSnap!.body).toBe(newerBody);
+    // Zero-row filtered UPDATE must NOT trigger seedKnownDomains or set pending marker.
+    expect(
+      await db.prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed_pending'`).first(),
+    ).toBeNull();
+    expect(
+      await db.prepare(`SELECT domain FROM known_domains WHERE domain = 'fresh-concurrent.xyz'`).first(),
+    ).not.toBeNull();
+    expect(queries.slice(beforeRace).some(q => /DELETE\s+FROM\s+known_domains/i.test(q))).toBe(false);
+  });
+
   test('*/5 cron uses fresh cached airdrops:asso7878 and airdrops:arndxt snapshots without live sheet fetch, updates sheet health, and falls back when stale', async () => {
     const { db } = createTestD1();
     const t0 = NOW;

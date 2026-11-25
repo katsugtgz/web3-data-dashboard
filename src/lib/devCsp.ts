@@ -1,12 +1,11 @@
 const DEV_LOOPBACK_CONNECT_SOURCES = [
   'http://localhost:*',
   'http://127.0.0.1:*',
-  'http://[::1]:*',
   'ws://localhost:*',
   'ws://127.0.0.1:*',
 ] as const;
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1']);
 
 const HTML_COMMENT_OR_META_RE = /(<!--[\s\S]*?-->)|(<meta\b(?:[^>"']|"[^"]*"|'[^']*')*>)/gi;
 const ATTR_RE = /([^\s"'=<>`/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;

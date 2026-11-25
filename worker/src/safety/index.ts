@@ -494,6 +494,7 @@ export function collectKnownDomainEntries(
       if (!row.href) continue;
       const dom = getRegistrableDomain(row.href);
       if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+      if (isCuratedAggregatorDomain(dom, { n: row.cells[0] ?? '' })) continue;
       if (hasPunycodeOrMixedHost(row.href, dom)) continue;
       if (!map.has(dom)) map.set(dom, { domain: dom, project: row.cells[0] ?? dom, origin: 'defi' });
     }

@@ -718,9 +718,9 @@ describe('Deterministic row-order-independent sheet card IDs (PRRT_kwDOV0YtbM67w
     expect(fwdMap.get('https://aslash.xyz/')).toMatch(/^asso7878:a-b-[0-9a-f]{8}$/);
     expect(fwdMap.get('https://aplus.xyz/')).not.toBe(fwdMap.get('https://aslash.xyz/'));
 
-    // Identical nameKey rows disambiguated by stable row fields, NOT row order
-    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^asso7878:dupproto-[0-9a-f]{8}$/);
-    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^asso7878:dupproto-[0-9a-f]{8}$/);
+    // Identical nameKey rows disambiguated by stable row fields with `~` delimiter, NOT row order
+    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^asso7878:dupproto~[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^asso7878:dupproto~[0-9a-f]{8}$/);
     expect(fwdMap.get('https://dup.xyz/one')).not.toBe(fwdMap.get('https://dup.xyz/two'));
 
     // Every single card keeps its exact ID when CSV row order is reversed
@@ -754,10 +754,71 @@ describe('Deterministic row-order-independent sheet card IDs (PRRT_kwDOV0YtbM67w
     expect(fwdMap.get('https://aplus.xyz/')).toMatch(/^arndxt:a-b-[0-9a-f]{8}$/);
     expect(fwdMap.get('https://aslash.xyz/')).toMatch(/^arndxt:a-b-[0-9a-f]{8}$/);
     expect(fwdMap.get('https://aplus.xyz/')).not.toBe(fwdMap.get('https://aslash.xyz/'));
-    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^arndxt:dupproto-[0-9a-f]{8}$/);
-    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^arndxt:dupproto-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^arndxt:dupproto~[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^arndxt:dupproto~[0-9a-f]{8}$/);
     expect(fwdMap.get('https://dup.xyz/one')).not.toBe(fwdMap.get('https://dup.xyz/two'));
     expect(revMap).toEqual(fwdMap);
     expect(new Set(forward.cards.map(c => c.id)).size).toBe(forward.cards.length);
+  });
+
+  test('preserves URL path case in duplicate-name disambiguator and keeps duplicate IDs stable across task/funding edits', () => {
+    const now = Date.parse('2026-11-24T00:00:00Z');
+
+    const assoHeader = makeAssoRow({ 0: '分类', 2: '项目名称', 12: '融资', 14: '交互方式', 21: '链接' });
+    const assoRows = [
+      makeAssoRow({ 0: '交易类', 2: 'CaseProto', 12: '$5M', 14: '交易', 21: 'https://example.org/App' }),
+      makeAssoRow({ 0: '交易类', 2: 'CaseProto', 12: '$10M', 14: '交易', 21: 'https://example.org/app' }),
+    ];
+    const assoEdited = [
+      makeAssoRow({ 0: '交易类', 2: 'CaseProto', 12: '$50M', 14: '质押', 21: 'https://example.org/App' }),
+      makeAssoRow({ 0: '交易类', 2: 'CaseProto', 12: '$10M', 14: '交易', 21: 'https://example.org/app' }),
+    ];
+    const assoFwd = parseAsso7878Sheet([assoHeader, ...assoRows].join('\n'), now);
+    const assoRev = parseAsso7878Sheet([assoHeader, ...assoRows.slice().reverse()].join('\n'), now);
+    const assoMut = parseAsso7878Sheet([assoHeader, ...assoEdited].join('\n'), now);
+    const assoFwdMap = new Map(assoFwd.cards.map(c => [c.url, c.id]));
+    const assoRevMap = new Map(assoRev.cards.map(c => [c.url, c.id]));
+    const assoMutMap = new Map(assoMut.cards.map(c => [c.url, c.id]));
+    expect(assoFwdMap.get('https://example.org/App')).toMatch(/^asso7878:caseproto~[0-9a-f]{8}$/);
+    expect(assoFwdMap.get('https://example.org/app')).toMatch(/^asso7878:caseproto~[0-9a-f]{8}$/);
+    expect(assoFwdMap.get('https://example.org/App')).not.toBe(assoFwdMap.get('https://example.org/app'));
+    expect(assoRevMap).toEqual(assoFwdMap);
+    expect(assoMutMap).toEqual(assoFwdMap);
+
+    const arndxtHeader = 'Project,Website,TGE (approx),TGE reasoning (brief),Airdrop tasks,Airdrop score (1-5)';
+    const arndxtRows = [
+      'CaseProto,https://example.org/App,Q4 2026,Early,Trade perps,4',
+      'CaseProto,https://example.org/app,Q4 2026,Early,Trade perps,4',
+    ];
+    const arndxtEdited = [
+      'CaseProto,https://example.org/App,Q4 2026,Updated,Bridge USDC and stake,5',
+      'CaseProto,https://example.org/app,Q4 2026,Early,Trade perps,4',
+    ];
+    const arndxtFwd = parseArndxtSheet([arndxtHeader, ...arndxtRows].join('\n'), now);
+    const arndxtRev = parseArndxtSheet([arndxtHeader, ...arndxtRows.slice().reverse()].join('\n'), now);
+    const arndxtMut = parseArndxtSheet([arndxtHeader, ...arndxtEdited].join('\n'), now);
+    const arndxtFwdMap = new Map(arndxtFwd.cards.map(c => [c.url, c.id]));
+    const arndxtRevMap = new Map(arndxtRev.cards.map(c => [c.url, c.id]));
+    const arndxtMutMap = new Map(arndxtMut.cards.map(c => [c.url, c.id]));
+    expect(arndxtFwdMap.get('https://example.org/App')).toMatch(/^arndxt:caseproto~[0-9a-f]{8}$/);
+    expect(arndxtFwdMap.get('https://example.org/app')).toMatch(/^arndxt:caseproto~[0-9a-f]{8}$/);
+    expect(arndxtFwdMap.get('https://example.org/App')).not.toBe(arndxtFwdMap.get('https://example.org/app'));
+    expect(arndxtRevMap).toEqual(arndxtFwdMap);
+    expect(arndxtMutMap).toEqual(arndxtFwdMap);
+
+    // Same name AND identical URL still disambiguate cleanly via full row fields
+    const sameUrlRows = [
+      'SameUrlProto,https://same.org/app,Q4 2026,Early,Stake ETH,4',
+      'SameUrlProto,https://same.org/app,Q4 2026,Early,Trade perps,4',
+    ];
+    const sameFwd = parseArndxtSheet([arndxtHeader, ...sameUrlRows].join('\n'), now);
+    const sameRev = parseArndxtSheet([arndxtHeader, ...sameUrlRows.slice().reverse()].join('\n'), now);
+    const sameFwdByTask = new Map(sameFwd.cards.map(c => [c.best.n, c.id]));
+    const sameRevByTask = new Map(sameRev.cards.map(c => [c.best.n, c.id]));
+    expect(sameFwdByTask.size).toBe(2);
+    expect(sameFwdByTask.get('Stake ETH')).toMatch(/^arndxt:sameurlproto~[0-9a-f]{8}$/);
+    expect(sameFwdByTask.get('Trade perps')).toMatch(/^arndxt:sameurlproto~[0-9a-f]{8}$/);
+    expect(sameFwdByTask.get('Stake ETH')).not.toBe(sameFwdByTask.get('Trade perps'));
+    expect(sameRevByTask).toEqual(sameFwdByTask);
   });
 });

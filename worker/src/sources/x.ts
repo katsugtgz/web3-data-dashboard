@@ -275,7 +275,7 @@ export function parseXRssTimeline(
   const stripMirrorTokens = (input: string): string => {
     if (!input || mirrorHostsLower.size === 0) return input;
     const stripped = input.replace(
-      /https?:\/\/[^\s<>"'`]+|(?<![:/@.\w=-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:\/[^\s<>"'`]*|\?[^\s<>"'`]*)/gi,
+      /https?:\/\/[^\s<>"'`]+|(?<![:/@.\w=-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:[/?][^\s<>"'`]*|(?![a-z0-9_-]|\.[a-z0-9]|:[a-z0-9]))/gi,
       token => {
         const candidate = token.replace(/[),.;!?\]}>]+$/g, '');
         if (!candidate) return token;
@@ -387,6 +387,7 @@ export async function fetchXTimelineBestEffort(
     typeof rssMirrorBaseOrNowMs === 'number' ? rssMirrorBaseOrNowMs : (nowMsArg ?? Date.now());
   const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
   const mirror = parseSafeMirrorBase(rssMirrorBase);
+  let staleMirrorPosts: ParsedXPost[] | null = null;
   if (mirror) {
     try {
       let currentUrl = `${mirror.base}/${encodeURIComponent(handle)}/rss`;
@@ -429,6 +430,7 @@ export async function fetchXTimelineBestEffort(
         }
         const parsed = parseXRssTimeline(body, handle, mirrorHosts, nowMs);
         if (parsed.some(p => p.postedAt >= cutoffMs)) return parsed;
+        if (parsed.length > 0) staleMirrorPosts = parsed;
       } else if (res) {
         await res.body?.cancel();
       }
@@ -458,6 +460,7 @@ export async function fetchXTimelineBestEffort(
     // Expected failure on X syndication endpoint; degrade cleanly
   }
 
+  if (staleMirrorPosts) return staleMirrorPosts;
   throw new Error(`X endpoints unavailable for @${handle}`);
 }
 

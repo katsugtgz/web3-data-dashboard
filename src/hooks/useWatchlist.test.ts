@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Card } from '../../shared/types';
 import {
   cardStorageKey,
+  commitWatchlistSetMigration,
   getCardTaskKeyPairs,
   isCardSaved,
   isTaskKeyDone,
@@ -139,24 +140,150 @@ describe('migrateLegacySheetIds (PRRT_kwDOV0YtbM67w6DY)', () => {
     expect(res.doneTasks).toEqual(doneTasks);
   });
 
-  test('does not cross-match unrelated prefix-sharing slugs and deduplicates already-present hashed IDs', () => {
+  test('does not cross-match unrelated prefix-sharing slugs, hex-ending names, and deduplicates already-present hashed IDs', () => {
     const cards: Pick<Card, 'id' | 'n'>[] = [
       { id: 'asso7878:acme-labs-1a2b3c4d', n: 'Acme Labs' },
       { id: 'asso7878:acme-labs-pro-99887766', n: 'Acme Labs Pro' },
       { id: 'asso7878:foo-12345678', n: 'foo-12345678' },
+      { id: 'asso7878:foo-12345678-abcdef01', n: 'Foo 12345678' },
+      { id: 'merkl:bar-12345678~abcdef01', n: 'Bar 12345678' },
     ];
 
     // 'asso7878:acme' (removed project) must NOT hijack 'Acme Labs';
-    // 'asso7878:foo' must NOT hijack canonical 'foo-12345678';
+    // 'asso7878:foo' must NOT hijack canonical 'foo-12345678' OR hashed 'Foo 12345678';
+    // 'merkl:bar' must NOT hijack hashed 'Bar 12345678';
     // 'asso7878:acme-labs' MUST still migrate to 'asso7878:acme-labs-1a2b3c4d' despite 'Acme Labs Pro' existing
     // and deduplicate cleanly if 'asso7878:acme-labs-1a2b3c4d' is already saved.
-    const saved = new Set(['asso7878:acme', 'asso7878:foo', 'asso7878:acme-labs', 'asso7878:acme-labs-1a2b3c4d']);
-    const doneTasks = new Set([taskStorageKey('asso7878:acme', 'Old task', 'other', 0)]);
+    const saved = new Set([
+      'asso7878:acme',
+      'asso7878:foo',
+      'merkl:bar',
+      'asso7878:acme-labs',
+      'asso7878:acme-labs-1a2b3c4d',
+    ]);
+    const doneTasks = new Set([
+      taskStorageKey('asso7878:acme', 'Old task', 'other', 0),
+      taskStorageKey('asso7878:foo', 'Old foo task', 'other', 0),
+    ]);
 
     const res = migrateLegacySheetIds(saved, doneTasks, cards);
     expect(res.changed).toBe(true);
-    expect(res.saved).toEqual(new Set(['asso7878:acme', 'asso7878:foo', 'asso7878:acme-labs-1a2b3c4d']));
+    expect(res.saved).toEqual(new Set(['asso7878:acme', 'asso7878:foo', 'merkl:bar', 'asso7878:acme-labs-1a2b3c4d']));
     expect(res.doneTasks).toEqual(doneTasks);
+  });
+
+  test('migrates tilde-delimited Pendle/Merkl hashed IDs and Merkl protocol.id-based IDs while refusing ambiguous Merkl names', () => {
+    const cards: Pick<Card, 'id' | 'n'>[] = [
+      { id: 'pendle:a-b~9c0d1e2f', n: 'A+B' },
+      { id: 'merkl:euler-finance', n: 'Euler V2' },
+      { id: 'merkl:zeta-labs~11223344', n: 'Zeta Labs' },
+      { id: 'merkl:alpha-v1', n: 'Alpha' },
+      { id: 'merkl:alpha-v2~55667788', n: 'Alpha' },
+    ];
+
+    const saved = new Set(['pendle:a-b', 'merkl:euler-v2', 'merkl:zeta-labs', 'merkl:alpha']);
+    const doneTasks = new Set([
+      taskStorageKey('pendle:a-b', 'Supply YT', 'liquidity', 0),
+      taskStorageKey('merkl:euler-v2', 'Lend USDC', 'staking', 0),
+      taskStorageKey('merkl:alpha', 'Farm', 'liquidity', 0),
+    ]);
+
+    const res = migrateLegacySheetIds(saved, doneTasks, cards);
+    expect(res.changed).toBe(true);
+    expect(res.saved).toEqual(
+      new Set(['pendle:a-b~9c0d1e2f', 'merkl:euler-finance', 'merkl:zeta-labs~11223344', 'merkl:alpha']),
+    );
+    expect(res.doneTasks).toEqual(
+      new Set([
+        taskStorageKey('pendle:a-b~9c0d1e2f', 'Supply YT', 'liquidity', 0),
+        taskStorageKey('merkl:euler-finance', 'Lend USDC', 'staking', 0),
+        taskStorageKey('merkl:alpha', 'Farm', 'liquidity', 0),
+      ]),
+    );
+  });
+
+  test('commitWatchlistSetMigration commits migrated keys into state so later feeds cannot re-migrate stale legacy keys', () => {
+    const feed1: Pick<Card, 'id' | 'n'>[] = [{ id: 'asso7878:acme-labs-1a2b3c4d', n: 'Acme Labs' }];
+    const feed2: Pick<Card, 'id' | 'n'>[] = [{ id: 'asso7878:acme-labs-99999999', n: 'Acme Labs' }];
+
+    const initialSaved = { values: new Set(['asso7878:acme-labs']), version: 0 };
+    const afterFeed1 = commitWatchlistSetMigration(initialSaved, feed1, 'saved');
+    expect(afterFeed1.version).toBe(1);
+    expect(afterFeed1.values).toEqual(new Set(['asso7878:acme-labs-1a2b3c4d']));
+
+    // Re-running on feed1 or later feed2 with a different card sharing the legacy slug must NOT re-migrate.
+    const repeatFeed1 = commitWatchlistSetMigration(afterFeed1, feed1, 'saved');
+    expect(repeatFeed1).toBe(afterFeed1);
+    const afterFeed2 = commitWatchlistSetMigration(afterFeed1, feed2, 'saved');
+    expect(afterFeed2).toBe(afterFeed1);
+    expect(afterFeed2.values).toEqual(new Set(['asso7878:acme-labs-1a2b3c4d']));
+
+    const initialTasks = {
+      values: new Set([taskStorageKey('merkl:euler-v2', 'Lend USDC', 'staking', 0)]),
+      version: 0,
+    };
+    const migratedTasks = commitWatchlistSetMigration(
+      initialTasks,
+      [{ id: 'merkl:euler-finance', n: 'Euler V2' }],
+      'tasks',
+    );
+    expect(migratedTasks.version).toBe(1);
+    expect(migratedTasks.values).toEqual(
+      new Set([taskStorageKey('merkl:euler-finance', 'Lend USDC', 'staking', 0)]),
+    );
+    expect(commitWatchlistSetMigration(migratedTasks, [{ id: 'merkl:other-euler', n: 'Euler V2' }], 'tasks')).toBe(
+      migratedTasks,
+    );
+  });
+
+  test('migrates disambiguated sheet keys back to the surviving base ID when a duplicate sibling disappears without hijacking unrelated or Pendle/Merkl keys', () => {
+    const cards: Pick<Card, 'id' | 'n'>[] = [
+      { id: 'asso7878:dupproto', n: 'DupProto' },
+      { id: 'arndxt:acme-labs-1a2b3c4d', n: 'Acme Labs' },
+      { id: 'asso7878:stilldup~bbbb2222', n: 'StillDup' },
+      { id: 'asso7878:stilldup~cccc3333', n: 'StillDup' },
+      { id: 'asso7878:foo', n: 'Foo' },
+      { id: 'pendle:a-b', n: 'A-B' },
+      { id: 'merkl:a-b', n: 'A-B' },
+    ];
+
+    const saved = new Set([
+      'asso7878:dupproto~aaaa1111',
+      'asso7878:dupproto~aaaa1111-2',
+      'arndxt:acme-labs-1a2b3c4d~eeee2222',
+      // Still duplicated (no base ID present) -> must stay untouched
+      'asso7878:stilldup~aaaa1111',
+      // Unrelated removed hex-ending project (no `~`) -> must NOT hijack `asso7878:foo`
+      'asso7878:foo-12345678',
+      // Removed non-canonical Pendle/Merkl card (`A+B`) -> must NOT hijack canonical `A-B`
+      'pendle:a-b~9c0d1e2f',
+      'merkl:a-b~9c0d1e2f',
+    ]);
+    const doneTasks = new Set([
+      taskStorageKey('asso7878:dupproto~aaaa1111', 'Stake ETH', 'staking', 0),
+      taskStorageKey('arndxt:acme-labs-1a2b3c4d~eeee2222', 'Bridge', 'bridge', 0),
+      taskStorageKey('pendle:a-b~9c0d1e2f', 'Supply YT', 'liquidity', 0),
+    ]);
+
+    const res = migrateLegacySheetIds(saved, doneTasks, cards);
+    expect(res.changed).toBe(true);
+    expect(res.saved).toEqual(
+      new Set([
+        'asso7878:dupproto',
+        'arndxt:acme-labs-1a2b3c4d',
+        'asso7878:stilldup~aaaa1111',
+        'asso7878:foo-12345678',
+        'pendle:a-b~9c0d1e2f',
+        'merkl:a-b~9c0d1e2f',
+      ]),
+    );
+    expect(res.doneTasks).toEqual(
+      new Set([
+        taskStorageKey('asso7878:dupproto', 'Stake ETH', 'staking', 0),
+        taskStorageKey('arndxt:acme-labs-1a2b3c4d', 'Bridge', 'bridge', 0),
+        taskStorageKey('pendle:a-b~9c0d1e2f', 'Supply YT', 'liquidity', 0),
+      ]),
+    );
   });
 
   test('is a no-op when cards list is empty', () => {

@@ -1031,9 +1031,67 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
     expect(id2('Ethena')).toBe('pendle:ethena');
     expect(id1('A-B')).toBe('pendle:a-b');
     expect(id2('A-B')).toBe('pendle:a-b');
-    expect(id1('A+B')).toMatch(/^pendle:a-b-[0-9a-f]{8}$/);
+    expect(id1('A+B')).toMatch(/^pendle:a-b~[0-9a-f]{8}$/);
     expect(id1('A+B')).toBe(id2('A+B'));
     expect(id1('A+B')).not.toBe(id1('A-B'));
+
+    // Canonical protocol name matching `<slug>-<hash>` must never collide with hashed `A+B` regardless of liquidity order
+    const aPlusHash = id1('A+B')!.split('~')[1];
+    const canonicalName = `a-b-${aPlusHash}`;
+    const clashFwd = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 9_000_000 },
+          },
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: canonicalName,
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+    const clashRev = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: canonicalName,
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 9_000_000 },
+          },
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(clashFwd.cards.find(c => c.n === canonicalName)!.id).toBe(`pendle:${canonicalName}`);
+    expect(clashRev.cards.find(c => c.n === canonicalName)!.id).toBe(`pendle:${canonicalName}`);
+    expect(clashFwd.cards.find(c => c.n === 'A+B')!.id).toBe(`pendle:a-b~${aPlusHash}`);
+    expect(clashRev.cards.find(c => c.n === 'A+B')!.id).toBe(`pendle:a-b~${aPlusHash}`);
   });
 
   test('parseMerklOpportunities keeps deterministic card IDs stable across TVL swaps and protocol.id values', () => {
@@ -1146,15 +1204,109 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
     expect(byUrl2('https://app.morpho.org/vault')).toBe('merkl:morpho');
     expect(byUrl1('https://ab2.xyz/')).toBe('merkl:a-b');
     expect(byUrl2('https://ab2.xyz/')).toBe('merkl:a-b');
-    expect(byUrl1('https://ab1.xyz/')).toMatch(/^merkl:a-b-[0-9a-f]{8}$/);
+    expect(byUrl1('https://ab1.xyz/')).toMatch(/^merkl:a-b~[0-9a-f]{8}$/);
     expect(byUrl1('https://ab1.xyz/')).toBe(byUrl2('https://ab1.xyz/'));
     expect(byUrl1('https://ab1.xyz/')).not.toBe(byUrl1('https://ab2.xyz/'));
 
     // Distinct protocol.id values with the same display name stay distinct and TVL-order-independent
     expect(byUrl1('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
     expect(byUrl2('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
-    expect(byUrl1('https://alpha-v2.xyz/')).toMatch(/^merkl:alpha-v2-[0-9a-f]{8}$/);
+    expect(byUrl1('https://alpha-v2.xyz/')).toMatch(/^merkl:alpha-v2~[0-9a-f]{8}$/);
     expect(byUrl1('https://alpha-v2.xyz/')).toBe(byUrl2('https://alpha-v2.xyz/'));
     expect(byUrl1('https://alpha-v1.xyz/')).not.toBe(byUrl1('https://alpha-v2.xyz/'));
+
+    // Canonical protocol.id matching `<slug>-<hash>` never collides with hashed `A+B` across TVL swaps
+    const merklHash = byUrl1('https://ab1.xyz/')!.split('~')[1];
+    const canonicalProto = `a-b-${merklHash}`;
+    const mFwd = parseMerklOpportunities(
+      [
+        { id: '1', name: 'P1', chain: { name: 'Base' }, protocol: { name: 'A+B' }, status: 'LIVE', tvl: 9_000_000, depositUrl: 'https://aplus.xyz' },
+        { id: '2', name: 'P2', chain: { name: 'Base' }, protocol: { id: canonicalProto, name: canonicalProto }, status: 'LIVE', tvl: 1_000_000, depositUrl: 'https://canon.xyz' },
+      ],
+      NOW,
+    );
+    const mRev = parseMerklOpportunities(
+      [
+        { id: '2', name: 'P2', chain: { name: 'Base' }, protocol: { id: canonicalProto, name: canonicalProto }, status: 'LIVE', tvl: 9_000_000, depositUrl: 'https://canon.xyz' },
+        { id: '1', name: 'P1', chain: { name: 'Base' }, protocol: { name: 'A+B' }, status: 'LIVE', tvl: 1_000_000, depositUrl: 'https://aplus.xyz' },
+      ],
+      NOW,
+    );
+    expect(mFwd.cards.find(c => c.url === 'https://canon.xyz/')!.id).toBe(`merkl:${canonicalProto}`);
+    expect(mRev.cards.find(c => c.url === 'https://canon.xyz/')!.id).toBe(`merkl:${canonicalProto}`);
+    expect(mFwd.cards.find(c => c.url === 'https://aplus.xyz/')!.id).toBe(`merkl:a-b~${merklHash}`);
+    expect(mRev.cards.find(c => c.url === 'https://aplus.xyz/')!.id).toBe(`merkl:a-b~${merklHash}`);
+  });
+
+  test('pollFeedBatch deduplicates already-stored legacy-ID posts while still ingesting distinct posts sharing an old truncated tail', async () => {
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, tags, enabled)
+         VALUES ('feed:legacy_rss', 'feed', 'legacy_rss', 'en', 0.8, '["drops"]', 1)`,
+      )
+      .run();
+
+    // Seed an existing post stored under the pre-hash legacy normalizePostId format
+    const sharedTail = 'a'.repeat(70);
+    const oldGuid = 'https://feed.example/post/42';
+    const legacyId = 'feed:legacy_rss:feed.example-post-42';
+    const collidingOldUrl = `https://a.example/prefix/${sharedTail}`;
+    const collidingNewUrl = `https://b.example/prefix/${sharedTail}`;
+    const collidingLegacyTail = `prefix-${sharedTail}`.slice(-80);
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_legacy', 'LegacyProto', '[]', '["testnet"]', 'Legacy', 'rule', 'ok', '[]', 0.8, 1, ?1, ?1, 1),
+                ('c_tail', 'TailProtoA', '[]', '["testnet"]', 'TailA', 'rule', 'ok', '[]', 0.8, 1, ?1, ?1, 1)`,
+      )
+      .bind(NOW - 3_600_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES (?1, 'feed:legacy_rss', ?2, ?3, 'LegacyProto testnet airdrop live', '[]', 'c_legacy', ?3),
+                (?4, 'feed:legacy_rss', ?5, ?3, 'TailProtoA testnet airdrop live', '[]', 'c_tail', ?3)`,
+      )
+      .bind(legacyId, oldGuid, NOW - 3_600_000, `feed:legacy_rss:${collidingLegacyTail}`, collidingOldUrl)
+      .run();
+
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+      <rss version="2.0"><channel><title>LegacyFeed</title>
+        <item>
+          <title>LegacyProto testnet airdrop live</title>
+          <link>${oldGuid}</link>
+          <guid>${oldGuid}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://legacyproto.xyz/faucet</description>
+        </item>
+        <item>
+          <title>BrandNewProto testnet airdrop live</title>
+          <link>https://feed.example/post/43</link>
+          <guid>https://feed.example/post/43</guid>
+          <pubDate>Mon, 23 Nov 2026 11:00:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://brandnewproto.xyz/faucet</description>
+        </item>
+        <item>
+          <title>TailProtoB testnet airdrop live</title>
+          <link>${collidingNewUrl}</link>
+          <guid>${collidingNewUrl}</guid>
+          <pubDate>Mon, 23 Nov 2026 11:30:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://tailprotob.xyz/faucet</description>
+        </item>
+      </channel></rss>`;
+
+    const parsed = parseRssOrAtomXml(rss);
+    const res = await pollFeedBatch(db, 5, NOW, null, async () => parsed);
+    expect(res.degraded).toBe(0);
+    // Post 42 must NOT be re-inserted; Post 43 and TailProtoB (different post_url) MUST be inserted.
+    expect(res.insertedPosts).toBe(2);
+
+    const post42Rows = await db
+      .prepare(`SELECT id FROM posts WHERE source_id = 'feed:legacy_rss' AND post_url = ?1`)
+      .bind(oldGuid)
+      .all<{ id: string }>();
+    expect(post42Rows.results).toHaveLength(1);
+    expect(post42Rows.results[0].id).toBe(legacyId);
   });
 });

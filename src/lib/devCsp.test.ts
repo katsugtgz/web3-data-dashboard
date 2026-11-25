@@ -19,38 +19,39 @@ describe('rewriteDevCspHtml', () => {
 
     const expected = SAMPLE_HTML.replace(
       "connect-src 'self' https:",
-      "connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:*",
+      "connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
     );
     expect(rewritten).toBe(expected);
   });
 
-  test('appends parsed loopback http: origin from apiBase for localhost, 127.0.0.1, and [::1]', () => {
+  test('appends parsed loopback http: origin from apiBase for localhost and 127.0.0.1', () => {
     const cases: Array<[string, string]> = [
       ['http://localhost:8787', 'http://localhost:8787'],
       ['http://localhost:8787/feed.json?v=1', 'http://localhost:8787'],
       ['  http://LOCALHOST/api  ', 'http://localhost'],
       ['http://127.0.0.1:8787/', 'http://127.0.0.1:8787'],
-      ['http://[::1]:8787/airdrops.json', 'http://[::1]:8787'],
-      ['http://[::1]', 'http://[::1]'],
     ];
 
     for (const [apiBase, expectedOrigin] of cases) {
       const rewritten = rewriteDevCspHtml(SAMPLE_HTML, apiBase);
       const expected = SAMPLE_HTML.replace(
         "connect-src 'self' https:",
-        `connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* ${expectedOrigin}`,
+        `connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* ${expectedOrigin}`,
       );
       expect(rewritten).toBe(expected);
     }
   });
 
-  test('strictly ignores non-loopback http:, non-http:, malformed, and path-injected apiBase values', () => {
+  test('strictly ignores non-loopback http:, unsupported IPv6 literals, non-http:, malformed, and path-injected apiBase values', () => {
     const baseline = rewriteDevCspHtml(SAMPLE_HTML);
     const ignored = [
       undefined,
       '',
       '   ',
       'not-a-url',
+      'http://[::1]:8787',
+      'http://[::1]:8787/airdrops.json',
+      'http://[::1]',
       'http://example.com',
       'http://example.com:8787',
       'http://localhost.evil.com:8787',
@@ -67,6 +68,7 @@ describe('rewriteDevCspHtml', () => {
       expect(rewritten).toBe(baseline);
       expect(rewritten).not.toContain('example.com');
       expect(rewritten).not.toContain('evil.com');
+      expect(rewritten).not.toContain('[::1]');
     }
 
     const withInjectionAttempt = rewriteDevCspHtml(SAMPLE_HTML, "http://localhost:8787/;script-src 'unsafe-inline'");
@@ -87,7 +89,7 @@ describe('rewriteDevCspHtml', () => {
     expect(rewritten).toBe(
       SAMPLE_HTML.replace(
         "connect-src 'self' https:",
-        "connect-src 'self' https: http://localhost:* http://localhost:8787 http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:*",
+        "connect-src 'self' https: http://localhost:* http://localhost:8787 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
       ),
     );
   });
@@ -112,13 +114,13 @@ describe('rewriteDevCspHtml', () => {
     const reversedAttrs =
       '<html><head><META data-content="connect-src \'none\'" CONTENT="connect-src \'self\' https:; object-src \'none\'" HTTP-EQUIV=\'content-security-policy\'></head></html>';
     expect(rewriteDevCspHtml(reversedAttrs, 'http://localhost:8787')).toBe(
-      '<html><head><META data-content="connect-src \'none\'" CONTENT="connect-src \'self\' https: http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* http://localhost:8787; object-src \'none\'" HTTP-EQUIV=\'content-security-policy\'></head></html>',
+      '<html><head><META data-content="connect-src \'none\'" CONTENT="connect-src \'self\' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* http://localhost:8787; object-src \'none\'" HTTP-EQUIV=\'content-security-policy\'></head></html>',
     );
 
     const trailingConnectSrc =
       '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; CONNECT-SRC \'self\'" />';
     expect(rewriteDevCspHtml(trailingConnectSrc)).toBe(
-      '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; CONNECT-SRC \'self\' http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:*" />',
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; CONNECT-SRC \'self\' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*" />',
     );
   });
 });
@@ -139,7 +141,7 @@ describe('devLocalhostCsp Vite plugin', () => {
     expect(defaultTransformed).toBe(
       indexHtml.replace(
         "connect-src 'self' https:;",
-        "connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:*;",
+        "connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;",
       ),
     );
 
@@ -149,7 +151,7 @@ describe('devLocalhostCsp Vite plugin', () => {
     expect(withLoopback).toBe(
       indexHtml.replace(
         "connect-src 'self' https:;",
-        "connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* http://localhost:8787;",
+        "connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* http://localhost:8787;",
       ),
     );
 
