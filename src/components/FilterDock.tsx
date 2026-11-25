@@ -2,6 +2,7 @@ import { useState, type RefObject } from 'react';
 import type { FitKey } from '../../shared/types';
 import type { AirdropFiltersState, SortKey } from '../hooks/useAirdropFilters';
 import { GRADE_ORDER } from '../lib/labels';
+import { ChainBadge } from './EntityVisual';
 import { SearchIcon, SlidersHorizontalIcon, XIcon } from './Icons';
 
 interface Props {
@@ -53,7 +54,7 @@ function AdvancedFilters({ filters, fit }: { filters: AirdropFiltersState; fit: 
                 aria-pressed={filters.activeChain === name}
                 onClick={() => filters.setChain(name)}
               >
-                <span>{name}</span>
+                <ChainBadge chain={name} size={13} className="chain-badge-bare" />
                 <span className="chip-count mono">{cnt}</span>
               </button>
             ))}

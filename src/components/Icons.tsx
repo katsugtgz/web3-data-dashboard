@@ -361,3 +361,149 @@ export function LockIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function TelegramIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m21.5 4.5-3.2 15.1a.9.9 0 0 1-1.4.55l-4.5-3.35-2.6 2.5a.6.6 0 0 1-1-.35l-.45-4.35L2.9 12.6a.75.75 0 0 1 .05-1.42L20.4 3.6a.85.85 0 0 1 1.1.9Z" />
+      <path d="M8.35 14.6 18.6 6.8" />
+    </IconBase>
+  );
+}
+
+export function XBrandIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 4l6.8 9.1L4.4 20h2.3l5.1-5.5L16 20h4l-7.1-9.5L19 4h-2.3l-4.7 5.1L8.1 4H4Z" />
+    </IconBase>
+  );
+}
+
+export function GithubIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+      <path d="M9 18c-4.51 2-5-2-7-2" />
+    </IconBase>
+  );
+}
+
+export function GlobeIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
+    </IconBase>
+  );
+}
+
+export function RssIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 11a9 9 0 0 1 9 9" />
+      <path d="M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" />
+    </IconBase>
+  );
+}
+
+export function SheetIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M3 15h18" />
+      <path d="M9 3v18" />
+    </IconBase>
+  );
+}
+
+export function FlameIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5Z" />
+    </IconBase>
+  );
+}
+
+export function ClockIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </IconBase>
+  );
+}
+
+export function DollarSignIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <line x1="12" x2="12" y1="2" y2="22" />
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+    </IconBase>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M20 6 9 17l-5-5" />
+    </IconBase>
+  );
+}
+
+export function InfoIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </IconBase>
+  );
+}
+
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m18 15-6-6-6 6" />
+    </IconBase>
+  );
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </IconBase>
+  );
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42Z" />
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+    </IconBase>
+  );
+}
+
+export function DatabaseIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+      <path d="M3 12a9 3 0 0 0 18 0" />
+    </IconBase>
+  );
+}
+
+export function CompassIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+    </IconBase>
+  );
+}

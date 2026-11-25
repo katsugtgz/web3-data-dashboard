@@ -13,7 +13,14 @@ import type {
   TaskType,
 } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
-import { buildSurfIndex, computeClusterId, type SurfIndex } from '../worker/src/normalize/cluster';
+import {
+  buildFeedLogoIndex,
+  buildSurfIndex,
+  computeClusterId,
+  resolveFeedItemLogo,
+  type FeedLogoIndex,
+  type SurfIndex,
+} from '../worker/src/normalize/cluster';
 import { selectFeedLinks } from '../worker/src/normalize/domains';
 import { getRegistrableDomain, parseDropPost } from '../worker/src/normalize/parse';
 import { computeScore } from '../worker/src/normalize/score';
@@ -30,6 +37,7 @@ import {
   parseWpCalendarToAirdropFeed,
 } from '../worker/src/sources/feeds';
 import {
+  enrichYieldRowIcons,
   fetchCryptoSection,
   fetchGithubSection,
   fetchPredictionsSection,
@@ -462,7 +470,12 @@ async function buildMarkets(
   }
 
   const merged = mergeMarketsWithPrior(fresh, sectors, await readPriorMarkets(), ['crypto', 'defi']);
-  return merged ? { generatedAt: nowMs, sections: merged.sections, sectors: merged.sectors } : null;
+  if (!merged) return null;
+  const defiSec = merged.sections.find(s => s.id === 'defi');
+  const sections = defiSec
+    ? merged.sections.map(s => (s.id === 'yields' ? enrichYieldRowIcons(s, defiSec) : s))
+    : merged.sections;
+  return { generatedAt: nowMs, sections, sectors: merged.sectors };
 }
 
 /** Matches Worker parseDropPost's guard: ticker fallback applies only when no projectDomain is present. */
@@ -501,6 +514,7 @@ export interface FinalizeSnapshotClusterCtx {
   projectDomains: Map<string, string>;
   platformDomains: Set<string>;
   allKnownDomains: Set<string>;
+  logoIndex?: FeedLogoIndex | null;
   nowMs: number;
 }
 
@@ -551,11 +565,16 @@ export function finalizeSnapshotCluster(
     surfTier: acc.surf?.tier,
     riskLevel: safety.level,
   });
+  const logo = resolveFeedItemLogo(
+    { project: acc.project, domain: acc.domain, ticker: acc.ticker, riskLevel: safety.level },
+    ctx.logoIndex,
+  );
   return {
     id: acc.id,
     project: acc.project,
     ...(acc.ticker ? { ticker: acc.ticker } : {}),
     ...(acc.domain ? { domain: acc.domain } : {}),
+    ...(logo ? { logo } : {}),
     chains: chainsList,
     taskTypes,
     summary: acc.summary,
@@ -788,10 +807,12 @@ async function buildDropsAndSources(
   }
 
   const items: FeedItem[] = [];
+  const logoIndex = buildFeedLogoIndex(airdrops, defiSection);
   const finalizeCtx: FinalizeSnapshotClusterCtx = {
     projectDomains,
     platformDomains,
     allKnownDomains,
+    logoIndex,
     nowMs,
   };
   for (const acc of clusters.values()) {

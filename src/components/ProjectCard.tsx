@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
 import {
   cardLegacyStorageKey,
@@ -9,13 +8,20 @@ import {
 } from '../hooks/useWatchlist';
 import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
+import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
+import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
+  DollarSignIcon,
   ExternalLinkIcon,
+  FlameIcon,
   LockIcon,
   StarIcon,
+  TagIcon,
+  ZapIcon,
 } from './Icons';
 
 const MAX_CARD_CHIPS = 3;
@@ -99,47 +105,73 @@ export function BadgeChip({ k, riskLabel }: { k: Badge; riskLabel?: string }) {
   return <span className={BADGE_CLASS[k] ?? 'badge'}>{text}</span>;
 }
 
-export function Avatar({ name, src, size = 38 }: { name: string; src: string; size?: number }) {
-  const [broken, setBroken] = useState(false);
-  const initials = name
-    .split(/[\s.-]+/)
-    .filter(Boolean)
-    .map(w => w[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
+interface AvatarProps {
+  name: string;
+  src?: string | null;
+  size?: number;
+  ticker?: string | null;
+  url?: string | null;
+  domain?: string | null;
+  chain?: string | null;
+  source?: string | null;
+  logoIndex?: ProjectLogoIndex | null;
+  shape?: 'rounded' | 'circle';
+  className?: string;
+}
+
+export function Avatar({
+  name,
+  src,
+  size = 38,
+  ticker,
+  url,
+  domain,
+  chain,
+  source,
+  logoIndex,
+  shape = 'rounded',
+  className,
+}: AvatarProps) {
   return (
-    <span className="avatar" style={{ width: size, height: size }} aria-hidden="true">
-      <span>{initials || '?'}</span>
-      {src && !broken && (
-        <img
-          src={src}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          width={size}
-          height={size}
-          onError={() => setBroken(true)}
-        />
-      )}
-    </span>
+    <EntityAvatar
+      name={name}
+      img={src}
+      ticker={ticker}
+      url={url}
+      domain={domain}
+      chain={chain}
+      source={source}
+      logoIndex={logoIndex}
+      size={size}
+      shape={shape}
+      className={className}
+    />
   );
 }
 
 interface CardHeaderProps {
   card: Card;
-  icon: string;
   chains: string[];
+  logoIndex?: ProjectLogoIndex;
   saved: boolean;
   onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
 }
 
-function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: CardHeaderProps) {
+function CardHeader({ card: c, chains, logoIndex, saved, onToggleSaved, onDetails }: CardHeaderProps) {
+  const resolvedTicker = extractTickerFallback(c.n, c.t);
+
   return (
     <div className="cardrow">
-      <Avatar key={icon} name={c.n} src={icon} />
+      <Avatar
+        name={c.n}
+        src={c.img}
+        ticker={resolvedTicker}
+        url={c.url}
+        chain={chains[0]}
+        source={c.source}
+        logoIndex={logoIndex}
+      />
       <div className="cardtitle-wrap">
         <div className="cardname-line">
           <span className="ranknum">
@@ -151,26 +183,24 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
             {c.n}
           </button>
         </div>
-        <p className="ticker">
-          <span className="mono">{c.t ? `$${c.t}` : c.b.includes('token') ? 'Token live' : 'Pre-token'}</span>
+        <div className="ticker">
+          {resolvedTicker ? (
+            <CryptoTickerPill ticker={resolvedTicker} size={13} />
+          ) : (
+            <span className="ticker-status mono">
+              {c.b.includes('token') ? 'Token live' : 'Pre-token'}
+            </span>
+          )}
           {chains.length > 0 && (
-            <>
-              {' · '}
-              <span>
-                {chains[0]}
-                {chains.length > 1 ? ` +${chains.length - 1}` : ''}
-              </span>
-            </>
+            <span className="ticker-chain-group" title={chains.join(', ')}>
+              <ChainBadge chain={chains[0]} size={12} />
+              {chains.length > 1 && (
+                <span className="typetip mono chain-more-pill">+{chains.length - 1}</span>
+              )}
+            </span>
           )}
-          {c.source && (
-            <>
-              {' · '}
-              <span className="mono" title={`Source: ${c.source}`}>
-                {c.source}
-              </span>
-            </>
-          )}
-        </p>
+          {c.source && <PlatformBadge source={c.source} size={12} />}
+        </div>
       </div>
       <div className="card-actions">
         <span className={`gradetip tier-pill ${c.g}`} title={`Tier ${c.g}`}>
@@ -251,7 +281,10 @@ function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Ca
   return (
     <div className="best task-preview">
       <div className="best-info">
-        <span className="bl">Best task</span>
+        <span className="bl best-label-row">
+          <ZapIcon size={11} className="best-label-icon" />
+          <span>Best task</span>
+        </span>
         <div className="best-title-row">
           <span className="best-name">{c.best.n}</span>
           {c.best.ty && <span className="typetip">{c.best.ty}</span>}
@@ -292,13 +325,22 @@ interface Props {
   fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
+  logoIndex?: ProjectLogoIndex;
   onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
 
-export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onDetails, onCopyBrief }: Props) {
-  const icon = c.img ?? '';
+export function ProjectCard({
+  card: c,
+  fit,
+  saved,
+  doneTasks,
+  logoIndex,
+  onToggleSaved,
+  onDetails,
+  onCopyBrief,
+}: Props) {
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);
@@ -313,8 +355,8 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
     <article className={`cardx project-card${saved ? ' is-saved' : ''}`}>
       <CardHeader
         card={c}
-        icon={icon}
         chains={chains}
+        logoIndex={logoIndex}
         saved={saved}
         onToggleSaved={onToggleSaved}
         onDetails={onDetails}
@@ -325,19 +367,33 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
       <div className="card-bottom project-bottom">
         <div className="meta project-stats">
           <div>
-            Funding
+            <span className="meta-label">
+              <DollarSignIcon size={11} className="meta-icon" />
+              <span>Funding</span>
+            </span>
             <b className="mono">{c.f}</b>
           </div>
           <div title={`${c.tk} open tasks`}>
-            Open tasks
+            <span className="meta-label">
+              <TagIcon size={11} className="meta-icon" />
+              <span>
+                <span className="sr">Open </span>Tasks
+              </span>
+            </span>
             <b className="mono">{c.tk}</b>
           </div>
           <div>
-            Heat
+            <span className="meta-label">
+              <FlameIcon size={11} className="meta-icon" />
+              <span>Heat</span>
+            </span>
             <b className="mono">{safeHeat.toLocaleString('en-US')}</b>
           </div>
           <div>
-            Updated
+            <span className="meta-label">
+              <ClockIcon size={11} className="meta-icon" />
+              <span>Updated</span>
+            </span>
             <b className="mono">{c.u === 'today' ? 'Today' : c.u}</b>
           </div>
         </div>

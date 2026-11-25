@@ -2,12 +2,13 @@ import { useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
 import { normalizeExternalUrl } from '../lib/format';
 import { formatTgeStatus } from '../lib/labels';
-import { ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon } from './Icons';
-import { Avatar } from './ProjectCard';
+import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
+import { CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon } from './Icons';
 
 type TgeFilter = 'all' | 'claimable' | 'verify' | 'other';
 
-export function TgeCarousel({ items }: { items: Tge[] }) {
+export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: ProjectLogoIndex }) {
   const [filter, setFilter] = useState<TgeFilter>('all');
   const railRef = useRef<HTMLDivElement>(null);
 
@@ -17,15 +18,16 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
       const st = formatTgeStatus(it.s);
       // Split inline "$TICKER" from snapshot names like "predict.fun $PREDICT"
       let name = it.n;
-      let ticker = it.t;
-      if (!ticker) {
-        const m = name.match(/^(.*?)\s+\$([A-Za-z0-9_]+)$/);
-        if (m) {
-          name = m[1];
-          ticker = m[2];
+      let explicitTicker = it.t;
+      const inlineMatch = name.match(/^(.*?)\s+\$([A-Za-z0-9._-]+)$/);
+      if (inlineMatch) {
+        name = inlineMatch[1].trim();
+        if (!explicitTicker) {
+          explicitTicker = inlineMatch[2];
         }
       }
-      const baseKey = `${name}-${it.t}-${it.d}-${it.source ?? ''}`;
+      const ticker = extractTickerFallback(it.n, explicitTicker) ?? '';
+      const baseKey = `${name}-${ticker}-${it.d}-${it.source ?? ''}`;
       const occ = seen.get(baseKey) ?? 0;
       seen.set(baseKey, occ + 1);
       return {
@@ -120,10 +122,18 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           {visible.map(it => (
             <article key={it.itemKey} className="tge-card">
               <div className="tge-card-top">
-                <Avatar key={it.logo ?? ''} name={it.name} src={it.logo ?? ''} size={32} />
+                <EntityAvatar
+                  name={it.name}
+                  logo={it.logo}
+                  url={it.url}
+                  ticker={it.ticker || null}
+                  source={it.source}
+                  logoIndex={logoIndex}
+                  size={34}
+                />
                 <div className="tge-card-title">
                   <span className="tn">{it.name}</span>
-                  {it.ticker && <span className="tt mono">${it.ticker}</span>}
+                  {it.ticker && <CryptoTickerPill ticker={it.ticker} size={12} className="tge-ticker-pill" />}
                 </div>
                 {it.tier && (
                   <span className={`gradetip tier-pill ${it.tier}`} title={`Tier ${it.tier}`}>
@@ -133,13 +143,12 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
               </div>
               <div className="tge-card-meta">
                 <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
-                <span className="tt mono">{it.d}</span>
+                <span className="tge-meta-date tt mono">
+                  <CalendarIcon size={11} />
+                  <span>{it.d}</span>
+                </span>
                 {it.raise && <span className="tt mono">{it.raise}</span>}
-                {it.source && (
-                  <span className="typetip mono" title={`Source: ${it.source}`}>
-                    {it.source}
-                  </span>
-                )}
+                {it.source && <PlatformBadge source={it.source} size={12} />}
               </div>
               {it.safeUrl && (
                 <a className="tge-link" href={it.safeUrl} target="_blank" rel="noopener noreferrer">

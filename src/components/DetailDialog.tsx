@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
 import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
 import { orderDetailTasks, type OrderedDetailTask } from '../lib/detailTasks';
-import { normalizeExternalUrl, orDash } from '../lib/format';
+import { hostnameLabel, normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
+import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
 import {
   cardLegacyStorageKey,
   cardStorageKey,
@@ -15,18 +16,22 @@ import {
 } from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
+import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
 import {
+  ClockIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
   EyeIcon,
   EyeOffIcon,
+  FlameIcon,
+  GlobeIcon,
   LockIcon,
   ShieldAlertIcon,
   StarIcon,
   XIcon,
 } from './Icons';
-import { Avatar, BadgeChip } from './ProjectCard';
+import { BadgeChip } from './ProjectCard';
 
 function resolveCardChains(card: Card): string[] {
   if (card.chains?.length) return card.chains;
@@ -35,27 +40,73 @@ function resolveCardChains(card: Card): string[] {
 
 interface DetailSpecRow {
   label: string;
-  value: string | number;
+  value: ReactNode;
   mono?: boolean;
 }
 
-function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, string>): DetailSpecRow[] {
+function buildDetailRows(
+  card: Card,
+  chains: string[],
+  resolvedTicker: string | null,
+  fit: Record<FitKey, string>,
+): DetailSpecRow[] {
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
-  const tickerLabel = card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'No ticker yet';
   const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
+  const projectUrl = normalizeExternalUrl(card.url);
+
+  const tickerValue: ReactNode = resolvedTicker ? (
+    <CryptoTickerPill ticker={resolvedTicker} size={13} />
+  ) : card.b.includes('token') ? (
+    'Token live'
+  ) : (
+    'No ticker yet'
+  );
+
+  const chainsValue: ReactNode = chains.length ? (
+    <div className="dlg-spec-chains">
+      {chains.map(ch => (
+        <ChainBadge key={ch} chain={ch} size={13} />
+      ))}
+    </div>
+  ) : (
+    'Not specified'
+  );
+
   return [
     { label: 'Rank', value: `#${card.r}`, mono: true },
-    { label: 'Ticker', value: tickerLabel, mono: Boolean(card.t) },
-    { label: 'Chains', value: chains.length ? chains.join(', ') : 'Not specified' },
+    { label: 'Ticker', value: tickerValue },
+    { label: 'Chains', value: chainsValue },
     { label: 'Funding', value: card.f, mono: true },
     { label: 'Tasks (Open / Total)', value: card.tk, mono: true },
     { label: 'Heat (X Score)', value: safeHeat.toLocaleString('en-US'), mono: true },
     { label: 'Updated', value: card.u === 'today' ? 'Today' : card.u },
     { label: 'Best for', value: card.fit.map(f => fit[f]).join(', ') || '—' },
+    ...(projectUrl
+      ? [
+          {
+            label: 'Website',
+            value: (
+              <a href={projectUrl} target="_blank" rel="noopener noreferrer" className="dlg-spec-link">
+                <GlobeIcon size={12} />
+                <span>{hostnameLabel(projectUrl)}</span>
+                <ExternalLinkIcon size={12} />
+                <span className="sr"> (opens in a new tab)</span>
+              </a>
+            ),
+          },
+        ]
+      : []),
     ...(card.x ? [{ label: 'Code', value: card.x, mono: true }] : []),
-    ...(card.source ? [{ label: 'Source', value: card.source, mono: true }] : []),
+    ...(card.source
+      ? [
+          {
+            label: 'Source',
+            value: <PlatformBadge source={card.source} label={card.source} size={13} />,
+          },
+        ]
+      : []),
     { label: 'Status flags', value: flags || '—' },
   ];
 }
@@ -93,7 +144,10 @@ function DetailScores({ card }: { card: Card }) {
         </div>
         {hasHeatSubScore ? (
           <div className="subbar-row">
-            <span>Heat</span>
+            <span className="subbar-heat-label">
+              <FlameIcon size={12} className="dlg-heat-icon" />
+              <span>Heat</span>
+            </span>
             <div className="scorebar">
               <span className="fill-B" style={{ width: `${heatPercent}%` }} />
             </div>
@@ -102,7 +156,10 @@ function DetailScores({ card }: { card: Card }) {
         ) : (
           <div className="subbar-heat-block">
             <div className="subbar-heat-head">
-              <span className="subbar-heat-title">Heat</span>
+              <span className="subbar-heat-title">
+                <FlameIcon size={12} className="dlg-heat-icon" />
+                <span>Heat</span>
+              </span>
               <span className="subbar-heat-caption">Community heat · 10k max</span>
               <b className="mono subbar-heat-val">{orDash(safeHeat.toLocaleString('en-US'))}</b>
             </div>
@@ -179,12 +236,6 @@ function formatTaskCost(cost: number): string {
   return cost > 0 ? `$${cost}` : 'Free';
 }
 
-function formatTaskTime(timeMinutes: number | null): string {
-  return typeof timeMinutes === 'number' && Number.isFinite(timeMinutes) && timeMinutes > 0
-    ? ` · ${timeMinutes} min`
-    : '';
-}
-
 function TaskMetaDetails({
   task: t,
   isClosed,
@@ -197,7 +248,7 @@ function TaskMetaDetails({
   const normStatus = t.status.trim().toUpperCase();
   const showStatus = normStatus === 'OPEN' || isClosed;
   const costLabel = formatTaskCost(t.cost);
-  const timeLabel = formatTaskTime(t.timeMinutes);
+  const hasTime = typeof t.timeMinutes === 'number' && Number.isFinite(t.timeMinutes) && t.timeMinutes > 0;
   const displayTitle = duplicateTitle && t.type ? `${t.title} · ${t.type}` : t.title;
 
   return (
@@ -213,8 +264,14 @@ function TaskMetaDetails({
         {t.type && <span className="typetip">{t.type}</span>}
         {t.isExclusive && <span className="badge badge-early">Exclusive</span>}
         <span className="task-cost-pill mono">
-          {costLabel}
-          {timeLabel}
+          <span>{costLabel}</span>
+          {hasTime && (
+            <>
+              <span aria-hidden="true">·</span>
+              <ClockIcon size={11} className="task-time-icon" />
+              <span>{t.timeMinutes} min</span>
+            </>
+          )}
         </span>
       </span>
     </span>
@@ -361,6 +418,7 @@ interface BodyProps {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
+  logoIndex?: ProjectLogoIndex | null;
   onToggleSaved: (name: string, legacyKey?: string) => void;
   onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
@@ -374,6 +432,7 @@ function DetailDialogBody({
   profile,
   saved,
   doneTasks,
+  logoIndex,
   onToggleSaved,
   onToggleTask,
   onCopyBrief,
@@ -383,9 +442,10 @@ function DetailDialogBody({
   const [showBrief, setShowBrief] = useState(false);
   const icon = card.img ?? '';
   const chains = resolveCardChains(card);
+  const resolvedTicker = extractTickerFallback(card.n, card.t);
   const taskList = getCardTasks(card);
   const taskPairs = getCardTaskKeyPairs(card, taskList);
-  const rows = buildDetailRows(card, chains, fit);
+  const rows = buildDetailRows(card, chains, resolvedTicker, fit);
   const renderedBrief = showBrief ? buildBrief(card, profile) : null;
   const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
 
@@ -394,12 +454,39 @@ function DetailDialogBody({
       <div className="dlg-sticky-head">
         <div className="dlg-head">
           <div className="dlg-title-group">
-            <Avatar key={icon} name={card.n} src={icon} size={44} />
+            <EntityAvatar
+              key={icon || card.n}
+              name={card.n}
+              img={card.img}
+              ticker={resolvedTicker}
+              url={card.url}
+              chain={chains[0]}
+              source={card.source}
+              sectionId="airdrops"
+              logoIndex={logoIndex}
+              size={44}
+              shape="rounded"
+              className="dlg-entity-avatar"
+            />
             <div className="dlg-title-meta">
               <h2 id="detail-title">{card.n}</h2>
-              <p className="ticker mono">
-                {card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
-              </p>
+              <div className="dlg-subtitle">
+                {resolvedTicker ? (
+                  <CryptoTickerPill ticker={resolvedTicker} size={13} />
+                ) : (
+                  <span className="dlg-token-status mono">
+                    {card.b.includes('token') ? 'Token live' : 'Pre-token'}
+                  </span>
+                )}
+                <span className="dlg-meta-sep" aria-hidden="true">
+                  ·
+                </span>
+                <span className="dlg-meta-item mono">Rank #{card.r}</span>
+                <span className="dlg-meta-sep" aria-hidden="true">
+                  ·
+                </span>
+                <span className={`gradetip dlg-tier-pill ${card.g}`}>Tier {card.g}</span>
+              </div>
             </div>
           </div>
           <div className="dlg-head-actions">
@@ -475,6 +562,7 @@ interface Props {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
+  logoIndex?: ProjectLogoIndex | null;
   onToggleSaved: (name: string, legacyKey?: string) => void;
   onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
@@ -488,6 +576,7 @@ export function DetailDialog({
   profile,
   saved,
   doneTasks,
+  logoIndex,
   onToggleSaved,
   onToggleTask,
   onCopyBrief,
@@ -521,6 +610,7 @@ export function DetailDialog({
           profile={profile}
           saved={saved}
           doneTasks={doneTasks}
+          logoIndex={logoIndex}
           onToggleSaved={onToggleSaved}
           onToggleTask={onToggleTask}
           onCopyBrief={onCopyBrief}

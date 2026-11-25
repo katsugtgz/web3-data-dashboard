@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fmtPrice, fmtUsd } from '../src/lib/format';
+import { fmtPct, fmtPrice, fmtUsd } from '../src/lib/format';
 
 describe('worker fmtUsd bound behavior', () => {
   test('tiny amounts: fixed decimals, then em-dash floor (no false zero)', () => {
@@ -19,5 +19,20 @@ describe('fmtPrice sub-cent guard', () => {
     // 12-decimal cap leaves no significant digit here: must not print $0.000000000000.
     expect(fmtPrice(4e-13)).toBe('—');
     expect(fmtPrice(1e-15)).toBe('—');
+  });
+});
+
+describe('fmtPct signed-zero guard', () => {
+  test('never emits -0.00% or +0.00% for near-zero percentages (e.g. stablecoins)', () => {
+    expect(fmtPct(-0.001)).toBe('0.00%');
+    expect(fmtPct(-0.0049)).toBe('0.00%');
+    expect(fmtPct(-0)).toBe('0.00%');
+    expect(fmtPct(0)).toBe('0.00%');
+    expect(fmtPct(0.001)).toBe('0.00%');
+    expect(fmtPct(0.0049)).toBe('0.00%');
+    expect(fmtPct(0.005)).toBe('+0.01%');
+    expect(fmtPct(-0.005)).toBe('-0.01%');
+    expect(fmtPct(4.216)).toBe('+4.22%');
+    expect(fmtPct(-1.8)).toBe('-1.80%');
   });
 });

@@ -1001,4 +1001,144 @@ describe('curated multi-source airdrop aggregator', () => {
       globalThis.fetch = prevFetch;
     }
   });
+
+  test('extractDefiLlamaTokenlessAirdrops reads sanitized https logo and mergeCuratedAirdropFeeds propagates img/ticker across cards and TGE respecting trust boundaries', () => {
+    const defiRaw = [
+      {
+        name: 'Variational',
+        slug: 'variational',
+        symbol: '-',
+        category: 'Derivatives',
+        chains: ['Arbitrum'],
+        tvl: 120_000_000,
+        listedAt: 1770000000,
+        url: 'https://variational.io',
+        logo: 'https://icons.llama.fi/variational.png',
+      },
+      {
+        name: 'HttpLogoProto',
+        slug: 'httplogo',
+        symbol: '-',
+        category: 'Dexes',
+        chains: ['Base'],
+        tvl: 20_000_000,
+        url: 'https://httplogo.xyz',
+        logo: 'http://insecure.llama.fi/bad.png',
+      },
+      {
+        name: 'SlugFallbackProto',
+        slug: 'ether.fi-stake',
+        symbol: '-',
+        category: 'Liquid Staking',
+        chains: ['Ethereum'],
+        tvl: 15_000_000,
+        url: 'https://ether.fi',
+      },
+    ];
+    const defiFeed = extractDefiLlamaTokenlessAirdrops(defiRaw, NOW);
+    expect(defiFeed.cards[0].img).toBe('https://icons.llama.fi/variational.png');
+    expect(defiFeed.cards[1].img).toBe('');
+    expect(defiFeed.cards[2].img).toBe('https://icons.llamao.fi/icons/protocols/ether.fi-stake?w=48&h=48');
+
+    const surfFeed: AirdropFeed = {
+      cards: [
+        makeCard({
+          n: 'Variational',
+          id: 'surf-var',
+          source: 'Surf',
+          url: 'https://variational.io',
+          img: '',
+          t: null,
+          sc: 90,
+        }),
+        makeCard({
+          n: 'Treehouse',
+          id: 'surf-tree',
+          source: 'Surf',
+          url: 'https://treehouse.finance',
+          img: 'https://images.asksurf.ai/treehouse.png',
+          t: 'TREE',
+          sc: 85,
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+
+    const assoFeed: AirdropFeed = {
+      cards: [
+        makeCard({
+          n: 'Variational',
+          id: 'asso7878:variational',
+          source: 'ASSO7878',
+          url: 'https://variational.io',
+          img: 'https://untrusted-sheet.evil/pixel.png',
+          t: 'FAKE',
+          sc: 70,
+        }),
+        makeCard({
+          n: 'SheetOnlyProto',
+          id: 'asso7878:sheetonly',
+          source: 'ASSO7878',
+          url: 'https://sheetonly.xyz',
+          img: '',
+          t: 'SOP',
+          sc: 65,
+        }),
+      ],
+      tge: [
+        { n: 'Treehouse', t: '', s: 'Token live', d: '2026-11-20', source: 'ASSO7878' },
+        { n: 'Variational', t: '', s: 'Upcoming', d: '2026-12-01', source: 'AirdropAlert' },
+      ],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+
+    const trustedSecondary: AirdropFeed = {
+      cards: [
+        makeCard({
+          n: 'Variational',
+          id: 'merkl:variational',
+          source: 'Merkl',
+          url: 'https://variational.io',
+          img: 'https://icons.merkl.xyz/variational.png',
+          t: 'VAR',
+          sc: 72,
+        }),
+        makeCard({
+          n: 'SheetOnlyProto',
+          id: 'defillama:sheetonly',
+          source: 'DefiLlama',
+          url: 'https://sheetonly.xyz',
+          img: 'https://icons.llama.fi/sheetonly.png',
+          t: null,
+          sc: 60,
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+
+    const merged = mergeCuratedAirdropFeeds([surfFeed, assoFeed, trustedSecondary], NOW);
+    // Untrusted ASSO7878 must NOT inject img or t onto Surf primary; trusted Merkl CAN propagate img and t.
+    const variational = merged.cards.find(c => c.n === 'Variational')!;
+    expect(variational.img).toBe('https://icons.merkl.xyz/variational.png');
+    expect(variational.t).toBe('VAR');
+
+    // Trusted DefiLlama enriches an ASSO7878 primary card's missing img while preserving sheet's ticker.
+    const sheetOnly = merged.cards.find(c => c.n === 'SheetOnlyProto')!;
+    expect(sheetOnly.img).toBe('https://icons.llama.fi/sheetonly.png');
+    expect(sheetOnly.t).toBe('SOP');
+
+    // TGE entries cross-populate logo and ticker from matching merged cards by normalized project key.
+    const tgeTree = merged.tge.find(t => t.n === 'Treehouse')!;
+    expect(tgeTree.logo).toBe('https://images.asksurf.ai/treehouse.png');
+    expect(tgeTree.t).toBe('TREE');
+
+    const tgeVar = merged.tge.find(t => t.n === 'Variational')!;
+    expect(tgeVar.logo).toBe('https://icons.merkl.xyz/variational.png');
+    expect(tgeVar.t).toBe('VAR');
+  });
 });

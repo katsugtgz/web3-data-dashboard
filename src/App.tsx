@@ -1,6 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react';
 import { FIT, TYPE_MAP } from '../shared/constants';
-import type { Card } from '../shared/types';
+import type { Card, Tge } from '../shared/types';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
 import { DashboardFooter } from './components/DashboardFooter';
@@ -20,9 +20,11 @@ import { useMarkets } from './hooks/useMarkets';
 import { useSourcesHealth } from './hooks/useSourcesHealth';
 import { useTheme } from './hooks/useTheme';
 import { isCardSaved, useWatchlist } from './hooks/useWatchlist';
+import { buildProjectLogoIndex } from './lib/visualAssets';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
 const EMPTY_CARDS: Card[] = [];
+const EMPTY_TGE: Tge[] = [];
 
 export default function App() {
   const reconcileCardsRef = useRef<((nextCards: readonly Card[]) => void) | null>(null);
@@ -62,7 +64,15 @@ export default function App() {
   });
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
 
-  const tgeItems = airdrops.feed?.tge ?? [];
+  const tgeItems = airdrops.feed?.tge ?? EMPTY_TGE;
+  const projectLogoIndex = useMemo(
+    () =>
+      buildProjectLogoIndex(cards, markets?.sections, {
+        tge: tgeItems,
+        feedItems: drops.items,
+      }),
+    [cards, markets?.sections, tgeItems, drops.items],
+  );
   const {
     detail,
     handleSelectDetail,
@@ -182,6 +192,7 @@ export default function App() {
               xUnavailable,
               loading: drops.loading,
               failed: drops.failed,
+              logoIndex: projectLogoIndex,
               searchRef: dropsSearchRef,
               onApplyPending: drops.applyPending,
               onCopyBrief: handleCopyBrief,
@@ -197,6 +208,7 @@ export default function App() {
               isLive: airdrops.isLiveApi,
               saved,
               doneTasks,
+              logoIndex: projectLogoIndex,
               searchRef: airdropSearchRef,
               onToggleSaved: toggleSaved,
               onSelectDetail: handleSelectDetail,
