@@ -1,15 +1,26 @@
-import { formatClock } from '../lib/format';
+import type { NavGroup } from '../hooks/useDashboardTabs';
+import { formatClock, formatRelativeTime } from '../lib/format';
+import { BotIcon, MoonIcon, RefreshCwIcon, SunIcon } from './Icons';
 
 interface Props {
+  activeTabLabel: string;
+  activeSectionGroup: NavGroup;
   cardCount: number;
   fetchedAt: number | null;
   loading: boolean;
   failed: boolean;
   isLiveApi: boolean;
+  isStale?: boolean;
+  isMarketTab?: boolean;
   resolvedTheme: 'light' | 'dark';
   onRefresh: () => void;
   onOpenProfile: () => void;
   onToggleTheme: () => void;
+}
+
+function totalStatusPrefix(failed: boolean, isLiveApi: boolean, isStale: boolean): string {
+  if (failed) return 'Refresh failed ·';
+  return isLiveApi && !isStale ? 'Live ·' : 'Snapshot ·';
 }
 
 function FeedStatusText({
@@ -17,124 +28,152 @@ function FeedStatusText({
   fetchedAt,
   failed,
   isLiveApi,
+  isStale,
+  isMarketTab,
 }: {
   cardCount: number;
   fetchedAt: number | null;
   failed: boolean;
   isLiveApi: boolean;
+  isStale: boolean;
+  isMarketTab: boolean;
 }) {
   if (fetchedAt !== null) {
+    const modeLabel = failed
+      ? 'Refresh failed · last data'
+      : isLiveApi && !isStale
+        ? 'Live'
+        : 'Snapshot';
+    const timeSuffix =
+      isMarketTab || isStale
+        ? ` updated ${formatRelativeTime(fetchedAt)}`
+        : failed
+          ? ` · ${formatClock(fetchedAt)}`
+          : ` synced ${formatClock(fetchedAt)}`;
+
+    const compactAge = formatRelativeTime(fetchedAt);
+
     return (
       <span>
-        {failed ? 'Refresh failed · showing last data' : isLiveApi ? 'Live' : 'Snapshot'} · <span className="mono">{cardCount}</span>
-        {failed ? ' · ' : ' synced '}
-        <span className="mono">{formatClock(fetchedAt)}</span>
+        <span className="feed-pill-verbose">{modeLabel} · </span>
+        <span className="mono">{cardCount}</span>
+        <span className="feed-pill-mobile-age mono"> · {compactAge}</span>
+        <span className="feed-pill-verbose">{timeSuffix}</span>
       </span>
     );
   }
   if (failed) {
-    return <span>Unable to load radar data</span>;
+    return (
+      <span>
+        <span className="feed-pill-verbose">Unable to load radar data</span>
+        <span className="sr">Offline</span>
+      </span>
+    );
   }
-  return <span>Syncing radar…</span>;
+  return <span>Syncing…</span>;
 }
 
 export function DashboardHeader({
+  activeTabLabel,
+  activeSectionGroup,
   cardCount,
   fetchedAt,
   loading,
   failed,
   isLiveApi,
+  isStale = false,
+  isMarketTab = false,
   resolvedTheme,
   onRefresh,
   onOpenProfile,
   onToggleTheme,
 }: Props) {
-  const isLive = fetchedAt !== null && isLiveApi && !failed;
+  const isWarn = failed || isStale;
+  const isLive = fetchedAt !== null && isLiveApi && !isWarn;
   const themeAction = resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
   return (
     <header className="top">
-      <div className="container top-inner">
-        <div className="brand-block">
-          <div className="titlerow">
+      <h1 className="sr">Web3 Radar · {activeTabLabel}</h1>
+      <div className="top-inner">
+        <div className="top-left">
+          <div className="top-mobile-brand">
             <img
               className="logo"
               src={`${import.meta.env.BASE_URL}icon.svg`}
               alt=""
-              width={40}
-              height={40}
+              width={26}
+              height={26}
               decoding="async"
             />
-            <div>
-              <h1 className="pagetitle">Web3 Radar</h1>
-              <p className="sub">
-                Keyless English airdrop aggregator &amp; live market tracker · $0 Cloudflare Workers + GitHub Pages
-              </p>
-            </div>
+            <span className="mobile-brand-title">Web3 Radar</span>
+          </div>
+
+          <div className="top-context" aria-hidden="true">
+            <span className="top-group-pill">{activeSectionGroup}</span>
+            <span className="top-section-title">{activeTabLabel}</span>
           </div>
         </div>
 
         <div className="top-controls">
-          <div className={`feed-pill${isLive ? ' is-live' : ''}`} role="status" aria-live="polite">
+          <div
+            className={`feed-pill${isLive ? ' is-live' : ''}${isWarn ? ' is-warn' : ''}`}
+            role="status"
+            aria-live="polite"
+            title={
+              fetchedAt !== null
+                ? `${totalStatusPrefix(failed, isLiveApi, isStale)} ${cardCount} items · updated ${formatRelativeTime(fetchedAt)}`
+                : failed
+                  ? 'Unable to load radar data'
+                  : 'Syncing radar data'
+            }
+          >
             <span className="status-dot" aria-hidden="true" />
-            <FeedStatusText cardCount={cardCount} fetchedAt={fetchedAt} failed={failed} isLiveApi={isLiveApi} />
+            <FeedStatusText
+              cardCount={cardCount}
+              fetchedAt={fetchedAt}
+              failed={failed}
+              isLiveApi={isLiveApi}
+              isStale={isStale}
+              isMarketTab={isMarketTab}
+            />
           </div>
 
-          <button
-            type="button"
-            className="ctrl-btn"
-            onClick={onRefresh}
-            disabled={loading}
-            aria-label="Refresh feeds"
-            title="Refresh feeds"
-          >
-            <svg
-              className={loading ? 'spin' : undefined}
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          <div className="top-actions">
+            <button
+              type="button"
+              className="ctrl-btn"
+              onClick={onRefresh}
+              disabled={loading}
+              aria-label="Refresh feeds"
+              title="Refresh feeds"
             >
-              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-            </svg>
-            <span>Refresh</span>
-          </button>
+              <RefreshCwIcon size={15} className={loading ? 'spin' : undefined} />
+              <span className="ctrl-label">Refresh</span>
+            </button>
 
-          <button
-            type="button"
-            className="ctrl-btn"
-            onClick={onOpenProfile}
-            aria-label="Configure agent profile"
-            title="Configure agent environment profile"
-          >
-            <span>Agent profile</span>
-          </button>
+            <button
+              type="button"
+              className="ctrl-btn"
+              onClick={onOpenProfile}
+              aria-label="Configure agent profile"
+              title="Configure agent environment profile"
+            >
+              <BotIcon size={15} />
+              <span className="ctrl-label">Agent profile</span>
+            </button>
 
-          <button
-            type="button"
-            className="ctrl-btn"
-            onClick={onToggleTheme}
-            aria-label={themeAction}
-            title={themeAction}
-          >
-            {resolvedTheme === 'dark' ? (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-              </svg>
-            )}
-            <span>{resolvedTheme === 'dark' ? 'Light' : 'Dark'}</span>
-          </button>
+            <button
+              type="button"
+              className="ctrl-btn"
+              onClick={onToggleTheme}
+              aria-label={themeAction}
+              title={themeAction}
+            >
+              {resolvedTheme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
+              <span className="ctrl-label">{resolvedTheme === 'dark' ? 'Light' : 'Dark'}</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>

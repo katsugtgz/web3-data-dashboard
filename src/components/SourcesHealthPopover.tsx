@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { SourceHealth } from '../../shared/types';
+import { usePopoverDismiss } from '../hooks/usePopoverDismiss';
 import { formatRelativeTime } from '../lib/format';
+import { ActivityIcon, XIcon } from './Icons';
+
+type SourceFilter = 'all' | 'issues';
 
 interface Props {
   sources: SourceHealth[];
@@ -9,70 +13,172 @@ interface Props {
   failed: boolean;
 }
 
+function summarizeSources(
+  sources: SourceHealth[],
+  loading: boolean,
+  isLiveApi: boolean,
+  failed: boolean,
+) {
+  let okCount = 0;
+  let degradedCount = 0;
+  let downCount = 0;
+  let tgCount = 0;
+  let xCount = 0;
+
+  for (const s of sources) {
+    if (s.status === 'ok') okCount += 1;
+    else if (s.status === 'degraded') degradedCount += 1;
+    else downCount += 1;
+
+    if (s.platform === 'telegram') tgCount += 1;
+    else if (s.platform === 'x') xCount += 1;
+  }
+
+  const issueCount = degradedCount + downCount;
+  const overallDot =
+    downCount > 0 || (failed && sources.length === 0)
+      ? 'status-dot-down'
+      : degradedCount > 0
+        ? 'status-dot-degraded'
+        : sources.length > 0
+          ? 'status-dot-ok'
+          : '';
+
+  let label = isLiveApi
+    ? `Sources (${okCount}/${sources.length} ok)`
+    : `Sources snapshot (${okCount}/${sources.length} ok)`;
+  if (sources.length === 0) {
+    label = loading ? 'Checking sources…' : 'Sources unavailable';
+  }
+
+  return { okCount, degradedCount, downCount, issueCount, tgCount, xCount, overallDot, label };
+}
+
+function SourcesPopoverBody({
+  sources,
+  visibleSources,
+  loading,
+  isLiveApi,
+  failed,
+}: {
+  sources: SourceHealth[];
+  visibleSources: SourceHealth[];
+  loading: boolean;
+  isLiveApi: boolean;
+  failed: boolean;
+}) {
+  if (loading && sources.length === 0) {
+    return <p className="note">Checking sources…</p>;
+  }
+  if (failed && sources.length === 0) {
+    return (
+      <p className="note" role="status">
+        Sources health unavailable — retry later.
+      </p>
+    );
+  }
+  return (
+    <ul className="sources-list">
+      {!isLiveApi && (
+        <li className="note source-item">Snapshot data — may be stale until the live API responds.</li>
+      )}
+      {visibleSources.length === 0 ? (
+        <li className="note source-item-empty">
+          All {sources.length} sources operating normally.
+        </li>
+      ) : (
+        visibleSources.map(src => (
+          <li key={src.id} className="source-item">
+            <span className="source-item-main">
+              <span className={`status-dot status-dot-${src.status}`} aria-hidden="true" />
+              <span className="mono source-item-handle">@{src.handle}</span>
+              <span className="note">({src.platform})</span>
+            </span>
+            <span className="source-item-meta">
+              <span className={`badge status-${src.status}`}>{src.status}</span>
+              <span className="mono note">
+                {src.lastOkAt ? formatRelativeTime(src.lastOkAt) : 'never'}
+              </span>
+            </span>
+          </li>
+        ))
+      )}
+    </ul>
+  );
+}
+
 export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Props) {
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<SourceFilter>('all');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
-  const okCount = sources.filter(s => s.status === 'ok').length;
-  const degradedCount = sources.filter(s => s.status === 'degraded').length;
-  const downCount = sources.filter(s => s.status === 'down').length;
-  const tgCount = sources.filter(s => s.platform === 'telegram').length;
-  const xCount = sources.filter(s => s.platform === 'x').length;
+  const dismiss = useCallback(() => setOpen(false), []);
+  usePopoverDismiss(containerRef, open, dismiss, triggerRef);
 
-  const label =
-    sources.length === 0
-      ? loading
-        ? 'Checking sources…'
-        : 'Sources unavailable'
-      : isLiveApi
-        ? `Sources health (${okCount}/${sources.length} ok)`
-        : `Sources snapshot (${okCount}/${sources.length} ok)`;
+  const summary = summarizeSources(sources, loading, isLiveApi, failed);
+  const visibleSources = filter === 'issues' ? sources.filter(s => s.status !== 'ok') : sources;
 
   return (
-    <div className="sources-health">
+    <div className="sources-health" ref={containerRef}>
       <button
+        ref={triggerRef}
         type="button"
-        className="chip"
+        className="chip sources-trigger"
         aria-expanded={open}
         onClick={() => setOpen(v => !v)}
       >
-        {label}
+        <ActivityIcon size={14} />
+        <span className={`status-dot ${summary.overallDot}`} aria-hidden="true" />
+        <span>{summary.label}</span>
       </button>
 
       {open && (
         <div className="sources-popover" role="region" aria-label="Configured feed sources health">
           <div className="sources-popover-head">
             <strong>
-              TG {tgCount} · X {xCount} — {okCount} ok · {degradedCount} degraded · {downCount} down
+              TG {summary.tgCount} · X {summary.xCount} — {summary.okCount} ok · {summary.degradedCount} degraded · {summary.downCount} down
             </strong>
-            <button type="button" className="link-btn" onClick={() => setOpen(false)}>
-              Close
+            <button
+              type="button"
+              className="iconbtn"
+              onClick={dismiss}
+              aria-label="Close sources health"
+            >
+              <XIcon size={14} />
             </button>
           </div>
-          {loading && sources.length === 0 ? (
-            <p className="note">Checking sources…</p>
-          ) : failed && sources.length === 0 ? (
-            <p className="note" role="status">Sources health unavailable — retry later.</p>
-          ) : (
-            <ul className="sources-list">
-              {!isLiveApi && (
-                <li className="note source-item">Snapshot data — may be stale until the live API responds.</li>
-              )}
-              {sources.map(src => (
-                <li key={src.id} className="source-item">
-                  <span>
-                    <span className="mono">@{src.handle}</span>{' '}
-                    <span className="note">({src.platform})</span>
-                  </span>
-                  <span className="source-item-meta">
-                    <span className={`badge status-${src.status}`}>{src.status}</span>
-                    <span className="mono note">
-                      {src.lastOkAt ? formatRelativeTime(src.lastOkAt) : 'never'}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+
+          {sources.length > 0 && (
+            <div className="sources-popover-filter">
+              <div className="seg-group seg-group-compact" role="group" aria-label="Filter sources by status">
+                <button
+                  type="button"
+                  className="seg-btn"
+                  aria-pressed={filter === 'all'}
+                  onClick={() => setFilter('all')}
+                >
+                  All <span className="chip-count mono">{sources.length}</span>
+                </button>
+                <button
+                  type="button"
+                  className="seg-btn"
+                  aria-pressed={filter === 'issues'}
+                  onClick={() => setFilter('issues')}
+                >
+                  Degraded &amp; Down <span className="chip-count mono">{summary.issueCount}</span>
+                </button>
+              </div>
+            </div>
           )}
+
+          <SourcesPopoverBody
+            sources={sources}
+            visibleSources={visibleSources}
+            loading={loading}
+            isLiveApi={isLiveApi}
+            failed={failed}
+          />
         </div>
       )}
     </div>

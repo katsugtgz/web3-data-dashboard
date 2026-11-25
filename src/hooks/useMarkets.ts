@@ -9,6 +9,7 @@ export interface MarketsState {
   markets: MarketsResponse | null;
   loading: boolean;
   failed: boolean;
+  isLiveApi: boolean;
   refresh: () => void;
 }
 
@@ -16,6 +17,7 @@ export function useMarkets(): MarketsState {
   const [markets, setMarkets] = useState<MarketsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [hasLiveApi, setHasLiveApi] = useState(false);
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
@@ -38,7 +40,9 @@ export function useMarkets(): MarketsState {
             if (mode !== 'background') setLoading(false);
             return;
           }
-          hasLiveRef.current = res.source === 'api';
+          const isApi = res.source === 'api';
+          hasLiveRef.current = isApi;
+          setHasLiveApi(isApi);
           etagRef.current = res.etag;
           setMarkets(res.body);
         }
@@ -62,5 +66,5 @@ export function useMarkets(): MarketsState {
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
 
-  return { markets, loading, failed, refresh };
+  return { markets, loading, failed, isLiveApi: hasLiveApi && !failed, refresh };
 }

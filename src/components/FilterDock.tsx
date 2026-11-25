@@ -2,6 +2,7 @@ import { useState, type RefObject } from 'react';
 import type { FitKey } from '../../shared/types';
 import type { AirdropFiltersState, SortKey } from '../hooks/useAirdropFilters';
 import { GRADE_ORDER } from '../lib/labels';
+import { SearchIcon, SlidersHorizontalIcon, XIcon } from './Icons';
 
 interface Props {
   filters: AirdropFiltersState;
@@ -52,7 +53,8 @@ function AdvancedFilters({ filters, fit }: { filters: AirdropFiltersState; fit: 
                 aria-pressed={filters.activeChain === name}
                 onClick={() => filters.setChain(name)}
               >
-                {name} <span className="chip-count mono">{cnt}</span>
+                <span>{name}</span>
+                <span className="chip-count mono">{cnt}</span>
               </button>
             ))}
             {filters.extraChains.length > 0 && (
@@ -113,9 +115,9 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
   ] as const;
 
   return (
-    <div className="filter-dock">
+    <div className="filter-dock airdrop-filter-dock">
       <div className="dock-primary">
-        <div className="seg-group" role="group" aria-label="Project token status">
+        <div className="seg-group airdrop-status-seg" role="group" aria-label="Project token status">
           {statusTabs.map(([key, lbl, count]) => (
             <button
               key={key}
@@ -124,13 +126,15 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
               aria-pressed={filters.status === key}
               onClick={() => filters.setStatus(key)}
             >
-              {lbl} <span className="chip-count mono">{count}</span>
+              <span>{lbl}</span>
+              <span className="chip-count mono">{count}</span>
             </button>
           ))}
         </div>
 
-        <div className="dock-right">
-          <div className="search">
+        <div className="dock-right airdrop-dock-right">
+          <div className="search-box airdrop-search-box">
+            <SearchIcon size={15} className="search-icon" />
             <label htmlFor="proj-q" className="sr">
               Search projects
             </label>
@@ -138,7 +142,7 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
               ref={searchRef}
               id="proj-q"
               type="search"
-              placeholder="Search name, ticker, chain… (/)"
+              placeholder="Search project, ticker…"
               value={filters.query}
               onChange={e => filters.setQuery(e.target.value)}
               onKeyDown={e => {
@@ -148,9 +152,26 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
                 }
               }}
             />
+            {filters.query ? (
+              <button
+                type="button"
+                className="search-clear"
+                aria-label="Clear search"
+                onClick={() => {
+                  filters.setQuery('');
+                  searchRef.current?.focus();
+                }}
+              >
+                <XIcon size={13} />
+              </button>
+            ) : (
+              <kbd className="kbd-hint" aria-hidden="true">
+                /
+              </kbd>
+            )}
           </div>
 
-          <label className="sort-wrap" htmlFor="proj-sort">
+          <label className="sort-wrap airdrop-sort-wrap" htmlFor="proj-sort">
             <span className="sr">Sort projects by</span>
             <select
               id="proj-sort"
@@ -168,7 +189,7 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
 
           <button
             type="button"
-            className="chip"
+            className="dock-toggle-btn airdrop-free-btn"
             aria-pressed={filters.freeOnly}
             onClick={filters.toggleFreeOnly}
           >
@@ -177,13 +198,17 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
 
           <button
             type="button"
-            className="chip"
+            className="dock-toggle-btn airdrop-more-btn"
             aria-expanded={showMoreFilters}
             aria-controls="more-filters"
             aria-pressed={showMoreFilters || filters.activeAdvancedCount > 0}
             onClick={() => setShowMoreFilters(v => !v)}
           >
-            Filters{filters.activeAdvancedCount > 0 ? ` (${filters.activeAdvancedCount})` : ''}
+            <SlidersHorizontalIcon size={14} />
+            <span>Filters</span>
+            {filters.activeAdvancedCount > 0 && (
+              <span className="dock-count-pill mono">{filters.activeAdvancedCount}</span>
+            )}
           </button>
         </div>
       </div>

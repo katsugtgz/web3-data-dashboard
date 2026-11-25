@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-
+import { AlertTriangleIcon, CheckCircle2Icon } from './Icons';
 import type { ToastState } from './Toast';
 
 export interface CopyStatus {
@@ -40,7 +40,16 @@ export function CopyStatusBanner({ status }: { status: CopyStatus | null }) {
         <span ref={firstRef} />
         <span ref={secondRef} />
       </span>
-      {status && <p className={`copy-status copy-status-${status.tone}`} aria-hidden="true">{status.message}</p>}
+      {status && (
+        <p className={`copy-status copy-status-${status.tone}`} aria-hidden="true">
+          {status.tone === 'ok' ? (
+            <CheckCircle2Icon size={15} className="copy-status-icon" />
+          ) : (
+            <AlertTriangleIcon size={15} className="copy-status-icon" />
+          )}
+          <span>{status.message}</span>
+        </p>
+      )}
     </>
   );
 }

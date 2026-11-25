@@ -1,0 +1,481 @@
+/* AstryX-inspired semantic design tokens: dual Light / Charcoal Dark palette */
+:root {
+  color-scheme: light dark;
+
+  /* Surface ladders */
+  --color-background-body-light: #F5F6F8;
+  --color-background-body-dark: #0E0F12;
+  --color-background-surface-light: #FFFFFF;
+  --color-background-surface-dark: #15171B;
+  --color-background-card-light: #FFFFFF;
+  --color-background-card-dark: #1A1C21;
+  --color-background-muted-light: #EFF1F5;
+  --color-background-muted-dark: #22252B;
+  --color-background-popover-light: #FFFFFF;
+  --color-background-popover-dark: #24272E;
+  --color-input-bg-light: #FFFFFF;
+  --color-input-bg-dark: #1E2128;
+
+  /* Text hierarchy (WCAG AA >= 4.5:1) */
+  --color-text-primary-light: #0A1317;
+  --color-text-primary-dark: #EDF0F3;
+  --color-text-secondary-light: #485664;
+  --color-text-secondary-dark: #B6BDC9;
+  --color-text-supporting-light: #576574;
+  --color-text-supporting-dark: #9BA3B0;
+  --color-text-accent-light: #0056C4;
+  --color-text-accent-dark: #60AFFF;
+
+  /* Accent (button fill with #FFFFFF text >= 4.5:1 in both modes) */
+  --color-accent-light: #0064E0;
+  --color-accent-dark: #0171E3;
+  --color-accent-hover-light: #0050B8;
+  --color-accent-hover-dark: #1E82EB;
+  --color-accent-muted-light: rgba(0, 100, 224, 0.10);
+  --color-accent-muted-dark: rgba(38, 148, 254, 0.16);
+  --color-on-accent-light: #FFFFFF;
+  --color-on-accent-dark: #FFFFFF;
+
+  /* Borders & overlays */
+  --color-border-light: rgba(10, 19, 23, 0.09);
+  --color-border-dark: rgba(255, 255, 255, 0.11);
+  --color-border-emphasized-light: rgba(10, 19, 23, 0.18);
+  --color-border-emphasized-dark: rgba(255, 255, 255, 0.22);
+  --color-overlay-hover-light: rgba(10, 19, 23, 0.045);
+  --color-overlay-hover-dark: rgba(255, 255, 255, 0.055);
+  --color-overlay-pressed-light: rgba(10, 19, 23, 0.09);
+  --color-overlay-pressed-dark: rgba(255, 255, 255, 0.10);
+
+  /* Status tokens (WCAG AA >= 4.5:1 fg-to-bg in both modes) */
+  --color-status-success-light: #046C4E;
+  --color-status-success-dark: #34D399;
+  --color-status-success-bg-light: #E2F7EE;
+  --color-status-success-bg-dark: #102B22;
+
+  --color-status-warning-light: #78350F;
+  --color-status-warning-dark: #FBBF24;
+  --color-status-warning-bg-light: #FEF3C7;
+  --color-status-warning-bg-dark: #33250B;
+
+  --color-status-error-light: #BE123C;
+  --color-status-error-dark: #FB7185;
+  --color-status-error-bg-light: #FFE4E9;
+  --color-status-error-bg-dark: #36151E;
+
+  --color-status-info-light: #0056C4;
+  --color-status-info-dark: #60AFFF;
+  --color-status-info-bg-light: #E6F0FF;
+  --color-status-info-bg-dark: #122842;
+
+  /* Score bar fill tokens */
+  --color-score-s-light: #0064E0;
+  --color-score-s-dark: #2E90FA;
+  --color-score-a-light: #0D9488;
+  --color-score-a-dark: #2DD4BF;
+  --color-score-neutral-light: #64748B;
+  --color-score-neutral-dark: #94A3B8;
+
+  /* Tier badge tokens (S amber/gold, A blue, B neutral, C muted) */
+  --color-tier-s-bg-light: #FEF3C7;
+  --color-tier-s-bg-dark: #33250B;
+  --color-tier-s-fg-light: #8A3C0B;
+  --color-tier-s-fg-dark: #FBBF24;
+
+  --color-tier-a-bg-light: #E0EEFF;
+  --color-tier-a-bg-dark: #122842;
+  --color-tier-a-fg-light: #0052BD;
+  --color-tier-a-fg-dark: #60AFFF;
+
+  --color-tier-b-bg-light: #E8ECF1;
+  --color-tier-b-bg-dark: #252931;
+  --color-tier-b-fg-light: #334155;
+  --color-tier-b-fg-dark: #CBD5E1;
+
+  --color-tier-c-bg-light: #EFF1F5;
+  --color-tier-c-bg-dark: #1F2229;
+  --color-tier-c-fg-light: #52606D;
+  --color-tier-c-fg-dark: #A6AFBC;
+
+  /* Select chevron icons */
+  --select-chevron-light: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23485664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23B6BDC9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Elevation */
+  --shadow-low-light: 0 1px 2px rgba(10, 19, 23, 0.05), 0 1px 3px rgba(10, 19, 23, 0.04);
+  --shadow-low-dark: 0 1px 2px rgba(0, 0, 0, 0.36), 0 1px 3px rgba(0, 0, 0, 0.28);
+  --shadow-med-light: 0 8px 24px -6px rgba(10, 19, 23, 0.10), 0 2px 6px -1px rgba(10, 19, 23, 0.05);
+  --shadow-med-dark: 0 10px 28px -6px rgba(0, 0, 0, 0.56), 0 2px 8px -1px rgba(0, 0, 0, 0.36);
+  --shadow-high-light: 0 20px 44px -12px rgba(10, 19, 23, 0.18), 0 4px 12px -2px rgba(10, 19, 23, 0.08);
+  --shadow-high-dark: 0 24px 52px -12px rgba(0, 0, 0, 0.72), 0 6px 16px -2px rgba(0, 0, 0, 0.45);
+  --shadow-inset-hover-light: inset 0 0 0 1px rgba(10, 19, 23, 0.12);
+  --shadow-inset-hover-dark: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  --shadow-inset-selected-light: inset 0 0 0 1.5px #0064E0;
+  --shadow-inset-selected-dark: inset 0 0 0 1.5px #0171E3;
+
+  /* Active semantic tokens (light fallback defaults) */
+  --color-background-body: var(--color-background-body-light);
+  --color-background-surface: var(--color-background-surface-light);
+  --color-background-card: var(--color-background-card-light);
+  --color-background-muted: var(--color-background-muted-light);
+  --color-background-popover: var(--color-background-popover-light);
+  --color-input-bg: var(--color-input-bg-light);
+
+  --color-text-primary: var(--color-text-primary-light);
+  --color-text-secondary: var(--color-text-secondary-light);
+  --color-text-supporting: var(--color-text-supporting-light);
+  --color-text-accent: var(--color-text-accent-light);
+
+  --color-accent: var(--color-accent-light);
+  --color-accent-hover: var(--color-accent-hover-light);
+  --color-accent-muted: var(--color-accent-muted-light);
+  --color-on-accent: var(--color-on-accent-light);
+
+  --color-border: var(--color-border-light);
+  --color-border-emphasized: var(--color-border-emphasized-light);
+  --color-overlay-hover: var(--color-overlay-hover-light);
+  --color-overlay-pressed: var(--color-overlay-pressed-light);
+
+  --color-status-success: var(--color-status-success-light);
+  --color-status-success-bg: var(--color-status-success-bg-light);
+  --color-status-warning: var(--color-status-warning-light);
+  --color-status-warning-bg: var(--color-status-warning-bg-light);
+  --color-status-error: var(--color-status-error-light);
+  --color-status-error-bg: var(--color-status-error-bg-light);
+  --color-status-info: var(--color-status-info-light);
+  --color-status-info-bg: var(--color-status-info-bg-light);
+
+  --color-score-s: var(--color-score-s-light);
+  --color-score-a: var(--color-score-a-light);
+  --color-score-neutral: var(--color-score-neutral-light);
+
+  --color-tier-s-bg: var(--color-tier-s-bg-light);
+  --color-tier-s-fg: var(--color-tier-s-fg-light);
+  --color-tier-a-bg: var(--color-tier-a-bg-light);
+  --color-tier-a-fg: var(--color-tier-a-fg-light);
+  --color-tier-b-bg: var(--color-tier-b-bg-light);
+  --color-tier-b-fg: var(--color-tier-b-fg-light);
+  --color-tier-c-bg: var(--color-tier-c-bg-light);
+  --color-tier-c-fg: var(--color-tier-c-fg-light);
+
+  --select-chevron: var(--select-chevron-light);
+
+  --shadow-low: var(--shadow-low-light);
+  --shadow-med: var(--shadow-med-light);
+  --shadow-high: var(--shadow-high-light);
+  --shadow-inset-hover: var(--shadow-inset-hover-light);
+  --shadow-inset-selected: var(--shadow-inset-selected-light);
+
+  /* Typography (AstryX 14px base, 1.2 ratio, >= 12px readable floor) */
+  --font-sans: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.1875rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  /* Spacing scale (rem) */
+  --spacing-0: 0rem;
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-5: 1.25rem;
+  --spacing-6: 1.5rem;
+  --spacing-7: 1.75rem;
+  --spacing-8: 2rem;
+  --spacing-9: 2.25rem;
+  --spacing-10: 2.5rem;
+  --spacing-11: 2.75rem;
+  --spacing-12: 3rem;
+
+  /* Control sizes */
+  --size-element-sm: 28px;
+  --size-element-md: 34px;
+  --size-element-lg: 40px;
+
+  /* Concentric radii */
+  --radius-inner: 4px;
+  --radius-element: 8px;
+  --radius-container: 12px;
+  --radius-dialog: 16px;
+  --radius-full: 9999px;
+
+  /* Motion */
+  --duration-fast: 125ms;
+  --duration-medium: 240ms;
+  --ease-standard: cubic-bezier(0.24, 1, 0.4, 1);
+
+  /* Focus ring */
+  --focus-outline-width: 2px;
+  --focus-outline-offset: 2px;
+
+  /* Backward-compatible legacy & short aliases */
+  --bg: var(--color-background-body);
+  --card: var(--color-background-card);
+  --surface: var(--color-background-muted);
+  --surface-hover: var(--color-overlay-hover);
+  --input-bg: var(--color-input-bg);
+  --fg: var(--color-text-primary);
+  --muted: var(--color-text-secondary);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-emphasized);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --accent-soft: var(--color-accent-muted);
+  --accent-fg: var(--color-on-accent);
+  --accent-text: var(--color-text-accent);
+  --up: var(--color-status-success);
+  --up-soft: var(--color-status-success-bg);
+  --dn: var(--color-status-error);
+  --dn-soft: var(--color-status-error-bg);
+  --score-s: var(--color-score-s);
+  --score-a: var(--color-score-a);
+  --score-neutral: var(--color-score-neutral);
+  --tier-s-bg: var(--color-tier-s-bg);
+  --tier-s-fg: var(--color-tier-s-fg);
+  --tier-a-bg: var(--color-tier-a-bg);
+  --tier-a-fg: var(--color-tier-a-fg);
+  --tier-b-bg: var(--color-tier-b-bg);
+  --tier-b-fg: var(--color-tier-b-fg);
+  --tier-c-bg: var(--color-tier-c-bg);
+  --tier-c-fg: var(--color-tier-c-fg);
+  --shadow-sm: var(--shadow-low);
+  --shadow-md: var(--shadow-med);
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+  --radius-sm: var(--radius-inner);
+  --radius: var(--radius-element);
+  --radius-lg: var(--radius-container);
+
+  accent-color: var(--color-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background-body: var(--color-background-body-dark);
+    --color-background-surface: var(--color-background-surface-dark);
+    --color-background-card: var(--color-background-card-dark);
+    --color-background-muted: var(--color-background-muted-dark);
+    --color-background-popover: var(--color-background-popover-dark);
+    --color-input-bg: var(--color-input-bg-dark);
+
+    --color-text-primary: var(--color-text-primary-dark);
+    --color-text-secondary: var(--color-text-secondary-dark);
+    --color-text-supporting: var(--color-text-supporting-dark);
+    --color-text-accent: var(--color-text-accent-dark);
+
+    --color-accent: var(--color-accent-dark);
+    --color-accent-hover: var(--color-accent-hover-dark);
+    --color-accent-muted: var(--color-accent-muted-dark);
+    --color-on-accent: var(--color-on-accent-dark);
+
+    --color-border: var(--color-border-dark);
+    --color-border-emphasized: var(--color-border-emphasized-dark);
+    --color-overlay-hover: var(--color-overlay-hover-dark);
+    --color-overlay-pressed: var(--color-overlay-pressed-dark);
+
+    --color-status-success: var(--color-status-success-dark);
+    --color-status-success-bg: var(--color-status-success-bg-dark);
+    --color-status-warning: var(--color-status-warning-dark);
+    --color-status-warning-bg: var(--color-status-warning-bg-dark);
+    --color-status-error: var(--color-status-error-dark);
+    --color-status-error-bg: var(--color-status-error-bg-dark);
+    --color-status-info: var(--color-status-info-dark);
+    --color-status-info-bg: var(--color-status-info-bg-dark);
+
+    --color-score-s: var(--color-score-s-dark);
+    --color-score-a: var(--color-score-a-dark);
+    --color-score-neutral: var(--color-score-neutral-dark);
+
+    --color-tier-s-bg: var(--color-tier-s-bg-dark);
+    --color-tier-s-fg: var(--color-tier-s-fg-dark);
+    --color-tier-a-bg: var(--color-tier-a-bg-dark);
+    --color-tier-a-fg: var(--color-tier-a-fg-dark);
+    --color-tier-b-bg: var(--color-tier-b-bg-dark);
+    --color-tier-b-fg: var(--color-tier-b-fg-dark);
+    --color-tier-c-bg: var(--color-tier-c-bg-dark);
+    --color-tier-c-fg: var(--color-tier-c-fg-dark);
+
+    --select-chevron: var(--select-chevron-dark);
+
+    --shadow-low: var(--shadow-low-dark);
+    --shadow-med: var(--shadow-med-dark);
+    --shadow-high: var(--shadow-high-dark);
+    --shadow-inset-hover: var(--shadow-inset-hover-dark);
+    --shadow-inset-selected: var(--shadow-inset-selected-dark);
+  }
+}
+
+@supports (color: light-dark(white, black)) {
+  :root {
+    --color-background-body: light-dark(var(--color-background-body-light), var(--color-background-body-dark));
+    --color-background-surface: light-dark(var(--color-background-surface-light), var(--color-background-surface-dark));
+    --color-background-card: light-dark(var(--color-background-card-light), var(--color-background-card-dark));
+    --color-background-muted: light-dark(var(--color-background-muted-light), var(--color-background-muted-dark));
+    --color-background-popover: light-dark(var(--color-background-popover-light), var(--color-background-popover-dark));
+    --color-input-bg: light-dark(var(--color-input-bg-light), var(--color-input-bg-dark));
+
+    --color-text-primary: light-dark(var(--color-text-primary-light), var(--color-text-primary-dark));
+    --color-text-secondary: light-dark(var(--color-text-secondary-light), var(--color-text-secondary-dark));
+    --color-text-supporting: light-dark(var(--color-text-supporting-light), var(--color-text-supporting-dark));
+    --color-text-accent: light-dark(var(--color-text-accent-light), var(--color-text-accent-dark));
+
+    --color-accent: light-dark(var(--color-accent-light), var(--color-accent-dark));
+    --color-accent-hover: light-dark(var(--color-accent-hover-light), var(--color-accent-hover-dark));
+    --color-accent-muted: light-dark(var(--color-accent-muted-light), var(--color-accent-muted-dark));
+    --color-on-accent: light-dark(var(--color-on-accent-light), var(--color-on-accent-dark));
+
+    --color-border: light-dark(var(--color-border-light), var(--color-border-dark));
+    --color-border-emphasized: light-dark(var(--color-border-emphasized-light), var(--color-border-emphasized-dark));
+    --color-overlay-hover: light-dark(var(--color-overlay-hover-light), var(--color-overlay-hover-dark));
+    --color-overlay-pressed: light-dark(var(--color-overlay-pressed-light), var(--color-overlay-pressed-dark));
+
+    --color-status-success: light-dark(var(--color-status-success-light), var(--color-status-success-dark));
+    --color-status-success-bg: light-dark(var(--color-status-success-bg-light), var(--color-status-success-bg-dark));
+    --color-status-warning: light-dark(var(--color-status-warning-light), var(--color-status-warning-dark));
+    --color-status-warning-bg: light-dark(var(--color-status-warning-bg-light), var(--color-status-warning-bg-dark));
+    --color-status-error: light-dark(var(--color-status-error-light), var(--color-status-error-dark));
+    --color-status-error-bg: light-dark(var(--color-status-error-bg-light), var(--color-status-error-bg-dark));
+    --color-status-info: light-dark(var(--color-status-info-light), var(--color-status-info-dark));
+    --color-status-info-bg: light-dark(var(--color-status-info-bg-light), var(--color-status-info-bg-dark));
+
+    --color-score-s: light-dark(var(--color-score-s-light), var(--color-score-s-dark));
+    --color-score-a: light-dark(var(--color-score-a-light), var(--color-score-a-dark));
+    --color-score-neutral: light-dark(var(--color-score-neutral-light), var(--color-score-neutral-dark));
+
+    --color-tier-s-bg: light-dark(var(--color-tier-s-bg-light), var(--color-tier-s-bg-dark));
+    --color-tier-s-fg: light-dark(var(--color-tier-s-fg-light), var(--color-tier-s-fg-dark));
+    --color-tier-a-bg: light-dark(var(--color-tier-a-bg-light), var(--color-tier-a-bg-dark));
+    --color-tier-a-fg: light-dark(var(--color-tier-a-fg-light), var(--color-tier-a-fg-dark));
+    --color-tier-b-bg: light-dark(var(--color-tier-b-bg-light), var(--color-tier-b-bg-dark));
+    --color-tier-b-fg: light-dark(var(--color-tier-b-fg-light), var(--color-tier-b-fg-dark));
+    --color-tier-c-bg: light-dark(var(--color-tier-c-bg-light), var(--color-tier-c-bg-dark));
+    --color-tier-c-fg: light-dark(var(--color-tier-c-fg-light), var(--color-tier-c-fg-dark));
+  }
+}
+
+/* Explicit meta[name="color-scheme"] overrides ensure instant switching across all engines and tests */
+:root:has(> head > meta[name="color-scheme"][content="dark"]) {
+  color-scheme: dark;
+
+  --color-background-body: var(--color-background-body-dark);
+  --color-background-surface: var(--color-background-surface-dark);
+  --color-background-card: var(--color-background-card-dark);
+  --color-background-muted: var(--color-background-muted-dark);
+  --color-background-popover: var(--color-background-popover-dark);
+  --color-input-bg: var(--color-input-bg-dark);
+
+  --color-text-primary: var(--color-text-primary-dark);
+  --color-text-secondary: var(--color-text-secondary-dark);
+  --color-text-supporting: var(--color-text-supporting-dark);
+  --color-text-accent: var(--color-text-accent-dark);
+
+  --color-accent: var(--color-accent-dark);
+  --color-accent-hover: var(--color-accent-hover-dark);
+  --color-accent-muted: var(--color-accent-muted-dark);
+  --color-on-accent: var(--color-on-accent-dark);
+
+  --color-border: var(--color-border-dark);
+  --color-border-emphasized: var(--color-border-emphasized-dark);
+  --color-overlay-hover: var(--color-overlay-hover-dark);
+  --color-overlay-pressed: var(--color-overlay-pressed-dark);
+
+  --color-status-success: var(--color-status-success-dark);
+  --color-status-success-bg: var(--color-status-success-bg-dark);
+  --color-status-warning: var(--color-status-warning-dark);
+  --color-status-warning-bg: var(--color-status-warning-bg-dark);
+  --color-status-error: var(--color-status-error-dark);
+  --color-status-error-bg: var(--color-status-error-bg-dark);
+  --color-status-info: var(--color-status-info-dark);
+  --color-status-info-bg: var(--color-status-info-bg-dark);
+
+  --color-score-s: var(--color-score-s-dark);
+  --color-score-a: var(--color-score-a-dark);
+  --color-score-neutral: var(--color-score-neutral-dark);
+
+  --color-tier-s-bg: var(--color-tier-s-bg-dark);
+  --color-tier-s-fg: var(--color-tier-s-fg-dark);
+  --color-tier-a-bg: var(--color-tier-a-bg-dark);
+  --color-tier-a-fg: var(--color-tier-a-fg-dark);
+  --color-tier-b-bg: var(--color-tier-b-bg-dark);
+  --color-tier-b-fg: var(--color-tier-b-fg-dark);
+  --color-tier-c-bg: var(--color-tier-c-bg-dark);
+  --color-tier-c-fg: var(--color-tier-c-fg-dark);
+
+  --select-chevron: var(--select-chevron-dark);
+
+  --shadow-low: var(--shadow-low-dark);
+  --shadow-med: var(--shadow-med-dark);
+  --shadow-high: var(--shadow-high-dark);
+  --shadow-inset-hover: var(--shadow-inset-hover-dark);
+  --shadow-inset-selected: var(--shadow-inset-selected-dark);
+}
+
+:root:has(> head > meta[name="color-scheme"][content="light"]) {
+  color-scheme: light;
+
+  --color-background-body: var(--color-background-body-light);
+  --color-background-surface: var(--color-background-surface-light);
+  --color-background-card: var(--color-background-card-light);
+  --color-background-muted: var(--color-background-muted-light);
+  --color-background-popover: var(--color-background-popover-light);
+  --color-input-bg: var(--color-input-bg-light);
+
+  --color-text-primary: var(--color-text-primary-light);
+  --color-text-secondary: var(--color-text-secondary-light);
+  --color-text-supporting: var(--color-text-supporting-light);
+  --color-text-accent: var(--color-text-accent-light);
+
+  --color-accent: var(--color-accent-light);
+  --color-accent-hover: var(--color-accent-hover-light);
+  --color-accent-muted: var(--color-accent-muted-light);
+  --color-on-accent: var(--color-on-accent-light);
+
+  --color-border: var(--color-border-light);
+  --color-border-emphasized: var(--color-border-emphasized-light);
+  --color-overlay-hover: var(--color-overlay-hover-light);
+  --color-overlay-pressed: var(--color-overlay-pressed-light);
+
+  --color-status-success: var(--color-status-success-light);
+  --color-status-success-bg: var(--color-status-success-bg-light);
+  --color-status-warning: var(--color-status-warning-light);
+  --color-status-warning-bg: var(--color-status-warning-bg-light);
+  --color-status-error: var(--color-status-error-light);
+  --color-status-error-bg: var(--color-status-error-bg-light);
+  --color-status-info: var(--color-status-info-light);
+  --color-status-info-bg: var(--color-status-info-bg-light);
+
+  --color-score-s: var(--color-score-s-light);
+  --color-score-a: var(--color-score-a-light);
+  --color-score-neutral: var(--color-score-neutral-light);
+
+  --color-tier-s-bg: var(--color-tier-s-bg-light);
+  --color-tier-s-fg: var(--color-tier-s-fg-light);
+  --color-tier-a-bg: var(--color-tier-a-bg-light);
+  --color-tier-a-fg: var(--color-tier-a-fg-light);
+  --color-tier-b-bg: var(--color-tier-b-bg-light);
+  --color-tier-b-fg: var(--color-tier-b-fg-light);
+  --color-tier-c-bg: var(--color-tier-c-bg-light);
+  --color-tier-c-fg: var(--color-tier-c-fg-light);
+
+  --select-chevron: var(--select-chevron-light);
+
+  --shadow-low: var(--shadow-low-light);
+  --shadow-med: var(--shadow-med-light);
+  --shadow-high: var(--shadow-high-light);
+  --shadow-inset-hover: var(--shadow-inset-hover-light);
+  --shadow-inset-selected: var(--shadow-inset-selected-light);
+}
+
+@supports not (color: light-dark(white, black)) {
+  :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+  }
+
+  :root:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+  }
+}

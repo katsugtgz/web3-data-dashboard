@@ -1,0 +1,690 @@
+/* Feeds, filter docks, KPI cards, project cards, and TGE rail refinements */
+
+/* KPI Strip Enhancements (scoped — base .kpi-strip layout owned by components.css) */
+.kpi-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.kpi-icon {
+  color: var(--color-text-secondary);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.kpi-card.is-active .kpi-icon {
+  color: var(--color-text-accent);
+}
+
+.kpi-icon-ok,
+.kpi-card.is-active .kpi-icon-ok {
+  color: var(--color-status-success);
+}
+
+.kpi-icon-risk,
+.kpi-card.is-active .kpi-icon-risk {
+  color: var(--color-status-error);
+}
+
+.kpi-sub-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kpi-card-jump:hover .kpi-sub-cue {
+  color: var(--color-text-accent);
+}
+
+.kpi-card-static {
+  cursor: default;
+}
+
+.kpi-card-static:hover {
+  border-color: var(--color-border);
+  box-shadow: none;
+  transform: none;
+}
+
+.kpi-card.is-risk-active {
+  border-color: color-mix(in srgb, var(--color-status-error) 48%, var(--color-border));
+  background: color-mix(in srgb, var(--color-status-error-bg) 45%, var(--color-background-card));
+  box-shadow: inset 0 2px 0 var(--color-status-error);
+}
+
+/* Tier Pill Modifier (self-explanatory "Tier S" / "Tier A" sizing) */
+.gradetip.tier-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+/* Compact Button Sizing (paired with .btn-tonal / .btn-subtle) */
+.btn-sm {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+}
+
+/* Filter Dock Controls & Search Box Polish */
+.search-box input[type='search']::-webkit-search-decoration,
+.search-box input[type='search']::-webkit-search-cancel-button,
+.search-box input[type='search']::-webkit-search-results-button,
+.search-box input[type='search']::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-icon {
+  color: var(--color-text-secondary);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.search-box:focus-within .search-icon {
+  color: var(--color-text-accent);
+}
+
+.drops-filter-dock .search-box.search-wide {
+  flex: 1 1 300px;
+  width: auto;
+  max-width: none;
+}
+
+.airdrop-status-seg .seg-btn {
+  padding: 0 9px;
+}
+
+.airdrop-search-box {
+  flex: 1 1 215px;
+  min-width: 195px;
+}
+
+.drops-dock-right {
+  flex: 0 1 auto;
+}
+
+.dock-sources-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.drops-sources-seg {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.drops-sources-seg .seg-btn {
+  flex-shrink: 0;
+  padding: 0 9px;
+}
+
+.seg-prefix {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* Risk Filter Toggle: neutral when hidden, warm amber tonal when inspecting RISK */
+.dock-toggle-btn.risk-toggle-btn {
+  background: var(--color-background-card);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-emphasized);
+}
+
+.dock-toggle-btn.risk-toggle-btn .risk-toggle-icon-ok {
+  color: var(--color-status-success);
+}
+
+.dock-toggle-btn.risk-toggle-btn[aria-pressed='true'] {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning);
+  border-color: color-mix(in srgb, var(--color-status-warning) 44%, var(--color-border));
+  font-weight: 600;
+}
+
+.dock-toggle-btn.risk-toggle-btn[aria-pressed='true']:hover {
+  background: color-mix(in srgb, var(--color-status-warning-bg) 82%, var(--color-status-warning));
+  border-color: color-mix(in srgb, var(--color-status-warning) 62%, var(--color-border));
+}
+
+.dock-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-muted);
+  color: var(--color-text-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dock-toggle-btn[aria-pressed='true'] .dock-count-pill {
+  background: color-mix(in srgb, var(--color-on-accent) 22%, transparent);
+  color: var(--color-on-accent);
+}
+
+.chain-strip {
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.chip-more {
+  border-style: dashed;
+  border-color: var(--color-border-emphasized);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.chip-more:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover);
+}
+
+/* Skeleton Grid Cards (CLS-free Loading) */
+.skeleton-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.skeleton-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.skeleton-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.skeleton-foot {
+  margin-top: auto;
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.empty-action {
+  margin-top: var(--spacing-3);
+}
+
+/* FeedCard Visual Hierarchy */
+.feed-card {
+  gap: 11px;
+}
+
+.feed-head-right {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.feed-domain {
+  color: var(--color-text-secondary);
+}
+
+.ai-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+  padding: 1px 6px;
+  line-height: 1.4;
+}
+
+.feed-score-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-element);
+  border: 1px solid var(--color-border-emphasized);
+  background: var(--color-background-surface);
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.feed-score-lbl {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  opacity: 0.78;
+}
+
+.feed-score-val {
+  color: var(--color-text-primary);
+}
+
+/* Safety Notes: quiet routine caution vs elevated warn/risk alert */
+.risk-box.is-caution-quiet {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-status-warning);
+  background: var(--color-background-body);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.risk-quiet-icon {
+  color: var(--color-status-warning);
+  flex: none;
+}
+
+.risk-quiet-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.risk-box.is-warn {
+  border-color: color-mix(in srgb, var(--color-status-warning) 32%, var(--color-border));
+  background: color-mix(in srgb, var(--color-status-warning-bg) 42%, var(--color-background-card));
+  color: var(--color-status-warning);
+}
+
+.risk-box-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+
+/* Quiet Taxonomy Tags vs Interactive Action Links */
+.feed-tags {
+  gap: 5px;
+}
+
+.feed-tags .typetip,
+.feed-task-tag {
+  background: var(--color-background-body);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-inner);
+  font-weight: 500;
+  padding: 2px 7px;
+}
+
+.feed-link {
+  max-width: min(268px, 100%);
+  padding: 5px 9px;
+  background: var(--color-background-card);
+  border-color: var(--color-border-emphasized);
+  font-weight: 600;
+  gap: 5px;
+}
+
+.feed-link-label {
+  max-width: 240px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-link:hover {
+  background: var(--color-accent-muted);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  color: var(--color-text-accent);
+}
+
+.feed-link.is-known {
+  background: color-mix(in srgb, var(--color-status-success-bg) 34%, var(--color-background-card));
+  border-color: color-mix(in srgb, var(--color-status-success) 38%, var(--color-border));
+}
+
+.feed-link.is-known:hover {
+  background: color-mix(in srgb, var(--color-status-success-bg) 56%, var(--color-background-card));
+  border-color: color-mix(in srgb, var(--color-status-success) 62%, var(--color-border));
+  color: var(--color-status-success);
+}
+
+.feed-link-verified {
+  color: var(--color-status-success);
+}
+
+.feed-link-ext {
+  color: var(--color-text-secondary);
+  transition: transform var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.feed-link:hover .feed-link-ext {
+  color: currentColor;
+  transform: translate(1px, -1px);
+}
+
+.feed-foot {
+  align-items: center;
+}
+
+.feed-foot-left {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: var(--size-element-sm);
+}
+
+.feed-foot-sep {
+  color: var(--color-text-supporting);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.feed-sources-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 0;
+  line-height: 1.25;
+}
+
+.feed-sources-btn .icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.feed-sources-btn .chev-open {
+  transform: rotate(180deg);
+}
+
+.feed-time {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.25;
+  color: var(--color-text-secondary);
+}
+
+.feed-copy-btn,
+.project-copy-btn {
+  font-size: var(--text-xs);
+  padding: 4px 9px;
+  gap: 5px;
+}
+
+/* Guardrail Status Indicator (non-button soft semantic notice) */
+.risk-blocked-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: var(--radius-element);
+  border: 0;
+  background: color-mix(in srgb, var(--color-status-error-bg) 74%, transparent);
+  color: var(--color-status-error);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: not-allowed;
+}
+
+.source-refs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ProjectCard Row Alignment, Rhythm & Typography */
+.project-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+}
+
+.project-card .cardrow {
+  gap: 11px;
+}
+
+.project-card .chip-row {
+  margin-top: 10px;
+  gap: 5px;
+}
+
+.project-card .chip-overflow {
+  color: var(--color-text-secondary);
+  background: var(--color-background-muted);
+  font-weight: 600;
+}
+
+.project-bottom {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.project-stats {
+  margin-top: 0;
+  padding: 10px 0;
+}
+
+.project-card .task-preview {
+  border: 1px solid var(--color-border);
+  padding: 10px 11px;
+}
+
+.project-card .scorebar-wrap {
+  margin-top: 0;
+  gap: 10px;
+}
+
+.project-foot {
+  margin-top: 0;
+  gap: 10px;
+  align-items: center;
+}
+
+.project-subscores {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  line-height: 1.3;
+}
+
+.project-card .starbtn[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--color-tier-s-fg) 35%, transparent);
+}
+
+/* TGE Rail & Categories Bar */
+.tge-section {
+  padding: 16px;
+}
+
+.tge-card {
+  padding: 13px;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.tge-card:hover {
+  box-shadow: var(--shadow-low);
+  transform: translateY(-1px);
+}
+
+.tge-link {
+  color: var(--color-text-accent);
+  gap: 5px;
+}
+
+.categories-bar {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Mobile Refinements (390x844 balanced rows, zero wrapping orphans) */
+@media (max-width: 640px) {
+  .dock-primary {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .drops-filter-dock .search-box.search-wide {
+    flex: none;
+    width: 100%;
+  }
+
+  .drops-dock-right {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    width: 100%;
+    align-items: center;
+  }
+
+  .drops-dock-right .sort-wrap,
+  .drops-dock-right .select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .drops-dock-right .risk-toggle-btn {
+    justify-content: center;
+  }
+
+  .drops-dock-right .dock-sources-wrap {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .drops-sources-seg .seg-btn {
+    padding: 0 8px;
+    font-size: var(--text-xs);
+  }
+
+  .project-card {
+    padding: 13px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .project-card .cardrow {
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .project-card .cardtitle-wrap {
+    min-width: 0;
+  }
+
+  .project-card .card-actions {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .project-card .gradetip.tier-pill {
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .project-card .project-stats,
+  .project-card .task-preview,
+  .project-card .scorebar-wrap,
+  .project-card .project-foot {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Airdrops status tabs stay on ONE single non-wrapping horizontal row */
+  .airdrop-status-seg {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+    width: 100%;
+    max-width: 100%;
+    padding: 2px;
+  }
+
+  .airdrop-status-seg::-webkit-scrollbar {
+    display: none;
+  }
+
+  .airdrop-status-seg .seg-btn {
+    flex: 1 0 auto;
+    justify-content: center;
+    padding: 0 8px;
+    font-size: var(--text-xs);
+    gap: 4px;
+  }
+
+  .airdrop-dock-right {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 6px;
+    width: 100%;
+    align-items: center;
+  }
+
+  .airdrop-search-box {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .airdrop-sort-wrap,
+  .airdrop-sort-wrap .select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .airdrop-free-btn,
+  .airdrop-more-btn {
+    padding: 0 9px;
+    font-size: var(--text-xs);
+    justify-content: center;
+  }
+
+  .project-foot {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 360px) {
+  .airdrop-dock-right {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .airdrop-sort-wrap {
+    grid-column: 1 / -1;
+  }
+}

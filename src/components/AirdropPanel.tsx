@@ -37,7 +37,7 @@ export function AirdropPanel({
 }: Props) {
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
-      ? 'No saved projects yet. Click the ★ icon on any project card to build your watchlist.'
+      ? 'No saved projects yet. Click the star icon on any project card to build your watchlist.'
       : 'No projects match your current filters.';
 
   return (
@@ -114,7 +114,7 @@ export function AirdropPanel({
         <div className="empty" role="status">
           <p>{emptyMsg}</p>
           {filters.hasAnyFilter && (
-            <button type="button" className="btn" style={{ marginTop: 10 }} onClick={filters.resetFilters}>
+            <button type="button" className="btn empty-action" onClick={filters.resetFilters}>
               Reset filters
             </button>
           )}

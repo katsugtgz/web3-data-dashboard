@@ -1,10 +1,49 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { TABS } from '../../shared/constants';
 
+export type NavGroup = 'RADAR' | 'MARKETS';
+
+export interface TabGroupMeta {
+  id: string;
+  label: string;
+  group: NavGroup;
+}
+
+const RADAR_TAB_IDS = new Set(['drops', 'airdrops']);
+
+/** Maps a tab id to its display label and sidebar section group. */
+export function getTabGroupMeta(tabId: string): TabGroupMeta {
+  const found = TABS.find(t => t.id === tabId) ?? TABS[0];
+  return {
+    id: found.id,
+    label: found.label,
+    group: RADAR_TAB_IDS.has(found.id) ? 'RADAR' : 'MARKETS',
+  };
+}
+
+/**
+ * Computes the next tab index for roving-tabindex navigation across both
+ * vertical sidebar and horizontal tabstrip layouts.
+ */
+export function computeNextTabIndex(ids: readonly string[], currentId: string, key: string): number {
+  if (ids.length === 0) return -1;
+  const cur = Math.max(0, ids.indexOf(currentId));
+  if (key === 'ArrowRight' || key === 'ArrowDown') {
+    return (cur + 1) % ids.length;
+  }
+  if (key === 'ArrowLeft' || key === 'ArrowUp') {
+    return (cur - 1 + ids.length) % ids.length;
+  }
+  if (key === 'Home') return 0;
+  if (key === 'End') return ids.length - 1;
+  return -1;
+}
+
 interface DashboardTabsInput {
   searchRefs: {
     drops: RefObject<HTMLInputElement | null>;
     airdrops: RefObject<HTMLInputElement | null>;
+    markets?: RefObject<HTMLInputElement | null>;
   };
   /** "/" search focus is suppressed while a modal or the details dialog is up. */
   isModalOpen: () => boolean;
@@ -15,7 +54,7 @@ export interface DashboardTabs {
   /** Tabs whose panels have been shown at least once (lazy-mount memory). */
   visitedTabs: Set<string>;
   tabRefs: RefObject<Record<string, HTMLButtonElement | null>>;
-  tabbarRef: RefObject<HTMLDivElement | null>;
+  tabbarRef: RefObject<HTMLElement | null>;
   selectTab: (id: string) => void;
   onTabKey: (e: KeyboardEvent) => void;
 }
@@ -33,7 +72,7 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   const dropsHash = useRef('#drops');
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const tabbarRef = useRef<HTMLDivElement | null>(null);
+  const tabbarRef = useRef<HTMLElement | null>(null);
 
   const markVisited = useCallback((nextId: string) => {
     setVisitedTabs(prev => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
@@ -74,7 +113,12 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || isModalOpen()) return;
       const el = document.activeElement;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
-      const targetRef = tab === 'drops' ? searchRefs.drops.current : tab === 'airdrops' ? searchRefs.airdrops.current : null;
+      const targetRef =
+        tab === 'drops'
+          ? searchRefs.drops.current
+          : tab === 'airdrops'
+            ? searchRefs.airdrops.current
+            : (searchRefs.markets?.current ?? null);
       if (targetRef) {
         e.preventDefault();
         targetRef.focus();
@@ -91,16 +135,7 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
       const focusTarget = document.activeElement as HTMLElement | null;
       const focusedId =
         focusTarget?.getAttribute('role') === 'tab' ? focusTarget.id.replace(/^tab-/, '') : tab;
-      const cur = Math.max(0, ids.indexOf(focusedId));
-      const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-      const nextIdx =
-        delta !== 0
-          ? (cur + delta + ids.length) % ids.length
-          : e.key === 'Home'
-            ? 0
-            : e.key === 'End'
-              ? ids.length - 1
-              : -1;
+      const nextIdx = computeNextTabIndex(ids, focusedId, e.key);
       if (nextIdx < 0) return;
       e.preventDefault();
       tabRefs.current[ids[nextIdx]]?.focus();
@@ -124,9 +159,14 @@ export function isDropsQueryHash(hash: string): boolean {
 
 function scrollToMainTop(): void {
   const main = document.getElementById('main');
-  const tabbar = document.querySelector('.tabbar');
   if (!main) return;
-  const barHeight = tabbar instanceof HTMLElement ? tabbar.offsetHeight : 48;
+  const topBar = document.querySelector('.top');
+  const tabBar = document.querySelector('.tabbar');
+  const topHeight = topBar instanceof HTMLElement ? topBar.offsetHeight : 52;
+  const barHeight =
+    window.innerWidth >= 1024
+      ? topHeight
+      : topHeight + (tabBar instanceof HTMLElement ? tabBar.offsetHeight : 44);
   const mainTop = main.getBoundingClientRect().top + window.scrollY;
   if (window.scrollY > mainTop - barHeight) {
     window.scrollTo({ top: Math.max(0, mainTop - barHeight - 8), behavior: 'smooth' });
