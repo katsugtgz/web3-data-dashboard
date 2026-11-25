@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { stripOrTranslateCjk, translateRiskItem, translateTagLabel, translateTgeStatus } from '../src/normalize/i18n';
-import { normalizeSurf } from '../src/sources/surf';
+import { fetchSurfAirdrops, normalizeExternalUrl, normalizeSurf } from '../src/sources/surf';
 import { FORBIDDEN_CJK_RE } from './helpers';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/surf-airdrops.json', import.meta.url), 'utf8'));
@@ -77,6 +77,142 @@ describe('surf normalizer + i18n', () => {
       expect(warnings.length).toBe(2);
     } finally {
       console.warn = originalWarn;
+    }
+  });
+
+  test('normalizeExternalUrl and logo sanitization enforce strict http(s) URLs without userinfo or whitespace', () => {
+    expect(normalizeExternalUrl('t.me/DoodlesUP_bot')).toBe('https://t.me/DoodlesUP_bot');
+    expect(normalizeExternalUrl('https://galxe.com/quest')).toBe('https://galxe.com/quest');
+    expect(normalizeExternalUrl('https://example.com /evil')).toBeNull();
+    expect(normalizeExternalUrl('t.me/a b')).toBeNull();
+    expect(normalizeExternalUrl('https://good.com@evil.com/claim')).toBeNull();
+    expect(normalizeExternalUrl('https://user:pass@evil.com/claim')).toBeNull();
+    expect(normalizeExternalUrl('good.com@evil.com/claim')).toBeNull();
+    expect(normalizeExternalUrl('javascript:alert(1)')).toBeNull();
+    expect(normalizeExternalUrl('data:text/html,hi')).toBeNull();
+    expect(normalizeExternalUrl('ftp://files.example.com/a')).toBeNull();
+
+    const feed = normalizeSurf(
+      {
+        active: [
+          { project_name: 'GoodLogo', logo_url: 'https://cdn.example.com/logo.png' },
+          { project_name: 'SurfHost', logo_url: 'https://cdn.surf.computer/logo.png' },
+          { project_name: 'SurfRoot', logo_url: 'https://surf.computer/logo.png' },
+          { project_name: 'JsLogo', logo_url: 'javascript:alert(1)' },
+          { project_name: 'UserinfoLogo', logo_url: 'https://good.com@evil.com/a.png' },
+          { project_name: 'SpaceLogo', logo_url: 'https://cdn.example.com/a b.png' },
+        ],
+        tge: [
+          { project_name: 'BadTgeLogo', logo_url: 'data:image/svg+xml,<svg/>', reward_date: 1e16 },
+          { project_name: 'ValidTge', logo_url: 'https://cdn.example.com/tge.png', reward_date: 1763683200 },
+        ],
+      },
+      1_700_000_000_000,
+    );
+
+    expect(feed.cards.map(c => c.img)).toEqual([
+      'https://cdn.example.com/logo.png',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+    expect(feed.tge[0].logo).toBeNull();
+    expect(feed.tge[0].d).toBe('TBA');
+    expect(feed.tge[1].logo).toBe('https://cdn.example.com/tge.png');
+    expect(feed.tge[1].d).toBe('2025-11-21');
+  });
+
+  test('mapTasks deduplicates verbatim tasks case-insensitively while preserving order', () => {
+    const feed = normalizeSurf(
+      {
+        active: [
+          {
+            project_name: 'DedupProj',
+            tasks: [
+              { title: 'Bridge ETH', type: 'bridge', external_link: 'https://app.example.com/bridge' },
+              { title: 'bridge eth', type: 'BRIDGE', external_link: 'https://app.example.com/bridge' },
+              { title: 'Swap USDC', type: 'swap', external_link: 'https://app.example.com/swap' },
+              { title: 'Bridge ETH', type: 'bridge', external_link: 'https://app.example.com/bridge-v2' },
+              { title: 'No Link Task', type: 'quest', external_link: null },
+              { title: 'no link task', type: 'quest', external_link: '' },
+            ],
+          },
+        ],
+        tge: [],
+      },
+      1_700_000_000_000,
+    );
+
+    expect(feed.cards[0].tasks?.map(t => ({ title: t.title, type: t.type, url: t.url }))).toEqual([
+      { title: 'Bridge ETH', type: 'bridge', url: 'https://app.example.com/bridge' },
+      { title: 'Swap USDC', type: 'swap', url: 'https://app.example.com/swap' },
+      { title: 'Bridge ETH', type: 'bridge', url: 'https://app.example.com/bridge-v2' },
+      { title: 'No Link Task', type: 'quest', url: null },
+    ]);
+  });
+
+  test('fetchSurfAirdrops cancels non-ok response bodies and retries once on 5xx or abort/network failure', async () => {
+    const prevFetch = globalThis.fetch;
+    const validPayload = JSON.stringify({ active: [{ project_name: 'Alpha' }], tge: [] });
+    const makeTrackedResponse = (status: number, body: string) => {
+      let cancelled = false;
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return {
+        res: new Response(stream, { status }),
+        wasCancelled: () => cancelled,
+      };
+    };
+
+    try {
+      // 1. 5xx retries once, cancelling the failed response body, and succeeds on 2nd try.
+      const first502 = makeTrackedResponse(502, 'bad gateway');
+      let calls5xx = 0;
+      globalThis.fetch = (async () => {
+        calls5xx++;
+        if (calls5xx === 1) return first502.res;
+        return new Response(validPayload, { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const recovered5xx = await fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000);
+      expect(calls5xx).toBe(2);
+      expect(first502.wasCancelled()).toBe(true);
+      expect(recovered5xx.cards[0].n).toBe('Alpha');
+
+      // 2. Network/abort error retries once and succeeds on 2nd try.
+      let callsAbort = 0;
+      globalThis.fetch = (async () => {
+        callsAbort++;
+        if (callsAbort === 1) throw new DOMException('timed out', 'TimeoutError');
+        return new Response(validPayload, { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const recoveredAbort = await fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000);
+      expect(callsAbort).toBe(2);
+      expect(recoveredAbort.cards[0].n).toBe('Alpha');
+
+      // 3. 4xx does NOT retry and cancels body before throwing.
+      const err403 = makeTrackedResponse(403, 'forbidden');
+      let calls4xx = 0;
+      globalThis.fetch = (async () => {
+        calls4xx++;
+        return err403.res;
+      }) as unknown as typeof fetch;
+
+      await expect(fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000)).rejects.toThrow('Surf HTTP 403');
+      expect(calls4xx).toBe(1);
+      expect(err403.wasCancelled()).toBe(true);
+    } finally {
+      globalThis.fetch = prevFetch;
     }
   });
 });

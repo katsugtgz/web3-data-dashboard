@@ -6,10 +6,11 @@ import { readFileSync } from 'node:fs';
  *
  * FORBIDDEN_CJK_RE must stay in sync with scripts/check-no-cjk.sh, which
  * gates CI: Han + Hiragana + Katakana + Hangul + Bopomofo plus the CJK
- * punctuation/compat ranges U+3000–303F and U+FF01–FF9F.
+ * punctuation/enclosed/compat/fullwidth ranges U+3000–303F, U+3200–32FF,
+ * U+FE30–FE4F, and U+FF01–FFEF.
  */
 export const FORBIDDEN_CJK_RE =
-  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\uFF01-\uFF9F]/u;
+  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\u3200-\u32FF\uFE30-\uFE4F\uFF01-\uFFEF]/u;
 
 export const MIGRATION_FILES = [
   '../migrations/0001_init.sql',

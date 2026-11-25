@@ -2,22 +2,26 @@ import type { RefObject } from 'react';
 import { CATEGORIES, FIT, TYPES } from '../../shared/constants';
 import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
-import { cardStorageKey } from '../hooks/useWatchlist';
+import { cardStorageKey, isCardSaved } from '../hooks/useWatchlist';
+import { formatRelativeTime, isStaleTimestamp } from '../lib/format';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';
 import { TgeCarousel } from './TgeCarousel';
 
+const STALE_AIRDROPS_MS = 6 * 3_600_000;
+
 interface Props {
   filters: AirdropFiltersState;
   cardCount: number;
   tgeItems: Tge[];
+  fetchedAt: number | null;
   isLive: boolean;
   failed: boolean;
   saved: Set<string>;
   doneTasks: Set<string>;
   searchRef: RefObject<HTMLInputElement | null>;
-  onToggleSaved: (key: string) => void;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
   onSelectDetail: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
@@ -26,6 +30,7 @@ export function AirdropPanel({
   filters,
   cardCount,
   tgeItems,
+  fetchedAt,
   isLive,
   failed,
   saved,
@@ -35,6 +40,7 @@ export function AirdropPanel({
   onSelectDetail,
   onCopyBrief,
 }: Props) {
+  const isStale = isStaleTimestamp(fetchedAt, STALE_AIRDROPS_MS);
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
       ? 'No saved projects yet. Click the ★ icon on any project card to build your watchlist.'
@@ -42,6 +48,11 @@ export function AirdropPanel({
 
   return (
     <section role="tabpanel" id="panel-airdrops" aria-labelledby="tab-airdrops">
+      {isStale && fetchedAt !== null && (
+        <p className="stale-banner" role="status">
+          Airdrop feed may be stale — last updated {formatRelativeTime(fetchedAt)} (upstream source delayed).
+        </p>
+      )}
       <KpiStrip
         counts={filters.counts}
         tgeCount={tgeItems.length}
@@ -88,10 +99,10 @@ export function AirdropPanel({
           <div className="grid">
             {filters.renderedCards.map(c => (
               <ProjectCard
-                key={`${c.r}-${c.n}`}
+                key={cardStorageKey(c)}
                 card={c}
                 fit={FIT}
-                saved={saved.has(cardStorageKey(c))}
+                saved={isCardSaved(saved, c)}
                 doneTasks={doneTasks}
                 onToggleSaved={onToggleSaved}
                 onDetails={onSelectDetail}

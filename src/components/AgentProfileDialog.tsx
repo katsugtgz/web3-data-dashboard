@@ -14,11 +14,19 @@ interface FormProps {
 
 function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pendingCopyName, onCopyPending }: FormProps) {
   const [form, setForm] = useState<AgentProfile>(initialProfile);
+  const [budgetText, setBudgetText] = useState(String(initialProfile.budgetUsd));
   const [timeCap, setTimeCap] = useState(String(initialProfile.maxMinutes));
+
+  const parseBudget = (raw: string): number => {
+    const trimmed = raw.trim();
+    if (!trimmed) return initialProfile.budgetUsd;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n >= 0 ? Math.min(10_000, n) : initialProfile.budgetUsd;
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    onSave({ ...form, maxMinutes: Number(timeCap) });
+    onSave({ ...form, budgetUsd: parseBudget(budgetText), maxMinutes: Number(timeCap) });
   };
 
   return (
@@ -164,8 +172,15 @@ function AgentProfileForm({ initialProfile, onSave, onClose, copyStatus, pending
             min={0}
             max={10000}
             step="any"
-            value={form.budgetUsd}
-            onChange={e => setForm({ ...form, budgetUsd: Math.max(0, Number(e.target.value) || 0) })}
+            value={budgetText}
+            onChange={e => setBudgetText(e.target.value)}
+            onBlur={() => {
+              const trimmed = budgetText.trim();
+              if (!trimmed) return;
+              const nextBudget = parseBudget(trimmed);
+              setForm(prev => ({ ...prev, budgetUsd: nextBudget }));
+              setBudgetText(String(nextBudget));
+            }}
           />
         </label>
 

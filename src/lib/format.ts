@@ -40,7 +40,7 @@ export function parseCost(c: string, costNum?: number): number {
 }
 
 export function parseUpdatedDays(u: string, updatedTs?: number): number {
-  if (typeof updatedTs === 'number' && updatedTs > 0) {
+  if (typeof updatedTs === 'number' && Number.isFinite(updatedTs) && updatedTs > 0) {
     return Math.max(0, (Date.now() / 1000 - updatedTs) / 86400);
   }
   const s = u.trim().toLowerCase();
@@ -55,7 +55,8 @@ export function parseUpdatedDays(u: string, updatedTs?: number): number {
 export function isHttpUrl(value: string): boolean {
   try {
     const u = new URL(value.trim());
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    return !u.username && !u.password;
   } catch {
     return false;
   }
@@ -124,7 +125,25 @@ export function formatRaiseShort(amount: number): string {
 }
 
 export function formatClock(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (!Number.isFinite(ts) || ts <= 0) return '—';
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+export function isStaleTimestamp(tsMs: number | null | undefined, maxAgeMs: number, nowMs = Date.now()): boolean {
+  if (typeof tsMs !== 'number' || !Number.isFinite(tsMs) || tsMs <= 0) return false;
+  return nowMs - tsMs > maxAgeMs;
+}
+
+export function changeToneClass(value: string): 'up' | 'dn' | '' {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '—') return '';
+  const num = sortVal(trimmed);
+  if (num === null || num === 0) return '';
+  if (/^\+[\d$]/.test(trimmed)) return num > 0 ? 'up' : '';
+  if (/^-[\d$]/.test(trimmed)) return num < 0 ? 'dn' : '';
+  return '';
 }
 
 export function formatRelativeTime(tsMs: number, nowMs = Date.now()): string {

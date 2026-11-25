@@ -4,6 +4,7 @@ import { HAN_RE } from '../src/normalize/i18n';
 import {
   AI_MAX_ATTEMPTS,
   hasAiQuotaRemaining,
+  parseAndValidateAiJson,
   summarizeClusterWithAi,
   unsafeContentRe,
   type AiBindingLike,
@@ -61,6 +62,57 @@ describe('Workers AI summary normalization & budget guard', () => {
     expect(unsafeContentRe('4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T')).toBe(true);
     // Base58 lookalike with forbidden char (0/O/I/l) is not an address.
     expect(unsafeContentRe('staking OI0l pool rewards here')).toBe(false);
+    // M-15: raw IPv4, dangerous schemes, and @handles are blocked.
+    expect(unsafeContentRe('Connect node at 45.33.12.9')).toBe(true);
+    expect(unsafeContentRe('Claim at 45.33.12.9:8080/claim')).toBe(true);
+    expect(unsafeContentRe('Join tg://resolve?domain=scam')).toBe(true);
+    expect(unsafeContentRe('Click javascript:alert(1)')).toBe(true);
+    expect(unsafeContentRe('Open data:text/html;base64,PHNjcmlwdD4=')).toBe(true);
+    expect(unsafeContentRe('Follow @scam_channel for claim')).toBe(true);
+    expect(unsafeContentRe('@airdrop_bot sends rewards')).toBe(true);
+    // Common dev suffixes must not false-positive as domains.
+    expect(
+      unsafeContentRe('Deploy Vault.sol with ethers.js, index.ts, bot.py, lib.rs, config.json, and README.md'),
+    ).toBe(false);
+  });
+
+  test('M-15: parseAndValidateAiJson rejects drainer/scam/wallet-confirm phrases and strictly filters chains', () => {
+    const blockedSummaries = [
+      'Confirm in your wallet to claim bonus tokens.',
+      'Please confirm in your wallets to unlock allocation.',
+      'Verify your wallet before snapshot ends.',
+      'Approve your wallet to receive airdrop rewards.',
+      'Enter your recovery phrase to restore points.',
+      'Import your mnemonic to claim allocation.',
+      'Send 100 USDT to receive 1000 back instantly.',
+      'Claim SOL now and connect active wallet for drop.',
+    ];
+    for (const summary of blockedSummaries) {
+      expect(
+        parseAndValidateAiJson(JSON.stringify({ summary, taskTypes: ['quest'], chains: ['Base'] })),
+      ).toBeNull();
+    }
+
+    const res = parseAndValidateAiJson(
+      JSON.stringify({
+        summary: 'Deploy Vault.sol with ethers.js and complete testnet quests.',
+        taskTypes: ['testnet', 'quest'],
+        chains: [
+          'Base',
+          'Arbitrum One',
+          'zkSync Era',
+          'TON',
+          'IGNORED_PROMPT',
+          'IGNORE ALL PREVIOUS',
+          '@scam_handle',
+          '45.33.12.9',
+          'https://evil.xyz',
+          'connect wallet',
+        ],
+      }),
+    );
+    expect(res).not.toBeNull();
+    expect(res!.chains).toEqual(['Base', 'Arbitrum One', 'zkSync Era', 'TON']);
   });
 
 
@@ -98,6 +150,8 @@ describe('Workers AI summary normalization & budget guard', () => {
       .first<{ chains: string }>();
     // First call stored the surviving plain name.
     expect(JSON.parse(seed!.chains)).toEqual(['base']);
+    // Reset to rule summary to exercise a subsequent SQL-side chain merge on the same cluster.
+    await db.prepare(`UPDATE clusters SET summary_source = 'rule' WHERE id = 'c1'`).run();
     const multiAi: AiBindingLike = {
       async run() {
         return {
@@ -248,9 +302,12 @@ describe('Workers AI summary normalization & budget guard', () => {
     expect(usage.results?.length ?? 0).toBe(0);
   });
 
-  test('concurrent summaries cannot exceed the daily cap', async () => {
-    const db = createSqliteD1();
+  test('concurrent summaries across distinct clusters cannot exceed the daily cap', async () => {
+    const { db, sqlite } = createTestD1();
     const cap = 3;
+    for (let i = 0; i < 8; i++) {
+      seedCluster(sqlite, `c_cap_${i}`, 'rule');
+    }
     let calls = 0;
     const ai: AiBindingLike = {
       async run() {
@@ -259,16 +316,14 @@ describe('Workers AI summary normalization & budget guard', () => {
       },
     };
 
-    // Seed the counter at 0 (INTEGER column: SQLite stores '0' as integer 0,
-    // so this does not exercise a text-typed D1 — the upsert's own arithmetic
-    // and RETURNING are what's under test), then fire 8 concurrent callers at cap 3.
+    // Seed the counter at 0, then fire 8 concurrent callers across 8 clusters at cap 3.
     const day = new Date().toISOString().slice(0, 10);
     await db.prepare(`INSERT INTO ai_usage (day, calls) VALUES (?1, ?2)`).bind(day, 0).run();
 
     const results = await Promise.all(
-      Array.from({ length: 8 }, () =>
+      Array.from({ length: 8 }, (_, i) =>
         summarizeClusterWithAi(ai, db, {
-          clusterId: 'c1',
+          clusterId: `c_cap_${i}`,
           project: 'KiteAI',
           rawTexts: ['post'],
           isNewCluster: true,
@@ -285,6 +340,98 @@ describe('Workers AI summary normalization & budget guard', () => {
 
     const row = await db.prepare(`SELECT calls FROM ai_usage WHERE day = ?1`).bind(day).first<{ calls: number }>();
     expect(Number(row?.calls)).toBe(cap);
+  });
+
+  test('atomic 2-minute row lease prevents concurrent double-runs on the same cluster and success issues zero SELECTs', async () => {
+    const { db, sqlite, queries } = createTestD1();
+    seedCluster(sqlite, 'c_lease', 'rule');
+    const now = 1_795_240_000_000;
+
+    let aiCalls = 0;
+    const slowAi: AiBindingLike = {
+      async run() {
+        aiCalls++;
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI testnet quests on Base.',
+            taskTypes: ['testnet', 'quest'],
+            chains: ['Base'],
+          }),
+        };
+      },
+    };
+
+    const before = queries.length;
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        summarizeClusterWithAi(slowAi, db, {
+          clusterId: 'c_lease',
+          project: 'KiteAI',
+          rawTexts: ['post'],
+          isNewCluster: true,
+          isNonLatinSource: false,
+          riskLevel: 'ok',
+          nowMs: now,
+        }),
+      ),
+    );
+
+    expect(aiCalls).toBe(1);
+    expect(results.filter(r => r !== null).length).toBe(1);
+    const issued = queries.slice(before);
+    expect(issued.some(q => /^\s*SELECT\b/i.test(q))).toBe(false);
+
+    const row = sqlite
+      .query('SELECT summary_source, task_types, chains, ai_attempts, ai_retry_after FROM clusters WHERE id = ?1')
+      .get('c_lease') as { summary_source: string; task_types: string; chains: string; ai_attempts: number; ai_retry_after: number };
+    expect(row.summary_source).toBe('ai');
+    expect(JSON.parse(row.task_types).sort()).toEqual(['quest', 'testnet']);
+    expect(JSON.parse(row.chains)).toEqual(['Base']);
+    expect(row.ai_attempts).toBe(0);
+    expect(row.ai_retry_after).toBe(0);
+  });
+
+  test('throwing ai.run logs error, refunds ai_usage quota, and records backoff', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_err', 'rule');
+    const now = 1_795_240_000_000;
+    const day = new Date(now).toISOString().slice(0, 10);
+
+    const throwingAi: AiBindingLike = {
+      async run() {
+        throw new Error('Workers AI 503');
+      },
+    };
+
+    const origErr = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      const res = await summarizeClusterWithAi(throwingAi, db, {
+        clusterId: 'c_err',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: now,
+      });
+      expect(res).toBeNull();
+    } finally {
+      console.error = origErr;
+    }
+
+    expect(logged.some(args => args[0] === 'ai-summary-error' && args[1] === 'c_err')).toBe(true);
+    const usage = sqlite.query('SELECT calls FROM ai_usage WHERE day = ?1').get(day) as { calls: number } | null;
+    expect(usage?.calls).toBe(0);
+    expect(readAttemptState(sqlite, 'c_err')).toEqual({
+      summary_source: 'rule',
+      ai_attempts: 1,
+      ai_retry_after: now + 6 * 3_600_000,
+    });
   });
 
   function seedCluster(
@@ -312,15 +459,16 @@ describe('Workers AI summary normalization & budget guard', () => {
   test('AI failures apply 6h then 24h backoff with zero extra reads, and valid AI summary resets attempts', async () => {
     const { db, sqlite, queries } = createTestD1();
     seedCluster(sqlite, 'c1', 'rule');
+    seedCluster(sqlite, 'c_recover', 'rule');
 
     const t1 = 1_795_240_000_000;
-    const t2 = t1 + 10_000;
-    const t3 = t2 + 10_000;
-    const t4 = t3 + 10_000;
     const sixHours = 6 * 3_600_000;
     const oneDay = 24 * 3_600_000;
+    const t2 = t1 + sixHours;
+    const t3 = t2 + oneDay;
+    const t4 = t3 + oneDay;
 
-    // 1st failure: ai.run throws -> ai_attempts = 1, +6h backoff, 2 queries total (reserve + update, 0 extra reads)
+    // 1st failure: ai.run throws -> ai_attempts = 1, +6h backoff, zero SELECT reads
     const throwingAi: AiBindingLike = {
       async run() {
         throw new Error('AI timeout');
@@ -336,14 +484,14 @@ describe('Workers AI summary normalization & budget guard', () => {
       nowMs: t1,
     });
     expect(r1).toBeNull();
-    expect(queries.length).toBe(2);
+    expect(queries.some(q => /^\s*SELECT\b/i.test(q))).toBe(false);
     expect(readAttemptState(sqlite, 'c1')).toEqual({
       summary_source: 'rule',
       ai_attempts: 1,
       ai_retry_after: t1 + sixHours,
     });
 
-    // 2nd failure: empty response -> ai_attempts = 2, +24h backoff
+    // 2nd failure at t1 + 6h: empty response -> ai_attempts = 2, +24h backoff
     const emptyAi: AiBindingLike = {
       async run() {
         return { response: '' };
@@ -365,7 +513,7 @@ describe('Workers AI summary normalization & budget guard', () => {
       ai_retry_after: t2 + oneDay,
     });
 
-    // 3rd failure: CJK summary -> ai_attempts = 3, +24h backoff
+    // 3rd failure at t2 + 24h: CJK summary -> ai_attempts = 3, +24h backoff
     const cjkAi: AiBindingLike = {
       async run() {
         return { response: JSON.stringify({ summary: '\u4e2d\u6587\u6458\u8981', taskTypes: [], chains: [] }) };
@@ -387,7 +535,7 @@ describe('Workers AI summary normalization & budget guard', () => {
       ai_retry_after: t3 + oneDay,
     });
 
-    // Subsequent valid AI summary resets ai_attempts = 0 and ai_retry_after = 0
+    // After reaching AI_MAX_ATTEMPTS (3), further attempts on c1 are refused by the lease guard.
     const okAi: AiBindingLike = {
       async run() {
         return {
@@ -399,17 +547,39 @@ describe('Workers AI summary normalization & budget guard', () => {
         };
       },
     };
-    const r4 = await summarizeClusterWithAi(okAi, db, {
-      clusterId: 'c1',
+    expect(
+      await summarizeClusterWithAi(okAi, db, {
+        clusterId: 'c1',
+        project: 'KiteAI',
+        rawTexts: ['post'],
+        isNewCluster: true,
+        isNonLatinSource: false,
+        riskLevel: 'ok',
+        nowMs: t4,
+      }),
+    ).toBeNull();
+
+    // Valid AI summary on a cluster with prior failed attempts (< AI_MAX_ATTEMPTS) resets ai_attempts = 0 and ai_retry_after = 0.
+    await summarizeClusterWithAi(emptyAi, db, {
+      clusterId: 'c_recover',
       project: 'KiteAI',
       rawTexts: ['post'],
       isNewCluster: true,
       isNonLatinSource: false,
       riskLevel: 'ok',
-      nowMs: t4,
+      nowMs: t1,
+    });
+    const r4 = await summarizeClusterWithAi(okAi, db, {
+      clusterId: 'c_recover',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: t2,
     });
     expect(r4).not.toBeNull();
-    expect(readAttemptState(sqlite, 'c1')).toEqual({
+    expect(readAttemptState(sqlite, 'c_recover')).toEqual({
       summary_source: 'ai',
       ai_attempts: 0,
       ai_retry_after: 0,
@@ -455,13 +625,13 @@ describe('Workers AI summary normalization & budget guard', () => {
         isNewCluster: true,
         isNonLatinSource: false,
         riskLevel: 'ok',
-        nowMs: now + 5_000,
+        nowMs: now + sixHours,
       }),
     ).toBeNull();
     expect(readAttemptState(sqlite, 'c_json')).toEqual({
       summary_source: 'rule',
       ai_attempts: 2,
-      ai_retry_after: now + 5_000 + oneDay,
+      ai_retry_after: now + sixHours + oneDay,
     });
 
     const nullOutAi: AiBindingLike = {
@@ -494,13 +664,13 @@ describe('Workers AI summary normalization & budget guard', () => {
         isNewCluster: true,
         isNonLatinSource: false,
         riskLevel: 'ok',
-        nowMs: now + 5_000,
+        nowMs: now + sixHours,
       }),
     ).toBeNull();
     expect(readAttemptState(sqlite, 'c_null')).toEqual({
       summary_source: 'rule',
       ai_attempts: 2,
-      ai_retry_after: now + 5_000 + oneDay,
+      ai_retry_after: now + sixHours + oneDay,
     });
   });
 
@@ -597,13 +767,13 @@ describe('Workers AI summary normalization & budget guard', () => {
       isNewCluster: true,
       isNonLatinSource: false,
       riskLevel: 'ok',
-      nowMs: now + 5_000,
+      nowMs: now + sixHours,
     });
     expect(r2).toBeNull();
     expect(readAttemptState(sqlite, 'c_obj')).toEqual({
       summary_source: 'rule',
       ai_attempts: 2,
-      ai_retry_after: now + 5_000 + oneDay,
+      ai_retry_after: now + sixHours + oneDay,
     });
 
     const validChoicesAi: AiBindingLike = {
@@ -630,7 +800,7 @@ describe('Workers AI summary normalization & budget guard', () => {
       isNewCluster: true,
       isNonLatinSource: false,
       riskLevel: 'ok',
-      nowMs: now + 10_000,
+      nowMs: now + sixHours + oneDay,
     });
     expect(r3).not.toBeNull();
     expect(readAttemptState(sqlite, 'c_obj')).toEqual({

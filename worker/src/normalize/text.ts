@@ -28,7 +28,7 @@ export const STOP_NAMES = new Set<string>([
   'TBA', 'FCFS', 'NFT', 'NFTS', 'SBT', 'DAO', 'DEX', 'CEX', 'KYC', 'USD', 'USDT', 'USDC', 'AI', 'ETH',
   'BTC', 'SOL', 'BNB', 'BITCOIN', 'ETHEREUM', 'SOLANA', 'STRATEGY', 'SELLER', 'WAITLIST', 'WHITELIST',
   'ALLOWLIST', 'MINT', 'MINTDATE', 'CHECKER', 'WINNER', 'WINNERLIST', 'ELIGIBILITY', 'CAMPAIGN',
-  'FAM', 'FRENS', 'GUYS',
+  'PHASE', 'EPOCH', 'REMINDER', 'URGENT', 'GIVEAWAY', 'FAM', 'FRENS', 'GUYS',
   // Wire/macro/political/person names, CEX exchanges, and KYC vendors seen causing false clusters live
   'HUANG', 'JENSEN', 'NVIDIA', 'NVDA', 'TRUMP', 'DEMOCRATS', 'REPUBLICANS', 'RUSSIA', 'CHINA', 'AMERICA',
   'EUROPE', 'ANTHROPIC', 'OPENAI', 'APPLE', 'SAMSUNG', 'GOOGLE', 'SPACEX', 'TESLA', 'NICK', 'ROB', 'OMID',
@@ -42,7 +42,7 @@ export const STOP_NAMES = new Set<string>([
   'AYO', 'COBA', 'MANTAP', 'COK', 'SUMPAH', 'SEPI', 'BURUAN', 'CEK', 'MENDING', 'LANGSUNG', 'ABSEN',
   'MUSANG', 'MUSENG', 'BINGUNG', 'RECEH', 'BANSOS', 'CALON', 'RUSAK', 'NAPA', 'OIYA', 'JELAS', 'LUCU',
   'KELAKUAN', 'ANDAI', 'ALHAMDULILLAH', 'WIARSOBEK', 'BOTTOMHOKI', 'SIAP', 'MOHON', 'MAAF', 'MIRIP',
-  'UMUR', 'GIMANA', 'KENAPA', 'SIAPA', 'DISINI', 'JADI', 'BIAR', 'CUAN', 'GARAPAN', 'SAMA', 'JUGA',
+  'UMUR', 'GIMANA', 'KENAPA', 'SIAPA', 'DISINI', 'JADI', 'BIAR', 'CUAN', 'GARAPAN', 'SAMA', 'JUGA', 'PUNYA',
 ]);
 
 /**
@@ -53,7 +53,7 @@ export const MAJOR_TICKERS = new Set<string>([
   'USD', 'USDT', 'USDC', 'DAI', 'USDE', 'USDS', 'FDUSD', 'TUSD', 'BUSD', 'PYUSD', 'EUR', 'EURC',
   'BTC', 'WBTC', 'ETH', 'WETH', 'STETH', 'WSTETH', 'CBETH', 'SOL', 'WSOL', 'BNB', 'XRP', 'ADA',
   'DOGE', 'DOT', 'ATOM', 'AVAX', 'MATIC', 'POL', 'ARB', 'OP', 'SUI', 'APT', 'TON', 'TRX', 'LTC',
-  'BCH', 'LINK', 'UNI', 'AAVE', 'XMR', 'NEAR', 'FIL', 'ICP', 'ETC', 'XLM', 'SHIB', 'PEPE', 'WIF',
+  'BCH', 'LINK', 'UNI', 'AAVE', 'XMR', 'NEAR', 'FIL', 'ICP', 'ETC', 'XLM', 'SHIB', 'PEPE', 'WIF', 'HYPE',
   // Stock tickers leaking from macro/TradFi wire channels
   'NVDA', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'GOOGL', 'GOOG', 'AMD', 'INTC', 'PLTR', 'MSTR',
   'COIN', 'HOOD', 'SPCX', 'SPY', 'QQQ', 'JNJ', 'NIO', 'AMDL',
@@ -65,7 +65,7 @@ export function isStopName(word: string): boolean {
 
 // Indonesian/Malay function words and casual Telegram slang (word-boundary matched).
 const INDONESIAN_MARKER_RE =
-  /\b(?:yang|yg|untuk|buat|dengan|dari|tidak|gak|enggak|udah|sudah|belum|blm|kalo|kalau|bisa|aja|cuma|banget|bgt|pake|pakai|dapet|dapat|kalian|gue|gw|aku|kamu|bang|ges|cok|anjink|sumpah|gada|sepi|buruan|keburu|soalnya|komen|nonton|ceritain|diceritain|rusak|linknya|mending|langsung|tapi|juga|lagi|masih|harus|punya|gimana|kenapa|siapa|disini|disana|klo|jadi|biar|cuan|garapan|bansos|musang|museng|receh|serok|bingung|takpalah|tumben|gabut|maen|walaupun|keliatan|dibutuhkan|sehari|upah|turun|nyari|dulu|alhamdulillah|absen|siap2|cek|reff|kelakuan|oiya|jelas|lucu|andai|mohon|maaf|mirip|intinya|dapetin|kripto|ngedump|perasaan|sebenrnya|sekrang|bersebrangan|gampang|ngatain|kemaslhatan)\b/gi;
+  /\b(?:yang|yg|untuk|buat|dengan|dari|tidak|gak|enggak|udah|sudah|belum|blm|kalo|kalau|bisa|aja|cuma|banget|bgt|pake|pakai|dapet|dapat|kalian|gue|gw|aku|kamu|bang|ges|cok|anjink|sumpah|gada|sepi|buruan|keburu|soalnya|komen|nonton|ceritain|diceritain|rusak|linknya|mending|langsung|tapi|juga|lagi|masih|harus|punya|gimana|kenapa|siapa|disini|disana|klo|jadi|biar|cuan|garapan|bansos|musang|museng|receh|serok|bingung|takpalah|tumben|gabut|maen|walaupun|keliatan|dibutuhkan|sehari|upah|turun|nyari|dulu|alhamdulillah|absen|siap2|cek|reff|kelakuan|oiya|jelas|lucu|andai|mohon|maaf|mirip|intinya|dapetin|kripto|ngedump|perasaan|sebenrnya|sekrang|bersebrangan|gampang|ngatain|kemaslhatan|coba|nih|hoki|sirkel|klaim|akhirnya|pengidap|penyakit|gila|hantam|jejak|mumpung|dan|semua|bukan|atau|mantap|skuy|gaskeun|garap|alokasi|hadiah|gratis|skrg|udh|utk)\b/gi;
 
 // Turkish-specific letters & common wire translation words (`AstronomicaNews` EN+TR posts).
 const TURKISH_DIACRITIC_RE = /[ğşışİçöüĞŞÇÖÜ]/;
@@ -145,6 +145,21 @@ export function stripBilingualDuplicate(text: string): string {
   return joined.trim();
 }
 
+function stripTrailingNonEnglishClause(line: string, sourceLang?: string): string {
+  const sentences = line.split(/(?<=[.!?])\s+/).filter(Boolean);
+  let current = line;
+  if (sentences.length > 1) {
+    const englishSentences = sentences.filter(
+      s => !isIndonesianSegment(s, sourceLang) && !isTurkishSegment(s),
+    );
+    if (englishSentences.length > 0) {
+      const joined = englishSentences.join(' ').trim();
+      if (joined.length >= 15) current = joined;
+    }
+  }
+  return current.replace(/,\s*[^,\n]{8,}$/g, m => (isIndonesianSegment(m, sourceLang) ? '' : m)).trim();
+}
+
 /**
  * Drops Indonesian-only disclaimer/commentary lines when the post already has
  * substantial English task instructions (e.g. `Getclocked` / `TopNod` posts that
@@ -156,13 +171,13 @@ export function stripNonEnglishLines(text: string, sourceLang?: string): string 
     .map(l => l.trim())
     .filter(Boolean);
   if (lines.length <= 1) {
-    // Also trim trailing Indonesian clause after a comma when preceded by English.
-    return text.replace(/,\s*[^,\n]{8,}$/g, m => (isIndonesianSegment(m, sourceLang) ? '' : m)).trim();
+    // Also trim trailing Indonesian sentences or clauses when preceded by English.
+    return stripTrailingNonEnglishClause(text, sourceLang);
   }
   const englishLines = lines.filter(line => !isIndonesianSegment(line, sourceLang) && !isTurkishSegment(line));
   if (englishLines.length > 0 && englishLines.join(' ').length >= 25) {
     return englishLines
-      .map(l => l.replace(/,\s*[^,\n]{8,}$/g, m => (isIndonesianSegment(m, sourceLang) ? '' : m)))
+      .map(l => stripTrailingNonEnglishClause(l, sourceLang))
       .join('\n')
       .trim();
   }

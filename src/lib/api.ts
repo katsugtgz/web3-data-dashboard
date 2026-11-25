@@ -24,12 +24,29 @@ export function fallbackEligible(err: unknown): boolean {
   return err instanceof Error && /^HTTP 5\d\d$/.test(err.message);
 }
 
-export async function readPrefetched<T>(key: string, signal?: AbortSignal, consume = false): Promise<T | null> {
+export async function readPrefetched<T>(
+  key: string,
+  signal?: AbortSignal,
+  consume = false,
+  timeoutMs = 2_500,
+): Promise<T | null> {
   signal?.throwIfAborted();
-  const map = typeof window !== 'undefined' ? window.__RADAR_PREFETCH__ : undefined;
+  if (typeof window === 'undefined') return null;
+
+  const resolvedMap = window.__RADAR_PREFETCH_RESOLVED__;
+  if (resolvedMap && Object.hasOwn(resolvedMap, key)) {
+    const cached = resolvedMap[key] as T;
+    if (consume) {
+      delete resolvedMap[key];
+      if (window.__RADAR_PREFETCH__) delete window.__RADAR_PREFETCH__[key];
+    }
+    return cached;
+  }
+
+  const map = window.__RADAR_PREFETCH__;
   const pending = map?.[key];
   if (!pending) return null;
-  const deadline = AbortSignal.timeout(2_500);
+  const deadline = AbortSignal.timeout(timeoutMs);
   const stop = signal ? AbortSignal.any([deadline, signal]) : deadline;
   const { promise, resolve } = Promise.withResolvers<null>();
   const release = () => resolve(null);
@@ -37,8 +54,12 @@ export async function readPrefetched<T>(key: string, signal?: AbortSignal, consu
   try {
     const body = await Promise.race([pending.catch(() => null), promise]);
     signal?.throwIfAborted();
-    // Boot only peeks; polling consumes the result or retires a stalled entry.
-    if (consume && map[key] === pending) delete map[key];
+    // Always retire the pending promise once awaited or timed out so a stalled
+    // prefetch never triggers a second 2.5s stall on mount.
+    if (map[key] === pending) delete map[key];
+    if (body !== null && !consume) {
+      window.__RADAR_PREFETCH_RESOLVED__ = { ...window.__RADAR_PREFETCH_RESOLVED__, [key]: body };
+    }
     return body as T | null;
   } finally {
     stop.removeEventListener('abort', release);

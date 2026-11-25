@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { fmtIsoDate, fmtPct, fmtPrice, fmtUsd } from '../src/lib/format';
 import { HAN_RE } from '../src/normalize/i18n';
-import { normalizeDefiProtocols, normalizeDefiYields, normalizePredictionRows, normalizeTrendingRows } from '../src/sources/markets';
+import {
+  fetchCryptoSection,
+  fetchGithubSection,
+  normalizeDefiProtocols,
+  normalizeDefiYields,
+  normalizePredictionRows,
+  normalizeTrendingRows,
+} from '../src/sources/markets';
+import { FORBIDDEN_CJK_RE } from './helpers';
 
 describe('market formatters and normalizers', () => {
   test('formats numbers strictly in English without CJK or arrows', () => {
@@ -119,6 +127,234 @@ describe('market row sort contract', () => {
     const bareAnchors = bare.sortValues ?? [];
     expect(bareAnchors[2]).toBeNull(); // no boosts
     expect(bareAnchors[3]).toBeNull(); // no link
+  });
+
+  test('defi protocols expose deduplicated chains[], yields expose pool hrefs, and unsafe URLs/CJK are sanitized', async () => {
+    const defi = normalizeDefiProtocols(
+      [
+        {
+          id: '协议1',
+          name: 'ProtoX',
+          category: 'DEX',
+          tvl: 50_000_000,
+          chains: ['Ethereum', 'Base 链', 'Ethereum', 'Arbitrum'],
+          url: 'https://good.com@evil.com/phish',
+        },
+        {
+          slug: 'safe-proto',
+          name: 'SafeProto',
+          category: 'Lending',
+          tvl: 10_000_000,
+          chain: 'Solana 链',
+          url: 'https://safe.example.com/app',
+        },
+      ],
+      1_700_000_000_000,
+    );
+    expect(defi.rows[0].chains).toEqual(['Ethereum', 'Base', 'Arbitrum']);
+    expect(defi.rows[0].chain).toBe('Ethereum');
+    expect(defi.rows[0].href).toBeUndefined();
+    expect(defi.rows[1].chains).toEqual(['Solana']);
+    expect(defi.rows[1].href).toBe('https://safe.example.com/app');
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(defi))).toBe(false);
+
+    const yields = normalizeDefiYields(
+      {
+        data: [
+          { pool: 'pool/123 abc', symbol: 'ETH', project: 'lido', chain: 'Arbitrum 链', tvlUsd: 5_000_000, apy: 4.1, ilRisk: 'no' },
+          { symbol: 'DAI', project: 'maker', chain: 'Base', tvlUsd: 2_000_000, apy: 3.0, ilRisk: 'no' },
+        ],
+      },
+      1_700_000_000_000,
+    );
+    expect(yields.rows[0].href).toBe('https://defillama.com/yields/pool/pool%2F123%20abc');
+    expect(yields.rows[0].chain).toBe('Arbitrum');
+    expect(yields.rows[1].href).toBeUndefined();
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(yields))).toBe(false);
+
+    const trending = normalizeTrendingRows([
+      {
+        chainId: 'solana 链',
+        tokenAddress: '0x1234567890abcdef',
+        totalAmount: 10,
+        description: 'Line1\n\tLine2   extra   spaces   that   push   past   42 chars',
+        url: 'javascript:alert(1)',
+        links: [
+          { url: 'https://good.com@evil.com/x' },
+          { url: 'https://valid.example.com /badspace' },
+          { url: 'https://project.example.com/info' },
+        ],
+      },
+    ]);
+    expect(trending[0].cells[0]).not.toMatch(/[\n\t]/);
+    expect(trending[0].cells[0]).toBe('0x1234…cdef · Line1 Line2 extra spaces that push past 42');
+    expect(trending[0].href).toBeUndefined();
+    expect(trending[0].cells[3]).toBe('https://project.example.com/info');
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(trending))).toBe(false);
+
+    const pred = normalizePredictionRows([
+      { slug: 'low', question: 'Low?', outcomePrices: '["0.002","0.998"]' },
+      { slug: 'high', question: 'High?', outcomePrices: '["0.998","0.002"]' },
+      { slug: 'zero', question: 'Zero?', outcomePrices: '["0","1"]' },
+      { slug: 'one', question: 'One?', outcomePrices: '["1","0"]' },
+      { slug: 'edge', question: 'Edge?', outcomePrices: '["0.005","0.995"]' },
+    ]);
+    expect(pred.map(r => r.cells[1])).toEqual(['<1%', '>99%', '0%', '100%', '1%']);
+  });
+
+  test('fetchCryptoSection uses CoinGecko -> CoinPaprika -> Binance fallback chain, usdSort anchors, CJK strip, and body cancel', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevWarn = console.warn;
+    const warns: unknown[][] = [];
+    console.warn = (...args: unknown[]) => warns.push(args);
+
+    const makeCancelledResp = (status: number) => {
+      let cancelled = false;
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('err'));
+          c.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return { res: new Response(stream, { status }), wasCancelled: () => cancelled };
+    };
+
+    try {
+      // 1. Primary CoinGecko: zero volume/price/mcap becomes null sort anchor (mirroring em dash) & CJK stripped.
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('cg-markets')) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 'btc-币',
+                symbol: 'btc币',
+                name: 'Bitcoin 比特',
+                current_price: 0,
+                market_cap: 1_000_000_000,
+                total_volume: 0,
+                price_change_percentage_24h: 2.5,
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (u.includes('cg-cats')) {
+          return new Response(
+            JSON.stringify([{ id: 'cat-分类', name: '分类', market_cap: 50_000_000, market_cap_change_24h: 1.2 }]),
+            { status: 200 },
+          );
+        }
+        return new Response('[]', { status: 404 });
+      }) as unknown as typeof fetch;
+
+      const cgRes = await fetchCryptoSection(1_700_000_000_000, {
+        coingeckoMarkets: 'https://mock.test/cg-markets',
+        coingeckoCategories: 'https://mock.test/cg-cats',
+      });
+      expect(cgRes.section.source).toBe('CoinGecko');
+      expect(cgRes.section.rows[0].sortValues).toEqual(['Bitcoin (BTC)', null, 2.5, null, 1_000_000_000]);
+      expect(FORBIDDEN_CJK_RE.test(JSON.stringify(cgRes))).toBe(false);
+
+      // 2. CoinGecko fails -> logs warning and falls back to CoinPaprika sorted by market cap DESC.
+      const cgFail = makeCancelledResp(429);
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('cg-markets')) return cgFail.res;
+        if (u.includes('paprika')) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 'eth-ethereum',
+                name: 'Ethereum',
+                symbol: 'ETH',
+                rank: 2,
+                quotes: { USD: { price: 3000, volume_24h: 0, market_cap: 360_000_000_000, percent_change_24h: -1.5 } },
+              },
+              {
+                id: 'btc-bitcoin',
+                name: 'Bitcoin 币',
+                symbol: 'BTC',
+                rank: 1,
+                quotes: { USD: { price: 90000, volume_24h: 25_000_000_000, market_cap: 1_800_000_000_000, percent_change_24h: 3.2 } },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response('nope', { status: 500 });
+      }) as unknown as typeof fetch;
+
+      const cpRes = await fetchCryptoSection(1_700_000_000_000, {
+        coingeckoMarkets: 'https://mock.test/cg-markets',
+        coinpaprikaTickers: 'https://mock.test/paprika',
+        binanceTickers: 'https://mock.test/binance',
+      });
+      expect(cgFail.wasCancelled()).toBe(true);
+      expect(warns.some(w => String(w[0]).includes('markets:crypto primary failed'))).toBe(true);
+      expect(cpRes.section.source).toBe('CoinPaprika');
+      expect(cpRes.section.rows.map(r => r.id)).toEqual(['btc-bitcoin', 'eth-ethereum']);
+      expect(cpRes.section.rows[1].sortValues).toEqual(['Ethereum (ETH)', 3000, -1.5, null, 360_000_000_000]);
+      expect(FORBIDDEN_CJK_RE.test(JSON.stringify(cpRes))).toBe(false);
+
+      // 3. CoinGecko + CoinPaprika fail -> falls back to Binance Vision.
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('binance')) {
+          return new Response(
+            JSON.stringify([
+              { symbol: 'SOLUSDT', lastPrice: '0', priceChangePercent: '4.2', quoteVolume: '500000000' },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response('down', { status: 503 });
+      }) as unknown as typeof fetch;
+
+      const binRes = await fetchCryptoSection(1_700_000_000_000, {
+        coingeckoMarkets: 'https://mock.test/cg-markets',
+        coinpaprikaTickers: 'https://mock.test/paprika',
+        binanceTickers: 'https://mock.test/binance',
+      });
+      expect(binRes.section.source).toBe('Binance Vision');
+      expect(binRes.section.rows[0].sortValues).toEqual(['SOL', null, 4.2, 500_000_000, 'SOL/USDT']);
+
+      // 4. All 3 fail -> error summarizes all providers.
+      globalThis.fetch = (async () => new Response('blocked', { status: 403 })) as unknown as typeof fetch;
+      await expect(
+        fetchCryptoSection(1_700_000_000_000, {
+          coingeckoMarkets: 'https://mock.test/cg-markets',
+          coinpaprikaTickers: 'https://mock.test/paprika',
+          binanceTickers: 'https://mock.test/binance',
+        }),
+      ).rejects.toThrow(/CoinGecko.*CoinPaprika.*Binance/);
+
+      // 5. GitHub section strips CJK from id/full_name and rejects unsafe html_url.
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                full_name: 'user/空投-tool',
+                language: 'TypeScript',
+                stargazers_count: 15,
+                pushed_at: '2026-11-20T00:00:00Z',
+                html_url: 'https://good.com@evil.com/repo',
+              },
+            ],
+          }),
+          { status: 200 },
+        )) as unknown as typeof fetch;
+      const gh = await fetchGithubSection(1_700_000_000_000, { github: 'https://mock.test/gh' });
+      expect(gh.rows[0].href).toBeUndefined();
+      expect(FORBIDDEN_CJK_RE.test(JSON.stringify(gh))).toBe(false);
+    } finally {
+      globalThis.fetch = prevFetch;
+      console.warn = prevWarn;
+    }
   });
 });
 

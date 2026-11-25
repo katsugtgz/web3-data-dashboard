@@ -6,6 +6,9 @@ on:
     paths:
       - 'worker/**'
       - 'shared/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/worker-deploy.yml'
   workflow_dispatch:
 
 permissions:
@@ -30,11 +33,22 @@ jobs:
     # call blocks every later deploy for up to GitHub's 6h job default.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.5
+      - name: Install ripgrep
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update -q && sudo apt-get install -yq ripgrep)
       - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Unit tests
+        run: bun test
+      - name: Check zero CJK in code
+        run: bash scripts/check-no-cjk.sh
       - name: Deploy Worker & apply D1 migrations
         working-directory: worker
         env:

@@ -42,12 +42,13 @@ export function useFeed(): FeedState {
 
   const [poll] = useState(createPollLifecycle);
   const [session] = useState(() => createFeedSession());
-  const knownIdsRef = useRef<Set<string>>(new Set());
+  const [initialKnownIds] = useState(() => new Set((initial?.items ?? []).map(it => it.id)));
+  const knownIdsRef = useRef<Set<string>>(initialKnownIds);
   const hasLiveRef = useRef(false);
 
   // Mirrors of state for stable callbacks (no re-creation per render).
   const pendingItemsRef = useRef<FeedItem[]>([]);
-  const itemsRef = useRef<FeedItem[]>([]);
+  const itemsRef = useRef<FeedItem[]>(initial?.items ?? []);
   useEffect(() => {
     pendingItemsRef.current = pendingItems;
     itemsRef.current = items;
@@ -55,7 +56,9 @@ export function useFeed(): FeedState {
   }, [pendingItems, items]);
 
   const fetchNow = useCallback((mode: PollMode) => {
-    if (mode !== 'background') setLoading(true);
+    if (mode === 'manual' || (mode === 'initial' && itemsRef.current.length === 0)) {
+      setLoading(true);
+    }
     const { signal, skipped } = poll.beginRequest(mode);
     if (skipped) return;
 
@@ -63,9 +66,9 @@ export function useFeed(): FeedState {
       .fetch(signal, { resetResume: mode === 'manual' })
       .then(res => {
         if (signal.aborted) return;
-        poll.settle();
         if (res.status === 200) {
           if (res.source === 'snapshot' && hasLiveRef.current) {
+            poll.settle(false);
             setFailed(true);
             setLoading(false);
             return;
@@ -79,16 +82,19 @@ export function useFeed(): FeedState {
               setGeneratedAt(update.generatedAt);
             }
             knownIdsRef.current = update.knownIds;
+            itemsRef.current = update.items;
+            pendingItemsRef.current = update.pending ?? [];
             setItems(update.items);
             setPendingItems(update.pending ?? []);
           }
         }
+        poll.settle(true);
         setFailed(false);
         setLoading(false);
       })
       .catch(() => {
         if (signal.aborted) return;
-        poll.settle();
+        poll.settle(false);
         setFailed(true);
         setLoading(false);
       });
@@ -104,6 +110,8 @@ export function useFeed(): FeedState {
   const applyPending = useCallback(() => {
     const pending = pendingItemsRef.current;
     if (pending.length === 0) return;
+    itemsRef.current = pending;
+    pendingItemsRef.current = [];
     knownIdsRef.current = new Set(pending.map(it => it.id));
     setItems(pending);
     setPendingItems([]);
