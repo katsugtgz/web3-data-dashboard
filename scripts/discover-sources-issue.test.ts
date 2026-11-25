@@ -166,4 +166,68 @@ describe('upsertGithubIssue', () => {
     }
     expect(calls.filter(c => c.method === 'GET').length).toBe(12);
   });
+
+  test('throws without creating a duplicate when maxPages is reached with nextUrl still set, and creates when pagination is exhausted', async () => {
+    // 1. Reaches maxPages while Link rel="next" remains -> must throw before POST.
+    const cappedCalls: string[] = [];
+    const cappedFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      cappedCalls.push(method);
+      const items = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, title: `Other ${i}` }));
+      return new Response(JSON.stringify(items), {
+        status: 200,
+        headers: {
+          Link: '<https://api.github.com/repos/owner/repo/issues?state=open&labels=source-discovery&per_page=100&page=2>; rel="next"',
+        },
+      });
+    }) as typeof fetch;
+
+    await expect(
+      upsertGithubIssue('Source candidates', 'body', {
+        repo: 'owner/repo',
+        token: 'ghp_test',
+        fetchImpl: cappedFetch,
+        maxPages: 1,
+      }),
+    ).rejects.toThrow(/maxPages|pagination/i);
+    expect(cappedCalls).toEqual(['GET']);
+
+    // 2. Reaches maxPages with 100 items and no Link header (still leaves nextUrl set) -> must throw before POST.
+    const fullPageCalls: string[] = [];
+    const fullPageFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      fullPageCalls.push(init?.method ?? 'GET');
+      const items = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, title: `Other ${i}` }));
+      return new Response(JSON.stringify(items), { status: 200 });
+    }) as typeof fetch;
+
+    await expect(
+      upsertGithubIssue('Source candidates', 'body', {
+        repo: 'owner/repo',
+        token: 'ghp_test',
+        fetchImpl: fullPageFetch,
+        maxPages: 1,
+      }),
+    ).rejects.toThrow(/maxPages|pagination/i);
+    expect(fullPageCalls).toEqual(['GET']);
+
+    // 3. Exhausts pagination (< 100 items, no Link rel="next") -> creates issue via POST.
+    const createCalls: string[] = [];
+    const exhaustedFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      createCalls.push(method);
+      if (method === 'GET') {
+        return new Response(JSON.stringify([{ number: 1, title: 'Other issue' }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ number: 2 }), { status: 201 });
+    }) as typeof fetch;
+
+    const created = await upsertGithubIssue('Source candidates', 'body', {
+      repo: 'owner/repo',
+      token: 'ghp_test',
+      fetchImpl: exhaustedFetch,
+      maxPages: 1,
+    });
+    expect(created).toEqual({ action: 'created' });
+    expect(createCalls).toEqual(['GET', 'POST']);
+  });
 });

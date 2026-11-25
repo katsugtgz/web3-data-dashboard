@@ -29,7 +29,12 @@ import {
   type AiBindingLike,
 } from './normalize/summarize';
 import { loadKnownDomains, seedKnownDomains } from './safety';
-import { buildCuratedAirdropFeed, type CuratedSourceOutcome } from './sources/curated';
+import {
+  backfillLegacyAirdropSources,
+  buildCuratedAirdropFeed,
+  filterAirdropFeedByDisabledSources,
+  type CuratedSourceOutcome,
+} from './sources/curated';
 import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
 import { computeFeedBackoff, pollFeedBatch } from './sources/feeds';
 import {
@@ -172,22 +177,30 @@ function parseSnapshotJson<T>(row: SnapshotRow | null): T | null {
 
 async function loadCachedSurf(db: D1Database): Promise<AirdropFeed | null> {
   try {
-    return parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
+    const feed = parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
+    return feed ? backfillLegacyAirdropSources(feed) : null;
   } catch (err) {
     console.error('cron-error:loadCachedSurf', err);
     return null;
   }
 }
 
-async function loadCachedAirdrops(db: D1Database): Promise<{ feed: AirdropFeed | null; fetchedAt: number }> {
+async function loadCachedAirdrops(
+  db: D1Database,
+): Promise<{ feed: AirdropFeed | null; fetchedAt: number; etag: string | null }> {
   let row: SnapshotRow | null = null;
   try {
     row = await readSnapshot(db, 'airdrops');
   } catch (err) {
     console.error('cron-error:loadCachedAirdrops', err);
   }
-  const feed = parseSnapshotJson<AirdropFeed>(row);
-  return { feed, fetchedAt: feed && row ? row.fetched_at : 0 };
+  const parsed = parseSnapshotJson<AirdropFeed>(row);
+  const feed = parsed ? backfillLegacyAirdropSources(parsed) : null;
+  return {
+    feed,
+    fetchedAt: feed && row ? row.fetched_at : 0,
+    etag: feed && row ? row.etag : null,
+  };
 }
 
 async function loadCachedDefi(db: D1Database): Promise<{ defi: MarketSection | null; fetchedAt: number }> {
@@ -414,6 +427,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   let airdropsLoaded = false;
   let airdropsFetchedAt = 0;
   let airdropsHasBody = false;
+  let filteredPendingToken = 0;
 
   await Promise.all([
     (async () => {
@@ -432,7 +446,9 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
       }
 
       const [prevLoaded, defiLlamaFeed, cachedAsso, cachedArndxt, sourceStates] = await Promise.all([
-        !prevMeta || prevMeta.body_len > 2 ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: null, fetchedAt: 0 }),
+        !prevMeta || prevMeta.body_len > 2
+          ? loadCachedAirdrops(env.DB)
+          : Promise.resolve({ feed: null, fetchedAt: 0, etag: null }),
         loadCachedDefiLlamaAirdrops(env.DB, nowMs),
         loadFreshCachedSheetFeed(env.DB, 'airdrops:asso7878', nowMs),
         loadFreshCachedSheetFeed(env.DB, 'airdrops:arndxt', nowMs),
@@ -507,10 +523,54 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
       } catch (err) {
         console.error('cron-error:airdrops', err);
         await markSnapshotError(env.DB, 'airdrops', err, nowMs);
-        inMemoryAirdrops = prevFeed;
-        airdropsLoaded = true;
-        airdropsHasBody = Boolean(prevFeed);
-        airdropsFetchedAt = prevFeed ? prevLoaded.fetchedAt : 0;
+        let fallbackFeed = prevFeed;
+        let lostFilterRace = false;
+        if (prevFeed && sourceStates.disabledSourceIds.size > 0) {
+          const filtered = filterAirdropFeedByDisabledSources(prevFeed, sourceStates.disabledSourceIds);
+          if (filtered !== prevFeed) {
+            try {
+              const body = JSON.stringify(filtered);
+              const etag = await bodyEtag(body);
+              const pendingToken = Math.max(nowMs, 1);
+              const [updateRes] = await env.DB.batch([
+                env.DB.prepare(
+                  `UPDATE snapshots
+                   SET body = ?2, etag = ?3
+                   WHERE key = ?1 AND fetched_at = ?4 AND etag IS ?5 AND fetched_at <= ?6`,
+                ).bind('airdrops', body, etag, prevLoaded.fetchedAt, prevLoaded.etag, nowMs),
+                env.DB.prepare(
+                  `INSERT INTO cron_state (key, last_run_at)
+                   SELECT 'known_domains_seed_pending', ?1
+                   WHERE changes() > 0
+                   ON CONFLICT(key) DO UPDATE SET last_run_at = MAX(cron_state.last_run_at + 1, excluded.last_run_at)`,
+                ).bind(pendingToken),
+              ]);
+              if ((updateRes.meta?.changes ?? 0) > 0) {
+                fallbackFeed = filtered;
+                filteredPendingToken = pendingToken;
+              } else {
+                // A newer snapshot or concurrent filtered write won; drop stale fallback so
+                // domain seeding is skipped here and downstream polling reloads fresh DB state.
+                fallbackFeed = null;
+                lostFilterRace = true;
+              }
+            } catch (updateErr) {
+              console.error('cron-error:airdrops-filter-persist', updateErr);
+              fallbackFeed = filtered;
+            }
+          }
+        }
+        if (lostFilterRace) {
+          inMemoryAirdrops = null;
+          airdropsLoaded = false;
+          airdropsHasBody = true;
+          airdropsFetchedAt = prevLoaded.fetchedAt;
+        } else {
+          inMemoryAirdrops = fallbackFeed;
+          airdropsLoaded = true;
+          airdropsHasBody = Boolean(fallbackFeed);
+          airdropsFetchedAt = fallbackFeed ? prevLoaded.fetchedAt : 0;
+        }
       }
     })(),
     runIsolated(env.DB, 'markets:crypto', nowMs, () => fetchCryptoSection(nowMs, urls)),
@@ -532,18 +592,23 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   ]);
 
   // Gate seedKnownDomains on actual airdrops or markets:defi snapshot updates
-  // (tracked via cron_state 'known_domains_seed') to avoid full 5-min rescans.
+  // (tracked via cron_state 'known_domains_seed') or a pending filtered-fallback
+  // cleanup marker ('known_domains_seed_pending') to avoid full 5-min rescans.
   let defiMeta: SnapshotMetaWithLenRow | null = null;
   let lastSeededAt = 0;
+  let pendingSeedAt = 0;
   try {
-    const [dm, seedRow] = await Promise.all([
+    const [dm, stateRes] = await Promise.all([
       readSnapshotMeta(env.DB, 'markets:defi'),
-      env.DB.prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed'`).first<{
-        last_run_at: number;
-      }>(),
+      env.DB.prepare(
+        `SELECT key, last_run_at FROM cron_state WHERE key IN ('known_domains_seed', 'known_domains_seed_pending')`,
+      ).all<{ key: string; last_run_at: number }>(),
     ]);
     defiMeta = dm;
-    lastSeededAt = seedRow?.last_run_at ?? 0;
+    for (const row of stateRes.results ?? []) {
+      if (row.key === 'known_domains_seed') lastSeededAt = row.last_run_at;
+      else if (row.key === 'known_domains_seed_pending') pendingSeedAt = row.last_run_at;
+    }
   } catch (err) {
     console.error('cron-error:known_domains_seed_meta', err);
   }
@@ -555,22 +620,34 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   const xBatch = parseNonNegativeInt(env.X_BATCH_SIZE, 3);
   const feedBatch = parseNonNegativeInt(env.FEED_BATCH_SIZE, 3);
 
+  const clearPendingUpTo = Math.max(pendingSeedAt, filteredPendingToken);
   let surf: AirdropFeed | null = inMemoryAirdrops;
-  if (latestDomainSourceTs > lastSeededAt) {
+  if (latestDomainSourceTs > lastSeededAt || clearPendingUpTo > 0) {
     const [loadedSurf, loadedDefi] = await Promise.all([
-      !airdropsLoaded && airdropsHasBody ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: surf, fetchedAt: airdropsFetchedAt }),
+      !airdropsLoaded && airdropsHasBody
+        ? loadCachedAirdrops(env.DB)
+        : Promise.resolve({ feed: surf, fetchedAt: airdropsFetchedAt, etag: null }),
       defiValidTs > 0 ? loadCachedDefi(env.DB) : Promise.resolve({ defi: null, fetchedAt: 0 }),
     ]);
     surf = loadedSurf.feed;
     airdropsLoaded = true;
     await seedKnownDomains(env.DB, surf, loadedDefi.defi);
-    await env.DB.prepare(
-      `INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)
-       ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at
-       WHERE excluded.last_run_at > cron_state.last_run_at`,
-    )
-      .bind(latestDomainSourceTs)
-      .run();
+    if (latestDomainSourceTs > lastSeededAt) {
+      await env.DB.prepare(
+        `INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)
+         ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at
+         WHERE excluded.last_run_at > cron_state.last_run_at`,
+      )
+        .bind(latestDomainSourceTs)
+        .run();
+    }
+    if (clearPendingUpTo > 0) {
+      await env.DB.prepare(
+        `DELETE FROM cron_state WHERE key = 'known_domains_seed_pending' AND last_run_at <= ?1`,
+      )
+        .bind(clearPendingUpTo)
+        .run();
+    }
   } else if (!airdropsLoaded && airdropsHasBody && (xBatch > 0 || feedBatch > 0)) {
     surf = (await loadCachedAirdrops(env.DB)).feed;
     airdropsLoaded = true;

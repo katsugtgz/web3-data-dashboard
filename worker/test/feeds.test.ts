@@ -784,4 +784,430 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
       globalThis.fetch = prevFetch;
     }
   });
+
+  test('normalizePostId keeps clean GUIDs verbatim and prevents distinct upstream GUIDs from colliding', () => {
+    const longSuffix = 'x'.repeat(80);
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+      <rss version="2.0"><channel><title>GuidCollisions</title>
+        <item>
+          <title>Campaign Dash A</title>
+          <link>https://example.com/1</link>
+          <guid>campaign-a</guid>
+          <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+          <description>Dash variant</description>
+        </item>
+        <item>
+          <title>Campaign Slash A</title>
+          <link>https://example.com/2</link>
+          <guid>campaign/a</guid>
+          <pubDate>Mon, 23 Nov 2026 10:01:00 GMT</pubDate>
+          <description>Slash variant</description>
+        </item>
+        <item>
+          <title>Https Scheme Guid</title>
+          <link>https://example.com/3</link>
+          <guid>https://feed.example/post/42</guid>
+          <pubDate>Mon, 23 Nov 2026 10:02:00 GMT</pubDate>
+          <description>HTTPS guid</description>
+        </item>
+        <item>
+          <title>Http Scheme Guid</title>
+          <link>https://example.com/4</link>
+          <guid>http://feed.example/post/42</guid>
+          <pubDate>Mon, 23 Nov 2026 10:03:00 GMT</pubDate>
+          <description>HTTP guid</description>
+        </item>
+        <item>
+          <title>Long Guid 1</title>
+          <link>https://example.com/5</link>
+          <guid>prefix-1-${longSuffix}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:04:00 GMT</pubDate>
+          <description>Long guid 1</description>
+        </item>
+        <item>
+          <title>Long Guid 2</title>
+          <link>https://example.com/6</link>
+          <guid>prefix-2-${longSuffix}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:05:00 GMT</pubDate>
+          <description>Long guid 2</description>
+        </item>
+        <item>
+          <title>Tilde Guid</title>
+          <link>https://example.com/7</link>
+          <guid>campaign-a~0123456789abcdef</guid>
+          <pubDate>Mon, 23 Nov 2026 10:06:00 GMT</pubDate>
+          <description>Contains tilde</description>
+        </item>
+      </channel></rss>`;
+
+    const first = parseRssOrAtomXml(rss);
+    const second = parseRssOrAtomXml(rss);
+
+    expect(first.length).toBe(7);
+    expect(new Set(first.map(p => p.id)).size).toBe(7);
+    expect(first.map(p => p.id)).toEqual(second.map(p => p.id));
+
+    const dashPost = first.find(p => p.postUrl === 'https://example.com/1')!;
+    const slashPost = first.find(p => p.postUrl === 'https://example.com/2')!;
+    expect(dashPost.id).toBe('campaign-a');
+    expect(slashPost.id).toMatch(/^campaign-a~[0-9a-f]{16}$/);
+    expect(slashPost.id).not.toBe(dashPost.id);
+  });
+
+  test('parsePendlePoints keeps deterministic card IDs stable when liquidity order flips', () => {
+    const highAPlusB = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 5_000_000 },
+          },
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: 'A-B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_500_000 },
+          },
+          {
+            name: 'sUSDe',
+            address: '0xc',
+            protocol: 'Ethena',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 2_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+
+    const highADashB = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: 'A-B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 8_000_000 },
+          },
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+          {
+            name: 'sUSDe',
+            address: '0xc',
+            protocol: 'Ethena',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 2_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+
+    const id1 = (name: string) => highAPlusB.cards.find(c => c.n === name)!.id;
+    const id2 = (name: string) => highADashB.cards.find(c => c.n === name)!.id;
+
+    expect(id1('Ethena')).toBe('pendle:ethena');
+    expect(id2('Ethena')).toBe('pendle:ethena');
+    expect(id1('A-B')).toBe('pendle:a-b');
+    expect(id2('A-B')).toBe('pendle:a-b');
+    expect(id1('A+B')).toMatch(/^pendle:a-b~[0-9a-f]{8}$/);
+    expect(id1('A+B')).toBe(id2('A+B'));
+    expect(id1('A+B')).not.toBe(id1('A-B'));
+
+    // Canonical protocol name matching `<slug>-<hash>` must never collide with hashed `A+B` regardless of liquidity order
+    const aPlusHash = id1('A+B')!.split('~')[1];
+    const canonicalName = `a-b-${aPlusHash}`;
+    const clashFwd = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 9_000_000 },
+          },
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: canonicalName,
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+    const clashRev = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'M2',
+            address: '0xb',
+            protocol: canonicalName,
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 9_000_000 },
+          },
+          {
+            name: 'M1',
+            address: '0xa',
+            protocol: 'A+B',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 1_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(clashFwd.cards.find(c => c.n === canonicalName)!.id).toBe(`pendle:${canonicalName}`);
+    expect(clashRev.cards.find(c => c.n === canonicalName)!.id).toBe(`pendle:${canonicalName}`);
+    expect(clashFwd.cards.find(c => c.n === 'A+B')!.id).toBe(`pendle:a-b~${aPlusHash}`);
+    expect(clashRev.cards.find(c => c.n === 'A+B')!.id).toBe(`pendle:a-b~${aPlusHash}`);
+  });
+
+  test('parseMerklOpportunities keeps deterministic card IDs stable across TVL swaps and protocol.id values', () => {
+    const highAPlusB = parseMerklOpportunities(
+      [
+        {
+          id: 'opp-1',
+          name: 'Pool 1',
+          chain: { name: 'Base' },
+          protocol: { name: 'A+B' },
+          status: 'LIVE',
+          tvl: 5_000_000,
+          depositUrl: 'https://ab1.xyz',
+        },
+        {
+          id: 'opp-2',
+          name: 'Pool 2',
+          chain: { name: 'Base' },
+          protocol: { name: 'A-B' },
+          status: 'LIVE',
+          tvl: 1_000_000,
+          depositUrl: 'https://ab2.xyz',
+        },
+        {
+          id: 'opp-3',
+          name: 'Morpho Vault',
+          chain: { name: 'Base' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          status: 'LIVE',
+          tvl: 2_000_000,
+          depositUrl: 'https://app.morpho.org/vault',
+        },
+        {
+          id: 'opp-4',
+          name: 'Alpha V1 Pool',
+          chain: { name: 'Arbitrum' },
+          protocol: { id: 'alpha-v1', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 4_000_000,
+          depositUrl: 'https://alpha-v1.xyz',
+        },
+        {
+          id: 'opp-5',
+          name: 'Alpha V2 Pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'alpha_v2', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 1_200_000,
+          depositUrl: 'https://alpha-v2.xyz',
+        },
+      ],
+      NOW,
+    );
+
+    const swappedTvl = parseMerklOpportunities(
+      [
+        {
+          id: 'opp-2',
+          name: 'Pool 2',
+          chain: { name: 'Base' },
+          protocol: { name: 'A-B' },
+          status: 'LIVE',
+          tvl: 6_000_000,
+          depositUrl: 'https://ab2.xyz',
+        },
+        {
+          id: 'opp-1',
+          name: 'Pool 1',
+          chain: { name: 'Base' },
+          protocol: { name: 'A+B' },
+          status: 'LIVE',
+          tvl: 900_000,
+          depositUrl: 'https://ab1.xyz',
+        },
+        {
+          id: 'opp-3',
+          name: 'Morpho Vault',
+          chain: { name: 'Base' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          status: 'LIVE',
+          tvl: 2_000_000,
+          depositUrl: 'https://app.morpho.org/vault',
+        },
+        {
+          id: 'opp-5',
+          name: 'Alpha V2 Pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'alpha_v2', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 7_000_000,
+          depositUrl: 'https://alpha-v2.xyz',
+        },
+        {
+          id: 'opp-4',
+          name: 'Alpha V1 Pool',
+          chain: { name: 'Arbitrum' },
+          protocol: { id: 'alpha-v1', name: 'Alpha' },
+          status: 'LIVE',
+          tvl: 800_000,
+          depositUrl: 'https://alpha-v1.xyz',
+        },
+      ],
+      NOW,
+    );
+
+    const byUrl1 = (url: string) => highAPlusB.cards.find(c => c.url === url)!.id;
+    const byUrl2 = (url: string) => swappedTvl.cards.find(c => c.url === url)!.id;
+
+    expect(byUrl1('https://app.morpho.org/vault')).toBe('merkl:morpho');
+    expect(byUrl2('https://app.morpho.org/vault')).toBe('merkl:morpho');
+    expect(byUrl1('https://ab2.xyz/')).toBe('merkl:a-b');
+    expect(byUrl2('https://ab2.xyz/')).toBe('merkl:a-b');
+    expect(byUrl1('https://ab1.xyz/')).toMatch(/^merkl:a-b~[0-9a-f]{8}$/);
+    expect(byUrl1('https://ab1.xyz/')).toBe(byUrl2('https://ab1.xyz/'));
+    expect(byUrl1('https://ab1.xyz/')).not.toBe(byUrl1('https://ab2.xyz/'));
+
+    // Distinct protocol.id values with the same display name stay distinct and TVL-order-independent
+    expect(byUrl1('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
+    expect(byUrl2('https://alpha-v1.xyz/')).toBe('merkl:alpha-v1');
+    expect(byUrl1('https://alpha-v2.xyz/')).toMatch(/^merkl:alpha-v2~[0-9a-f]{8}$/);
+    expect(byUrl1('https://alpha-v2.xyz/')).toBe(byUrl2('https://alpha-v2.xyz/'));
+    expect(byUrl1('https://alpha-v1.xyz/')).not.toBe(byUrl1('https://alpha-v2.xyz/'));
+
+    // Canonical protocol.id matching `<slug>-<hash>` never collides with hashed `A+B` across TVL swaps
+    const merklHash = byUrl1('https://ab1.xyz/')!.split('~')[1];
+    const canonicalProto = `a-b-${merklHash}`;
+    const mFwd = parseMerklOpportunities(
+      [
+        { id: '1', name: 'P1', chain: { name: 'Base' }, protocol: { name: 'A+B' }, status: 'LIVE', tvl: 9_000_000, depositUrl: 'https://aplus.xyz' },
+        { id: '2', name: 'P2', chain: { name: 'Base' }, protocol: { id: canonicalProto, name: canonicalProto }, status: 'LIVE', tvl: 1_000_000, depositUrl: 'https://canon.xyz' },
+      ],
+      NOW,
+    );
+    const mRev = parseMerklOpportunities(
+      [
+        { id: '2', name: 'P2', chain: { name: 'Base' }, protocol: { id: canonicalProto, name: canonicalProto }, status: 'LIVE', tvl: 9_000_000, depositUrl: 'https://canon.xyz' },
+        { id: '1', name: 'P1', chain: { name: 'Base' }, protocol: { name: 'A+B' }, status: 'LIVE', tvl: 1_000_000, depositUrl: 'https://aplus.xyz' },
+      ],
+      NOW,
+    );
+    expect(mFwd.cards.find(c => c.url === 'https://canon.xyz/')!.id).toBe(`merkl:${canonicalProto}`);
+    expect(mRev.cards.find(c => c.url === 'https://canon.xyz/')!.id).toBe(`merkl:${canonicalProto}`);
+    expect(mFwd.cards.find(c => c.url === 'https://aplus.xyz/')!.id).toBe(`merkl:a-b~${merklHash}`);
+    expect(mRev.cards.find(c => c.url === 'https://aplus.xyz/')!.id).toBe(`merkl:a-b~${merklHash}`);
+  });
+
+  test('pollFeedBatch deduplicates already-stored legacy-ID posts while still ingesting distinct posts sharing an old truncated tail', async () => {
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, tags, enabled)
+         VALUES ('feed:legacy_rss', 'feed', 'legacy_rss', 'en', 0.8, '["drops"]', 1)`,
+      )
+      .run();
+
+    // Seed an existing post stored under the pre-hash legacy normalizePostId format
+    const sharedTail = 'a'.repeat(70);
+    const oldGuid = 'https://feed.example/post/42';
+    const legacyId = 'feed:legacy_rss:feed.example-post-42';
+    const collidingOldUrl = `https://a.example/prefix/${sharedTail}`;
+    const collidingNewUrl = `https://b.example/prefix/${sharedTail}`;
+    const collidingLegacyTail = `prefix-${sharedTail}`.slice(-80);
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_legacy', 'LegacyProto', '[]', '["testnet"]', 'Legacy', 'rule', 'ok', '[]', 0.8, 1, ?1, ?1, 1),
+                ('c_tail', 'TailProtoA', '[]', '["testnet"]', 'TailA', 'rule', 'ok', '[]', 0.8, 1, ?1, ?1, 1)`,
+      )
+      .bind(NOW - 3_600_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES (?1, 'feed:legacy_rss', ?2, ?3, 'LegacyProto testnet airdrop live', '[]', 'c_legacy', ?3),
+                (?4, 'feed:legacy_rss', ?5, ?3, 'TailProtoA testnet airdrop live', '[]', 'c_tail', ?3)`,
+      )
+      .bind(legacyId, oldGuid, NOW - 3_600_000, `feed:legacy_rss:${collidingLegacyTail}`, collidingOldUrl)
+      .run();
+
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+      <rss version="2.0"><channel><title>LegacyFeed</title>
+        <item>
+          <title>LegacyProto testnet airdrop live</title>
+          <link>${oldGuid}</link>
+          <guid>${oldGuid}</guid>
+          <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://legacyproto.xyz/faucet</description>
+        </item>
+        <item>
+          <title>BrandNewProto testnet airdrop live</title>
+          <link>https://feed.example/post/43</link>
+          <guid>https://feed.example/post/43</guid>
+          <pubDate>Mon, 23 Nov 2026 11:00:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://brandnewproto.xyz/faucet</description>
+        </item>
+        <item>
+          <title>TailProtoB testnet airdrop live</title>
+          <link>${collidingNewUrl}</link>
+          <guid>${collidingNewUrl}</guid>
+          <pubDate>Mon, 23 Nov 2026 11:30:00 GMT</pubDate>
+          <description>Claim testnet faucet at https://tailprotob.xyz/faucet</description>
+        </item>
+      </channel></rss>`;
+
+    const parsed = parseRssOrAtomXml(rss);
+    const res = await pollFeedBatch(db, 5, NOW, null, async () => parsed);
+    expect(res.degraded).toBe(0);
+    // Post 42 must NOT be re-inserted; Post 43 and TailProtoB (different post_url) MUST be inserted.
+    expect(res.insertedPosts).toBe(2);
+
+    const post42Rows = await db
+      .prepare(`SELECT id FROM posts WHERE source_id = 'feed:legacy_rss' AND post_url = ?1`)
+      .bind(oldGuid)
+      .all<{ id: string }>();
+    expect(post42Rows.results).toHaveLength(1);
+    expect(post42Rows.results[0].id).toBe(legacyId);
+  });
 });

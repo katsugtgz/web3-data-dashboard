@@ -21,16 +21,29 @@ import { resolveCuratedSourceUrl, type SourceConfig } from './registry';
 import { ARNDXT_SHEET_URL, ASSO7878_SHEET_URL, fetchArndxtSheet, fetchAsso7878Sheet } from './sheets';
 import { SURF_AIRDROPS_URL, fetchSurfAirdrops } from './surf';
 
-interface LlamaProtocolItem {
-  slug?: string;
-  name?: string;
-  symbol?: string | null;
-  category?: string;
-  chains?: string[];
-  chain?: string;
-  tvl?: number;
-  listedAt?: number;
-  url?: string;
+interface ValidLlamaProtocolItem {
+  slug?: unknown;
+  name: string;
+  symbol: '-';
+  category?: string | null;
+  chains?: unknown;
+  chain?: unknown;
+  tvl: number;
+  listedAt?: unknown;
+  url?: unknown;
+}
+
+function isValidLlamaProtocolItem(entry: unknown): entry is ValidLlamaProtocolItem {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  const p = entry as Record<string, unknown>;
+  if (typeof p.name !== 'string' || p.name.trim().length === 0) return false;
+  if (p.symbol !== '-') return false;
+  if (p.category != null && typeof p.category !== 'string') return false;
+  if (typeof p.category === 'string' && DEFILLAMA_EXCLUDED_CATEGORIES.has(p.category.trim().toLowerCase())) {
+    return false;
+  }
+  if (typeof p.tvl !== 'number' || !Number.isFinite(p.tvl) || p.tvl < DEFILLAMA_MIN_TVL_USD) return false;
+  return true;
 }
 
 const DEFILLAMA_MIN_TVL_USD = 5_000_000;
@@ -77,43 +90,43 @@ export function extractDefiLlamaTokenlessAirdrops(raw: unknown, nowMs = Date.now
   }
 
   const recentCutoffSec = nowMs / 1000 - DEFILLAMA_RECENT_WINDOW_SEC;
-  const filtered = (raw as LlamaProtocolItem[])
-    .filter(
-      p =>
-        Boolean(p.name) &&
-        p.symbol === '-' &&
-        !(p.category && DEFILLAMA_EXCLUDED_CATEGORIES.has(p.category.trim().toLowerCase())) &&
-        typeof p.tvl === 'number' &&
-        Number.isFinite(p.tvl) &&
-        p.tvl >= DEFILLAMA_MIN_TVL_USD,
-    )
-    .sort((a, b) => (b.tvl ?? 0) - (a.tvl ?? 0))
+  const filtered = raw
+    .filter(isValidLlamaProtocolItem)
+    .sort((a, b) => b.tvl - a.tvl)
     .slice(0, DEFILLAMA_MAX_CARDS);
 
   const cards: Card[] = [];
   for (const p of filtered) {
-    const name = stripOrTranslateCjk(p.name ?? '');
+    const name = stripOrTranslateCjk(p.name);
     if (!name) continue;
-    const tvl = p.tvl ?? 0;
+    const tvl = p.tvl;
     const category = stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi';
+    const rawChains = Array.isArray(p.chains)
+      ? p.chains
+          .filter((c): c is string => typeof c === 'string')
+          .map(c => stripOrTranslateCjk(c))
+          .filter(Boolean)
+      : [];
     const chains =
-      Array.isArray(p.chains) && p.chains.length > 0
-        ? p.chains.map(c => stripOrTranslateCjk(c)).filter(Boolean)
-        : p.chain
+      rawChains.length > 0
+        ? rawChains
+        : typeof p.chain === 'string'
           ? [stripOrTranslateCjk(p.chain)].filter(Boolean)
           : [];
-    const url = p.url ? cleanUrl(p.url) : null;
-    const isRecentlyListed = typeof p.listedAt === 'number' && p.listedAt >= recentCutoffSec;
+    const url = typeof p.url === 'string' ? cleanUrl(p.url) : null;
+    const isRecentlyListed =
+      typeof p.listedAt === 'number' && Number.isFinite(p.listedAt) && p.listedAt >= recentCutoffSec;
     const grade: Grade = tvl >= 100_000_000 ? 'S' : tvl >= 30_000_000 ? 'A' : tvl >= 10_000_000 ? 'B' : 'C';
     const sc = grade === 'S' ? 84 : grade === 'A' ? 74 : grade === 'B' ? 62 : 50;
     const badges: Badge[] = isRecentlyListed ? ['live', 'early'] : ['early'];
     const taskType = mapLlamaCategoryType(category);
     const taskTitle = `Use tokenless ${category} protocol (${fmtUsd(tvl)} TVL)`;
+    const cleanSlug = typeof p.slug === 'string' ? stripOrTranslateCjk(p.slug) : '';
 
     cards.push({
       r: cards.length + 1,
       n: name,
-      id: `defillama:${p.slug ? stripOrTranslateCjk(p.slug) || slugify(name) : slugify(name)}`,
+      id: `defillama:${cleanSlug || slugify(name)}`,
       chain: chains[0],
       chains: chains.length > 0 ? chains : undefined,
       t: null,
@@ -167,15 +180,24 @@ function isUntrustedSheetSource(source?: string): boolean {
   return Boolean(source && UNTRUSTED_SHEET_SOURCES.has(source.trim().toLowerCase()));
 }
 
-function canonicalProjectDomain(card: Card): string | null {
+function eligibleProjectDomains(card: Card): string[] {
+  const domains: string[] = [];
+  const seen = new Set<string>();
   const candidates = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
   for (const raw of candidates) {
     if (!raw) continue;
-    const dom = getRegistrableDomain(raw);
-    if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom] || isCuratedAggregatorDomain(dom, card)) continue;
-    return dom.toLowerCase();
+    const dom = getRegistrableDomain(raw)?.toLowerCase();
+    if (!dom || seen.has(dom) || isPlatformDomain(dom) || URL_SHORTENERS[dom] || isCuratedAggregatorDomain(dom, card)) {
+      continue;
+    }
+    seen.add(dom);
+    domains.push(dom);
   }
-  return null;
+  return domains;
+}
+
+function canonicalProjectDomain(card: Card): string | null {
+  return eligibleProjectDomains(card)[0] ?? null;
 }
 
 function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
@@ -292,15 +314,21 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
       }
 
       if (matchIdx !== undefined) {
-        mergedCards[matchIdx] = mergeSecondaryIntoPrimary(mergedCards[matchIdx], card);
-        if (dom && !byDomain.has(dom)) byDomain.set(dom, matchIdx);
+        const merged = mergeSecondaryIntoPrimary(mergedCards[matchIdx], card);
+        mergedCards[matchIdx] = merged;
+        for (const mergedDom of eligibleProjectDomains(merged)) {
+          if (!byDomain.has(mergedDom)) byDomain.set(mergedDom, matchIdx);
+        }
         if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, matchIdx);
         continue;
       }
 
       const nextIdx = mergedCards.length;
-      mergedCards.push({ ...card });
-      if (dom) byDomain.set(dom, nextIdx);
+      const nextCard = { ...card };
+      mergedCards.push(nextCard);
+      for (const cardDom of eligibleProjectDomains(nextCard)) {
+        if (!byDomain.has(cardDom)) byDomain.set(cardDom, nextIdx);
+      }
       if (nameKey.length >= 3) byName.set(nameKey, nextIdx);
     }
   }
@@ -377,6 +405,33 @@ export interface CuratedAirdropResult {
   outcomes: CuratedSourceOutcome[];
 }
 
+function hasSourceLabel(source?: string): boolean {
+  return typeof source === 'string' && source.trim().length > 0;
+}
+
+/**
+ * Stamps `source: 'Surf'` on legacy cached airdrop cards and TGE entries that
+ * predate multi-source tagging, leaving existing non-empty source values untouched.
+ */
+export function backfillLegacyAirdropSources(feed: AirdropFeed): AirdropFeed {
+  let changed = false;
+  const cards = Array.isArray(feed.cards)
+    ? feed.cards.map(c => {
+        if (hasSourceLabel(c.source)) return c;
+        changed = true;
+        return { ...c, source: 'Surf' };
+      })
+    : [];
+  const tge = Array.isArray(feed.tge)
+    ? feed.tge.map(t => {
+        if (hasSourceLabel(t.source)) return t;
+        changed = true;
+        return { ...t, source: 'Surf' };
+      })
+    : [];
+  return changed ? { ...feed, cards, tge } : feed;
+}
+
 function stripExcludedMergedTasks(card: Card, excludedTaskSources?: ReadonlySet<string>): Card {
   if (!excludedTaskSources || excludedTaskSources.size === 0 || !card.tasks?.length) {
     return card;
@@ -397,16 +452,93 @@ function stripExcludedMergedTasks(card: Card, excludedTaskSources?: ReadonlySet<
   };
 }
 
+const CURATED_SOURCE_NAME_BY_ID: Readonly<Record<string, string>> = {
+  'sheet:asso7878_sheet': 'asso7878',
+  'sheet:arndxt_sheet': 'arndxt',
+  'feed:pendle_points': 'pendle',
+  'feed:merkl_opportunities': 'merkl',
+  'feed:airdropalert_calendar': 'airdropalert',
+};
+
+function expandDisabledSources(disabledSourceIds: ReadonlySet<string>): Set<string> {
+  const excluded = new Set<string>();
+  for (const raw of disabledSourceIds) {
+    const key = raw.trim().toLowerCase();
+    if (!key) continue;
+    excluded.add(key);
+    const mapped = CURATED_SOURCE_NAME_BY_ID[key];
+    if (mapped) excluded.add(mapped);
+  }
+  return excluded;
+}
+
+function matchesExcludedSource(source: string | undefined, excluded: ReadonlySet<string>): boolean {
+  const normalized = hasSourceLabel(source) ? source!.trim().toLowerCase() : 'surf';
+  return excluded.has(normalized);
+}
+
+/**
+ * Removes cards, TGE entries, and merged secondary tasks belonging to any
+ * disabled source ID or raw source name, renumbering surviving ranks and
+ * recomputing counts while keeping `fetchedAt` intact.
+ */
+export function filterAirdropFeedByDisabledSources(
+  feed: AirdropFeed,
+  disabledSourceIds: ReadonlySet<string>,
+): AirdropFeed {
+  if (disabledSourceIds.size === 0) return feed;
+  const excluded = expandDisabledSources(disabledSourceIds);
+  if (excluded.size === 0) return feed;
+
+  const origCards = Array.isArray(feed.cards) ? feed.cards : [];
+  const origTge = Array.isArray(feed.tge) ? feed.tge : [];
+
+  let changed = false;
+  const keptCards: Card[] = [];
+  for (const card of origCards) {
+    if (matchesExcludedSource(card.source, excluded)) {
+      changed = true;
+      continue;
+    }
+    const stripped = stripExcludedMergedTasks(card, excluded);
+    if (stripped !== card) changed = true;
+    keptCards.push(stripped);
+  }
+
+  const keptTge = origTge.filter(t => !matchesExcludedSource(t.source, excluded));
+  if (keptTge.length !== origTge.length) changed = true;
+
+  if (!changed) return feed;
+
+  const rankedCards = keptCards.map((c, idx) => (c.r === idx + 1 ? c : { ...c, r: idx + 1 }));
+  return {
+    ...feed,
+    cards: rankedCards,
+    tge: keptTge,
+    counts: {
+      active: rankedCards.length,
+      preToken: rankedCards.filter(c => !c.b?.includes('token')).length,
+    },
+    fetchedAt: feed.fetchedAt,
+  };
+}
+
 function slicePrevFeedForSource(
   prevFeed: AirdropFeed | null | undefined,
   sourceName: string,
   excludedTaskSources?: ReadonlySet<string>,
 ): AirdropFeed | null {
   if (!prevFeed) return null;
+  const isSurf = sourceName === 'Surf';
   const cards = (prevFeed.cards ?? [])
-    .filter(c => c.source === sourceName)
-    .map(c => stripExcludedMergedTasks(c, excludedTaskSources));
-  const tge = (prevFeed.tge ?? []).filter(t => t.source === sourceName);
+    .filter(c => c.source === sourceName || (isSurf && !hasSourceLabel(c.source)))
+    .map(c => {
+      const labeled = hasSourceLabel(c.source) ? c : { ...c, source: 'Surf' };
+      return stripExcludedMergedTasks(labeled, excludedTaskSources);
+    });
+  const tge = (prevFeed.tge ?? [])
+    .filter(t => t.source === sourceName || (isSurf && !hasSourceLabel(t.source)))
+    .map(t => (hasSourceLabel(t.source) ? t : { ...t, source: 'Surf' }));
   if (cards.length === 0 && tge.length === 0) return null;
   return {
     cards,
@@ -490,7 +622,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     },
   ];
 
-  const disabledLower = new Set([...(opts.disabledSourceIds ?? [])].map(s => s.toLowerCase()));
+  const disabledLower = expandDisabledSources(opts.disabledSourceIds ?? new Set());
   const deferredLower = new Set([...(opts.deferredSourceIds ?? [])].map(s => s.toLowerCase()));
 
   const jobModes: ('disabled' | 'cached' | 'deferred' | 'live')[] = [];
@@ -500,12 +632,13 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
 
   for (let i = 0; i < jobs.length; i++) {
     const matchKey = (jobs[i].sourceId ?? jobs[i].name).toLowerCase();
-    if (disabledLower.has(matchKey)) {
+    const jobNameLower = jobs[i].name.toLowerCase();
+    if (disabledLower.has(matchKey) || disabledLower.has(jobNameLower)) {
       jobModes.push('disabled');
-      excludedTaskSources.add(jobs[i].name.toLowerCase());
+      excludedTaskSources.add(jobNameLower);
     } else if (hasCachedFeedContent(jobs[i].cachedFeed)) {
       jobModes.push('cached');
-      excludedTaskSources.add(jobs[i].name.toLowerCase());
+      excludedTaskSources.add(jobNameLower);
     } else if (deferredLower.has(matchKey)) {
       jobModes.push('deferred');
       deferredCount++;

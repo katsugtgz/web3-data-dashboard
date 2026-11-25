@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import { FIT, TYPE_MAP } from '../shared/constants';
 import type { Card } from '../shared/types';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
@@ -13,6 +13,7 @@ import { useAirdropFilters } from './hooks/useAirdropFilters';
 import { useCopyBriefController } from './hooks/useCopyBriefController';
 import { useDashboardDerived } from './hooks/useDashboardDerived';
 import { getTabGroupMeta, useDashboardTabs } from './hooks/useDashboardTabs';
+import { useDetailSelection } from './hooks/useDetailSelection';
 import { useDropsFilters } from './hooks/useDropsFilters';
 import { useFeed } from './hooks/useFeed';
 import { useMarkets } from './hooks/useMarkets';
@@ -21,10 +22,17 @@ import { useTheme } from './hooks/useTheme';
 import { isCardSaved, useWatchlist } from './hooks/useWatchlist';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
+const EMPTY_CARDS: Card[] = [];
 
 export default function App() {
+  const reconcileCardsRef = useRef<((nextCards: readonly Card[]) => void) | null>(null);
+  const handleAirdropCardsChange = useCallback((nextCards: readonly Card[]) => {
+    reconcileCardsRef.current?.(nextCards);
+  }, []);
+
   const drops = useFeed();
-  const airdrops = useAirdropFeed();
+  const airdrops = useAirdropFeed(handleAirdropCardsChange);
+  const cards = airdrops.feed?.cards ?? EMPTY_CARDS;
   const {
     markets,
     loading: marketsLoading,
@@ -33,11 +41,15 @@ export default function App() {
     refresh: refreshMarkets,
   } = useMarkets();
   const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
-  const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist();
+  const {
+    saved,
+    doneTasks,
+    toggleSaved,
+    toggleTaskDone,
+    reconcileCards: reconcileWatchlistCards,
+  } = useWatchlist(cards);
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
-
-  const [detailRef, setDetailRef] = useState<{ id: string | null; name: string } | null>(null);
 
   // Entire copy-agent-brief flow (region-scoped outcome reporting, first-copy
   // profile gate, risk revalidation vs. the live feeds) lives in this hook.
@@ -50,24 +62,20 @@ export default function App() {
   });
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
 
-  const cards = airdrops.feed?.cards ?? [];
   const tgeItems = airdrops.feed?.tge ?? [];
-  const detail = detailRef
-    ? (cards.find(c => (detailRef.id ? c.id === detailRef.id : c.n === detailRef.name)) ?? null)
-    : null;
+  const {
+    detail,
+    handleSelectDetail,
+    handleCloseDetail,
+    reconcileCards: reconcileDetailCards,
+  } = useDetailSelection(cards, clearCopyStatus);
 
-  const handleSelectDetail = useCallback(
-    (card: Card) => {
-      clearCopyStatus();
-      setDetailRef({ id: card.id ?? null, name: card.n });
-    },
-    [clearCopyStatus],
-  );
-
-  const handleCloseDetail = useCallback(() => {
-    clearCopyStatus();
-    setDetailRef(null);
-  }, [clearCopyStatus]);
+  useEffect(() => {
+    reconcileCardsRef.current = (nextCards: readonly Card[]) => {
+      reconcileDetailCards(nextCards);
+      reconcileWatchlistCards(nextCards);
+    };
+  }, [reconcileDetailCards, reconcileWatchlistCards]);
 
   const dropsSearchRef = useRef<HTMLInputElement>(null);
   const airdropSearchRef = useRef<HTMLInputElement>(null);
@@ -79,7 +87,18 @@ export default function App() {
   });
 
   const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
-  const dropsFilters = useDropsFilters(drops.items);
+  const dropsFilters = useDropsFilters(drops.items, tab === 'drops');
+  const { flushHashSync } = dropsFilters;
+
+  const handleSelectTab = useCallback(
+    (nextId: string) => {
+      if (tab === 'drops' && nextId !== 'drops') {
+        flushHashSync();
+      }
+      selectTab(nextId);
+    },
+    [flushHashSync, selectTab, tab],
+  );
 
   const mainRef = useRef<HTMLElement>(null);
 
@@ -130,7 +149,7 @@ export default function App() {
           counts={{ drops: drops.items.length, airdrops: cards.length }}
           tabRefs={tabRefs}
           tabbarRef={tabbarRef}
-          onSelectTab={selectTab}
+          onSelectTab={handleSelectTab}
           onTabKey={onTabKey}
         />
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestD1 } from './helpers';
+import { parseDropPost } from '../src/normalize/parse';
 import {
   computeXBackoff,
   fetchXTimelineBestEffort,
@@ -195,9 +196,10 @@ describe('X best-effort syndication parser & backoff', () => {
       return new Response('rate limited', { status: 429 });
     }) as unknown as typeof fetch;
 
+    const now = Date.parse('2026-11-24T12:00:00Z');
     try {
       // With mirror configured: tries mirror first and canonicalizes link to x.com
-      const withMirror = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example');
+      const withMirror = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example', now);
       expect(requested).toEqual(['https://mirror.example/DefiIgnas/rss']);
       expect(withMirror.length).toBe(1);
       expect(withMirror[0].idStr).toBe('212500001');
@@ -262,7 +264,11 @@ describe('X best-effort syndication parser & backoff', () => {
       }
 
       requested.length = 0;
-      const posts = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example/');
+      const posts = await fetchXTimelineBestEffort(
+        'DefiIgnas',
+        'https://mirror.example/',
+        Date.parse('2026-11-24T12:00:00Z'),
+      );
       expect(posts.length).toBe(1);
       expect(posts[0].idStr).toBe('212500009');
       expect(posts[0].text).toContain('Line one\nLine two');
@@ -355,7 +361,11 @@ describe('X best-effort syndication parser & backoff', () => {
         return new Response('unexpected', { status: 500 });
       }) as unknown as typeof fetch;
 
-      const followed = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example');
+      const followed = await fetchXTimelineBestEffort(
+        'DefiIgnas',
+        'https://mirror.example',
+        Date.parse('2026-11-24T12:00:00Z'),
+      );
       expect(requests).toEqual([
         { url: 'https://mirror.example/DefiIgnas/rss', redirect: 'manual' },
         { url: 'https://alt.redirected-mirror.net/DefiIgnas/rss', redirect: 'manual' },
@@ -503,5 +513,255 @@ describe('X best-effort syndication parser & backoff', () => {
       .prepare(`SELECT last_seen_id, status, fail_count FROM sources WHERE id = 'x:DefiIgnas'`)
       .first<{ last_seen_id: string; status: string; fail_count: number }>();
     expect(row).toEqual({ last_seen_id: '18880001', status: 'degraded', fail_count: 1 });
+  });
+
+  test('parseXRssTimeline strips visible mirror URLs from description and fallback title while preserving non-mirror and raw-IP links', () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const isMirrorHost = (u: string) =>
+      /(?:^|\.)(?:mirror\.net|redirected-mirror\.net)$/i.test(new URL(u).hostname);
+    const xml = `<?xml version="1.0"?><rss version="2.0"><channel>
+      <item>
+        <title>Visible mirror links in description</title>
+        <link>https://mirror.net/DefiIgnas/status/212500101</link>
+        <pubDate>Mon, 23 Nov 2026 12:00:00 GMT</pubDate>
+        <description><![CDATA[<p>RealProto testnet airdrop live at <a href="https://realproto.xyz/quest">https://realproto.xyz/quest</a> (also https://realproto.xyz/claim?tag=mirror.net/ref and notmirror.net/drop). Quote <a href="https://mirror.net/other/status/999">https://mirror.net/other/status/999</a> media <a href="https://pic.mirror.net/media/1.png">pic.mirror.net/media/1.png</a> bare mirror.net/DefiIgnas/status/123 redir alt.redirected-mirror.net/x/1 and raw IP http://185.220.101.9/claim</p>]]></description>
+      </item>
+      <item>
+        <title>NovaDrop testnet airdrop https://mirror.net/a/status/1 mirror.net/u/2 mirror.net https://novadrop.xyz/claim</title>
+        <link>https://mirror.net/DefiIgnas/status/212500102</link>
+        <pubDate>Mon, 23 Nov 2026 12:05:00 GMT</pubDate>
+        <description></description>
+      </item>
+      <item>
+        <title>Bare mirror host test</title>
+        <link>https://mirror.net/DefiIgnas/status/212500104</link>
+        <pubDate>Mon, 23 Nov 2026 12:08:00 GMT</pubDate>
+        <description><![CDATA[Bare mirror.net and (alt.redirected-mirror.net) and mirror.net. Keep notmirror.net, mirror.net.evil.com, mirror.net-safe, and https://keepproto.xyz/airdrop]]></description>
+      </item>
+      <item>
+        <title>PhishDrop airdrop claim</title>
+        <link>https://mirror.net/DefiIgnas/status/212500103</link>
+        <pubDate>Mon, 23 Nov 2026 12:10:00 GMT</pubDate>
+        <description><![CDATA[<a href="http://185.220.101.9/claim">https://mirror.net/img.png</a>]]></description>
+      </item>
+    </channel></rss>`;
+
+    const posts = parseXRssTimeline(xml, 'DefiIgnas', ['mirror.net', 'alt.redirected-mirror.net'], now);
+    expect(posts.length).toBe(4);
+
+    const descPost = posts.find(p => p.idStr === '212500101')!;
+    expect(descPost.text).not.toContain('mirror.net/other');
+    expect(descPost.text).not.toContain('pic.mirror.net');
+    expect(descPost.text).not.toContain('mirror.net/DefiIgnas');
+    expect(descPost.text).not.toContain('alt.redirected-mirror.net');
+    expect(descPost.text).toContain('https://realproto.xyz/quest');
+    expect(descPost.text).toContain('https://realproto.xyz/claim?tag=mirror.net/ref');
+    expect(descPost.text).toContain('notmirror.net/drop');
+    expect(descPost.text).toContain('http://185.220.101.9/claim');
+    expect(descPost.urls).toContain('https://realproto.xyz/quest');
+    expect(descPost.urls).toContain('http://185.220.101.9/claim');
+    expect(descPost.urls.some(isMirrorHost)).toBe(false);
+
+    const downstreamDesc = parseDropPost(descPost.text, descPost.urls);
+    expect(downstreamDesc.urls.some(isMirrorHost)).toBe(false);
+    expect(downstreamDesc.urls).toContain('https://realproto.xyz/quest');
+    expect(downstreamDesc.urls).toContain('https://realproto.xyz/claim?tag=mirror.net/ref');
+    expect(downstreamDesc.urls).toContain('https://notmirror.net/drop');
+    expect(downstreamDesc.rawIpUrls).toContain('http://185.220.101.9/claim');
+
+    const titlePost = posts.find(p => p.idStr === '212500102')!;
+    expect(titlePost.text).not.toContain('mirror.net');
+    expect(titlePost.text).toContain('https://novadrop.xyz/claim');
+    const downstreamTitle = parseDropPost(titlePost.text, titlePost.urls);
+    expect(downstreamTitle.urls).toEqual(['https://novadrop.xyz/claim']);
+
+    const bareHostPost = posts.find(p => p.idStr === '212500104')!;
+    expect(bareHostPost.text).not.toMatch(/(?<![a-z0-9-])mirror\.net(?![a-z0-9.-])/i);
+    expect(bareHostPost.text).not.toContain('alt.redirected-mirror.net');
+    expect(bareHostPost.text).toContain('notmirror.net');
+    expect(bareHostPost.text).toContain('mirror.net.evil.com');
+    expect(bareHostPost.text).toContain('mirror.net-safe');
+    expect(bareHostPost.text).toContain('https://keepproto.xyz/airdrop');
+    expect(bareHostPost.urls.some(isMirrorHost)).toBe(false);
+    const downstreamBare = parseDropPost(bareHostPost.text, bareHostPost.urls);
+    expect(downstreamBare.urls.some(isMirrorHost)).toBe(false);
+    expect(downstreamBare.urls).toContain('https://keepproto.xyz/airdrop');
+
+    const rawIpFallbackPost = posts.find(p => p.idStr === '212500103')!;
+    expect(rawIpFallbackPost.text).toBe('PhishDrop airdrop claim');
+    expect(rawIpFallbackPost.urls).toContain('http://185.220.101.9/claim');
+    const downstreamRawIp = parseDropPost(rawIpFallbackPost.text, rawIpFallbackPost.urls);
+    expect(downstreamRawIp.rawIpUrls).toContain('http://185.220.101.9/claim');
+    expect(downstreamRawIp.urls.some(isMirrorHost)).toBe(false);
+  });
+
+  test('fetchXTimelineBestEffort falls through to syndication when mirror only returns stale (>14d) posts and accepts fresh mirror posts immediately', async () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const prevFetch = globalThis.fetch;
+    const requested: string[] = [];
+
+    const makeRss = (id: string, pubDate: string, text: string) =>
+      `<?xml version="1.0"?><rss version="2.0"><channel><item>
+        <title>${text}</title>
+        <link>https://mirror.example/DefiIgnas/status/${id}</link>
+        <pubDate>${pubDate}</pubDate>
+        <description>${text}</description>
+      </item></channel></rss>`;
+
+    const syndicationHtml = `<html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: {
+        pageProps: {
+          timeline: {
+            entries: [
+              {
+                content: {
+                  tweet: {
+                    id_str: '212500999',
+                    created_at: '2026-11-23T12:00:00Z',
+                    full_text: 'Syndication fresh airdrop https://freshproto.xyz/claim',
+                    entities: { urls: [{ expanded_url: 'https://freshproto.xyz/claim' }] },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    })}</script></body></html>`;
+
+    try {
+      // 1. Stale-only mirror response (14d + 1s old) must fall through to syndication
+      requested.length = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requested.push(url);
+        if (url.startsWith('https://mirror.example/')) {
+          return new Response(makeRss('212500001', 'Tue, 10 Nov 2026 11:59:59 GMT', 'Stale tweet'), {
+            status: 200,
+            headers: { 'Content-Type': 'application/rss+xml' },
+          });
+        }
+        return new Response(syndicationHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+      }) as unknown as typeof fetch;
+
+      const fellThrough = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example', now);
+      expect(requested).toEqual([
+        'https://mirror.example/DefiIgnas/rss',
+        'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas',
+      ]);
+      expect(fellThrough.map(p => p.idStr)).toEqual(['212500999']);
+
+      // 2. Mirror response at exact 14d cutoff is accepted without touching syndication
+      requested.length = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requested.push(url);
+        if (url.startsWith('https://mirror.example/')) {
+          return new Response(makeRss('212500002', 'Tue, 10 Nov 2026 12:00:00 GMT', 'Exact cutoff tweet'), {
+            status: 200,
+            headers: { 'Content-Type': 'application/rss+xml' },
+          });
+        }
+        return new Response('should not call syndication', { status: 500 });
+      }) as unknown as typeof fetch;
+
+      const accepted = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example', now);
+      expect(requested).toEqual(['https://mirror.example/DefiIgnas/rss']);
+      expect(accepted.map(p => p.idStr)).toEqual(['212500002']);
+
+      // 3. Stale-only mirror response + failing syndication returns the stale mirror posts instead of throwing/degrading
+      requested.length = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requested.push(url);
+        if (url.startsWith('https://mirror.example/')) {
+          return new Response(makeRss('212500003', 'Tue, 10 Nov 2026 11:59:59 GMT', 'Quiet account old tweet'), {
+            status: 200,
+            headers: { 'Content-Type': 'application/rss+xml' },
+          });
+        }
+        return new Response('rate limited', { status: 429 });
+      }) as unknown as typeof fetch;
+
+      const staleFallback = await fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example', now);
+      expect(requested).toEqual([
+        'https://mirror.example/DefiIgnas/rss',
+        'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas',
+      ]);
+      expect(staleFallback.map(p => p.idStr)).toEqual(['212500003']);
+
+      const db = createSqliteD1();
+      await db
+        .prepare(
+          `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+           VALUES ('x:QuietAcct', 'x', 'QuietAcct', 'en', 0.85, 1)`,
+        )
+        .run();
+      const pollRes = await pollXBatch(db, 3, now, null, undefined, 'https://mirror.example');
+      expect(pollRes.degraded).toBe(0);
+      expect(pollRes.insertedPosts).toBe(0);
+      const quietRow = await db
+        .prepare(`SELECT status, fail_count, last_seen_id FROM sources WHERE id = 'x:QuietAcct'`)
+        .first<{ status: string; fail_count: number; last_seen_id: string }>();
+      expect(quietRow).toEqual({ status: 'ok', fail_count: 0, last_seen_id: '212500003' });
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('pollXBatch multi-poll cap: ingests oldest 10 on poll 1 with cursor at 10th, then remaining 5 on poll 2 advancing cursor to 15th', async () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const db = createSqliteD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('x:MultiPoll', 'x', 'MultiPoll', 'en', 0.85, 1)`,
+      )
+      .run();
+
+    // Return 15 relevant tweets in newest-first order (matching real X timelines)
+    const tweets = Array.from({ length: 15 }, (_, idx) => {
+      const seq = 15 - idx;
+      const idStr = String(19100000 + seq);
+      return {
+        idStr,
+        postUrl: `https://x.com/MultiPoll/status/${idStr}`,
+        postedAt: now - (16 - seq) * 60_000,
+        text: `MultiProto${seq} testnet airdrop quest live at https://mpproto${seq}.xyz/quest`,
+        urls: [`https://mpproto${seq}.xyz/quest`],
+      };
+    });
+
+    const poll1 = await pollXBatch(db, 3, now, null, async () => tweets);
+    expect(poll1.insertedPosts).toBe(10);
+    expect(poll1.degraded).toBe(0);
+
+    const row1 = await db
+      .prepare(`SELECT last_seen_id FROM sources WHERE id = 'x:MultiPoll'`)
+      .first<{ last_seen_id: string }>();
+    expect(row1?.last_seen_id).toBe('19100010');
+
+    const postsAfterPoll1 = await db
+      .prepare(`SELECT id FROM posts WHERE source_id = 'x:MultiPoll' ORDER BY id ASC`)
+      .all<{ id: string }>();
+    expect((postsAfterPoll1.results ?? []).map(r => r.id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `x:MultiPoll:${19100001 + i}`),
+    );
+
+    const poll2 = await pollXBatch(db, 3, now + 60_000, null, async () => tweets);
+    expect(poll2.insertedPosts).toBe(5);
+    expect(poll2.degraded).toBe(0);
+
+    const row2 = await db
+      .prepare(`SELECT last_seen_id FROM sources WHERE id = 'x:MultiPoll'`)
+      .first<{ last_seen_id: string }>();
+    expect(row2?.last_seen_id).toBe('19100015');
+
+    const postsAfterPoll2 = await db
+      .prepare(`SELECT id FROM posts WHERE source_id = 'x:MultiPoll' ORDER BY id ASC`)
+      .all<{ id: string }>();
+    expect((postsAfterPoll2.results ?? []).map(r => r.id)).toEqual(
+      Array.from({ length: 15 }, (_, i) => `x:MultiPoll:${19100001 + i}`),
+    );
   });
 });

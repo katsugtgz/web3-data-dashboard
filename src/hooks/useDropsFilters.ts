@@ -7,7 +7,7 @@ export type DropsSort = 'score' | 'new';
 export const DROPS_PAGE_STEP = 24;
 const HASH_SYNC_DEBOUNCE_MS = 250;
 
-interface ParsedHashParams {
+export interface ParsedHashParams {
   taskType: 'All' | TaskType;
   chain: string;
   hideRisk: boolean;
@@ -38,9 +38,9 @@ function readDropsHashParams(): ParsedHashParams {
   return { taskType, chain, hideRisk, minSources, sort, query };
 }
 
-function writeDropsHashParams(state: ParsedHashParams): void {
+export function writeDropsHashParams(state: ParsedHashParams): boolean {
   const currentTab = window.location.hash.replace(/^#/, '').split('?')[0];
-  if (currentTab && currentTab !== 'drops' && currentTab !== 'main') return;
+  if (currentTab && currentTab !== 'drops' && currentTab !== 'main') return false;
   const params = new URLSearchParams();
   if (state.taskType !== 'All') params.set('type', state.taskType);
   if (state.chain !== 'All') params.set('chain', state.chain);
@@ -53,40 +53,73 @@ function writeDropsHashParams(state: ParsedHashParams): void {
   if (window.location.hash !== nextHash) {
     safeReplaceHash(nextHash);
   }
+  return true;
 }
 
-export function useDropsFilters(items: FeedItem[]) {
+export function tryCommitPendingDropsHash(
+  pendingRef: { current: boolean },
+  state: ParsedHashParams,
+  writer: (next: ParsedHashParams) => boolean = writeDropsHashParams,
+): boolean {
+  if (!pendingRef.current) return false;
+  if (!writer(state)) return false;
+  pendingRef.current = false;
+  return true;
+}
+
+export function useDropsFilters(items: FeedItem[], isActive = true) {
   const [filters, setFilters] = useState(readDropsHashParams);
   const { taskType, chain, hideRisk, minSources, sort, query } = filters;
   const [limit, setLimit] = useState(DROPS_PAGE_STEP);
   const syncPendingRef = useRef(false);
+  const filtersRef = useRef(filters);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelPendingTimer = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash;
       if (hash === '') {
+        cancelPendingTimer();
         syncPendingRef.current = false;
         setFilters(DEFAULT_FILTERS);
         setLimit(DROPS_PAGE_STEP);
         return;
       }
       if (!isDropsQueryHash(hash)) return;
+      cancelPendingTimer();
       syncPendingRef.current = false;
       setFilters(readDropsHashParams());
       setLimit(DROPS_PAGE_STEP);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [cancelPendingTimer]);
 
   useEffect(() => {
-    if (!syncPendingRef.current) return;
+    filtersRef.current = filters;
+    if (!syncPendingRef.current || !isActive) return;
     const id = setTimeout(() => {
-      syncPendingRef.current = false;
-      writeDropsHashParams(filters);
+      debounceTimerRef.current = null;
+      tryCommitPendingDropsHash(syncPendingRef, filters);
     }, HASH_SYNC_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [filters]);
+    debounceTimerRef.current = id;
+    return () => {
+      clearTimeout(id);
+      if (debounceTimerRef.current === id) debounceTimerRef.current = null;
+    };
+  }, [filters, isActive]);
+
+  const flushHashSync = useCallback(() => {
+    cancelPendingTimer();
+    tryCommitPendingDropsHash(syncPendingRef, filtersRef.current);
+  }, [cancelPendingTimer]);
 
   const updateFilters = useCallback((updater: (prev: ParsedHashParams) => ParsedHashParams) => {
     syncPendingRef.current = true;
@@ -178,6 +211,7 @@ export function useDropsFilters(items: FeedItem[]) {
     setSort,
     setQuery,
     resetFilters,
+    flushHashSync,
     showMore: () => setLimit(l => l + DROPS_PAGE_STEP),
     showAll: () => setLimit(visible.length),
   };

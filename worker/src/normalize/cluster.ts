@@ -9,7 +9,7 @@ import type {
   TaskType,
 } from '../../../shared/types';
 import { sha1Hex } from '../lib/hash';
-import { evaluateSafety, getTrustedSurfCardDomain, reconcileSafetyReasons } from '../safety';
+import { evaluateSafety, getTrustedSurfCardDomain, isUntrustedSheetSource, reconcileSafetyReasons } from '../safety';
 import {
   getRegistrableDomain,
   isNewsDomain,
@@ -91,7 +91,7 @@ export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   if (!feed) return { byDomain, byTicker };
 
   for (const card of feed.cards) {
-    if (card.b?.includes('risk')) continue;
+    if (card.b?.includes('risk') || isUntrustedSheetSource(card.source)) continue;
     const match: SurfMatch = { name: card.n, tier: card.g, cardRank: card.r };
     if (card.t) byTicker.set(card.t.toUpperCase(), match);
     const dom = getTrustedSurfCardDomain(card);
@@ -452,11 +452,15 @@ export async function ingestPostIntoCluster(
     });
 
   const existingPost = await db
-    .prepare('SELECT cluster_id FROM posts WHERE id = ?1')
+    .prepare('SELECT cluster_id, posted_at FROM posts WHERE id = ?1')
     .bind(input.postId)
-    .first<{ cluster_id: string | null }>();
+    .first<{ cluster_id: string | null; posted_at: number }>();
   const replayedClusterId = existingPost?.cluster_id ?? null;
-  const fallbackIdentity = replayedClusterId ? null : getFallbackIdentity(parsed, input.postedAt);
+  const effectivePostedAt =
+    existingPost && Number.isFinite(existingPost.posted_at) ? existingPost.posted_at : input.postedAt;
+  const resolveInput =
+    effectivePostedAt === input.postedAt ? input : { ...input, postedAt: effectivePostedAt };
+  const fallbackIdentity = replayedClusterId ? null : getFallbackIdentity(parsed, effectivePostedAt);
 
   return withFallbackLock(db, fallbackIdentity?.key ?? null, async () => {
     const maxAttempts = fallbackIdentity ? 6 : 1;
@@ -464,7 +468,7 @@ export async function ingestPostIntoCluster(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const clusterId: string =
-        replayedClusterId ?? (await resolveClusterId(db, parsed, input, attempt, rejectedClusterId));
+        replayedClusterId ?? (await resolveClusterId(db, parsed, resolveInput, attempt, rejectedClusterId));
 
       const [existing, prevAgg] = await Promise.all([
         db
@@ -495,13 +499,15 @@ export async function ingestPostIntoCluster(
           }>(),
         db
           .prepare(
-            `SELECT DISTINCT p.source_id, COALESCE(s.trust, ?2) AS trust
+            `SELECT p.source_id, MAX(COALESCE(s.trust, ?2)) AS trust,
+                    MIN(p.posted_at) AS min_posted_at, MAX(p.posted_at) AS max_posted_at
              FROM posts p
              LEFT JOIN sources s ON s.id = p.source_id
-             WHERE p.cluster_id = ?1`,
+             WHERE p.cluster_id = ?1
+             GROUP BY p.source_id`,
           )
           .bind(clusterId, input.sourceTrust)
-          .all<{ source_id: string; trust: number }>(),
+          .all<{ source_id: string; trust: number; min_posted_at: number; max_posted_at: number }>(),
       ]);
 
       const distinctSources = new Map<string, number>();
@@ -569,8 +575,16 @@ export async function ingestPostIntoCluster(
       const domain = resolvedDomain ?? null;
       const surfTier = existing?.surf_tier ?? surfMatch?.tier ?? null;
       const surfRank = existing?.surf_rank ?? surfMatch?.cardRank ?? null;
-      const firstSeen = existing ? Math.min(existing.first_seen, input.postedAt) : input.postedAt;
-      const lastSeen = existing ? Math.max(existing.last_seen, input.postedAt) : input.postedAt;
+      let firstSeen = existing ? Math.min(existing.first_seen, input.postedAt) : input.postedAt;
+      let lastSeen = existing ? Math.max(existing.last_seen, input.postedAt) : input.postedAt;
+      if (existingPost && Number.isFinite(existingPost.posted_at)) {
+        firstSeen = Math.min(firstSeen, existingPost.posted_at);
+        lastSeen = Math.max(lastSeen, existingPost.posted_at);
+      }
+      for (const r of prevAgg.results ?? []) {
+        if (Number.isFinite(r.min_posted_at)) firstSeen = Math.min(firstSeen, r.min_posted_at);
+        if (Number.isFinite(r.max_posted_at)) lastSeen = Math.max(lastSeen, r.max_posted_at);
+      }
 
       let summary = existing?.summary ?? parsed.summary;
       const summarySource: 'rule' | 'ai' = existing?.summary_source ?? 'rule';
@@ -598,8 +612,8 @@ export async function ingestPostIntoCluster(
       if (existing) {
         if (fallbackIdentity) {
           const inDirectWindow =
-            input.postedAt >= existing.first_seen - fallbackIdentity.windowMs &&
-            input.postedAt <= existing.last_seen + fallbackIdentity.windowMs;
+            effectivePostedAt >= existing.first_seen - fallbackIdentity.windowMs &&
+            effectivePostedAt <= existing.last_seen + fallbackIdentity.windowMs;
           // Query fallback_windows strictly after reading `existing` so any
           // concurrent writer's reservation expansion is guaranteed visible.
           const reservedWin = !inDirectWindow
@@ -612,8 +626,8 @@ export async function ingestPostIntoCluster(
             : null;
           const inBridgedWindow = Boolean(
             reservedWin &&
-              input.postedAt >= reservedWin.first_seen &&
-              input.postedAt <= reservedWin.last_seen &&
+              effectivePostedAt >= reservedWin.first_seen &&
+              effectivePostedAt <= reservedWin.last_seen &&
               existing.first_seen >= reservedWin.first_seen &&
               existing.last_seen <= reservedWin.last_seen,
           );
@@ -721,7 +735,7 @@ export async function ingestPostIntoCluster(
             trustMax,
             projectKey,
             fallbackIdentity?.windowMs ?? null,
-            Number.isFinite(input.postedAt) ? input.postedAt : null,
+            Number.isFinite(effectivePostedAt) ? effectivePostedAt : null,
             fallbackIdentity?.key ?? null,
           )
           .run();
@@ -830,7 +844,7 @@ export async function ingestPostIntoCluster(
             trustMax,
             projectKey,
             fallbackIdentity?.windowMs ?? null,
-            Number.isFinite(input.postedAt) ? input.postedAt : null,
+            Number.isFinite(effectivePostedAt) ? effectivePostedAt : null,
             fallbackIdentity?.key ?? null,
           )
           .run();
@@ -842,7 +856,7 @@ export async function ingestPostIntoCluster(
         }
       }
 
-      if (fallbackIdentity && Number.isFinite(input.postedAt)) {
+      if (fallbackIdentity && Number.isFinite(effectivePostedAt)) {
         await db
           .prepare(
             `UPDATE fallback_windows
@@ -852,7 +866,7 @@ export async function ingestPostIntoCluster(
                AND cluster_id = ?2
                AND (?3 < first_seen OR ?3 > last_seen)`,
           )
-          .bind(fallbackIdentity.key, clusterId, input.postedAt)
+          .bind(fallbackIdentity.key, clusterId, effectivePostedAt)
           .run();
       }
 
@@ -940,8 +954,8 @@ export async function ingestPostIntoCluster(
               riskLevel: synced.risk_level,
             });
             await db
-              .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1')
-              .bind(clusterId, syncedScore)
+              .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1 AND risk_level = ?3')
+              .bind(clusterId, syncedScore, synced.risk_level)
               .run();
           }
         }
@@ -1086,7 +1100,7 @@ export async function queryFeed(
   const safeLimit = Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 100;
   const limit = Math.min(100, Math.max(1, safeLimit));
   const since = Number.isFinite(opts.since) ? Number(opts.since) : 0;
-  const riskClause = opts.risk === 'exclude' ? `AND risk_level != 'risk'` : '';
+  const riskClause = opts.risk === 'exclude' ? `AND c.risk_level != 'risk'` : '';
   const sortByNew = opts.sort === 'new';
   const orderCol = sortByNew
     ? 'last_seen DESC, score DESC, id ASC'
@@ -1108,18 +1122,30 @@ export async function queryFeed(
 
     const clusterRows: D1Result<ClusterFeedRow> = await db
       .prepare(
-        `SELECT id, project, ticker, domain, chains, task_types, summary, summary_source,
+        `WITH enabled_clusters AS MATERIALIZED (
+           SELECT c.id, c.project, c.ticker, c.domain, c.chains, c.task_types, c.summary, c.summary_source,
+                  c.risk_level, c.risk_reasons, c.score, c.source_count, c.surf_tier, c.surf_rank,
+                  c.first_seen,
+                  (
+                    SELECT p.posted_at
+                    FROM posts p
+                    LEFT JOIN sources s ON s.id = p.source_id
+                    WHERE p.cluster_id = c.id AND COALESCE(s.enabled, 1) = 1
+                    ORDER BY p.posted_at DESC
+                    LIMIT 1
+                  ) AS last_seen,
+                  c.is_drop
+           FROM clusters c
+           WHERE c.last_seen >= ?1
+             AND COALESCE(c.is_drop, 1) = 1
+             ${riskClause}
+         )
+         SELECT id, project, ticker, domain, chains, task_types, summary, summary_source,
                 risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen, is_drop
-         FROM clusters
-         WHERE last_seen >= ?1
-           AND COALESCE(is_drop, 1) = 1
-           ${riskClause}
+         FROM enabled_clusters
+         WHERE last_seen IS NOT NULL
+           AND last_seen >= ?1
            ${cursorClause}
-           AND EXISTS (
-             SELECT 1 FROM posts p
-             LEFT JOIN sources s ON s.id = p.source_id
-             WHERE p.cluster_id = clusters.id AND COALESCE(s.enabled, 1) = 1
-           )
          ORDER BY ${orderCol}
          LIMIT ?2`,
       )
