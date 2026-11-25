@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import type { NavGroup } from '../hooks/useDashboardTabs';
 import { formatClock, formatRelativeTime } from '../lib/format';
 import { BotIcon, MoonIcon, RefreshCwIcon, SunIcon } from './Icons';
@@ -56,6 +57,7 @@ function FeedStatusText({
     return (
       <span>
         <span className="feed-pill-verbose">{modeLabel} · </span>
+        {failed && <span className="feed-pill-mobile-status">Failed · </span>}
         <span className="mono">{cardCount}</span>
         <span className="feed-pill-mobile-age mono"> · {compactAge}</span>
         <span className="feed-pill-verbose">{timeSuffix}</span>
@@ -66,7 +68,7 @@ function FeedStatusText({
     return (
       <span>
         <span className="feed-pill-verbose">Unable to load radar data</span>
-        <span className="sr">Offline</span>
+        <span className="feed-pill-mobile-status">Offline</span>
       </span>
     );
   }
@@ -91,9 +93,25 @@ export function DashboardHeader({
   const isWarn = failed || isStale;
   const isLive = fetchedAt !== null && isLiveApi && !isWarn;
   const themeAction = resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  const headerRef = useRef<HTMLElement>(null);
+
+  // Publish the topbar's rendered height so the sticky mobile tab strip sits directly beneath it.
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const shell = header?.closest<HTMLElement>('.app-shell');
+    if (!header || !shell || typeof ResizeObserver === 'undefined') return;
+    const sync = () => shell.style.setProperty('--topbar-offset', `${header.offsetHeight}px`);
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      shell.style.removeProperty('--topbar-offset');
+    };
+  }, []);
 
   return (
-    <header className="top">
+    <header className="top" ref={headerRef}>
       <h1 className="sr">Web3 Radar · {activeTabLabel}</h1>
       <div className="top-inner">
         <div className="top-left">

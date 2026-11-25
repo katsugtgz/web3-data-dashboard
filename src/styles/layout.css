@@ -200,7 +200,7 @@ a:hover {
 .app-sidebar {
   order: 2;
   position: sticky;
-  top: var(--topbar-h, 50px);
+  top: var(--topbar-offset, var(--topbar-h, 50px));
   z-index: 25;
   background: color-mix(in srgb, var(--color-background-surface) 94%, transparent);
   backdrop-filter: blur(12px);
@@ -237,6 +237,11 @@ a:hover {
   .tabstrip {
     mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%);
     -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%);
+  }
+
+  /* overflow-x: auto clips vertically; draw the shared focus ring inside the tab. */
+  .tabstrip .tab:focus-visible {
+    outline-offset: calc(-1 * var(--focus-outline-width));
   }
 }
 
@@ -384,7 +389,8 @@ footer a {
 }
 
 /* Mobile Header Compact Controls */
-.feed-pill-mobile-age {
+.feed-pill-mobile-age,
+.feed-pill-mobile-status {
   display: none;
 }
 
@@ -423,12 +429,25 @@ footer a {
     gap: 4px;
   }
 
+  .top-actions .ctrl-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  /* Keep a ~44px hit area around the visually smaller buttons. */
+  .top-actions .ctrl-btn::after {
+    inset: -4px -2px;
+  }
+
   .top-controls .feed-pill {
     padding: 0 8px;
     gap: 5px;
     font-size: 11px;
     min-height: 30px;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     white-space: nowrap;
   }
 
@@ -439,6 +458,18 @@ footer a {
   .feed-pill-mobile-age {
     display: inline;
     color: var(--color-text-secondary);
+  }
+
+  .feed-pill-mobile-status {
+    display: inline;
+    font-weight: 600;
+  }
+}
+
+/* Very narrow phones (320–399px): logo-only brand so status + all actions fit. */
+@media (max-width: 399px) {
+  .mobile-brand-title {
+    display: none;
   }
 }
 

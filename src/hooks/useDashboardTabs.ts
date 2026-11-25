@@ -23,10 +23,17 @@ export function getTabGroupMeta(tabId: string): TabGroupMeta {
 
 /**
  * Computes the next tab index for roving-tabindex navigation across both
- * vertical sidebar and horizontal tabstrip layouts.
+ * vertical sidebar and horizontal tabstrip layouts. In the horizontal strip
+ * ArrowUp/ArrowDown are ignored so they keep their native page behavior.
  */
-export function computeNextTabIndex(ids: readonly string[], currentId: string, key: string): number {
+export function computeNextTabIndex(
+  ids: readonly string[],
+  currentId: string,
+  key: string,
+  orientation: 'horizontal' | 'vertical' = 'vertical',
+): number {
   if (ids.length === 0) return -1;
+  if (orientation === 'horizontal' && (key === 'ArrowUp' || key === 'ArrowDown')) return -1;
   const cur = Math.max(0, ids.indexOf(currentId));
   if (key === 'ArrowRight' || key === 'ArrowDown') {
     return (cur + 1) % ids.length;
@@ -135,7 +142,7 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
       const focusTarget = document.activeElement as HTMLElement | null;
       const focusedId =
         focusTarget?.getAttribute('role') === 'tab' ? focusTarget.id.replace(/^tab-/, '') : tab;
-      const nextIdx = computeNextTabIndex(ids, focusedId, e.key);
+      const nextIdx = computeNextTabIndex(ids, focusedId, e.key, getTabOrientation());
       if (nextIdx < 0) return;
       e.preventDefault();
       tabRefs.current[ids[nextIdx]]?.focus();
@@ -144,6 +151,13 @@ export function useDashboardTabs({ searchRefs, isModalOpen }: DashboardTabsInput
   );
 
   return { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey };
+}
+
+/** Matches the layout.css breakpoint where AppSidebarNav becomes a vertical rail. */
+const VERTICAL_NAV_QUERY = '(min-width: 1024px)';
+
+function getTabOrientation(): 'horizontal' | 'vertical' {
+  return window.matchMedia?.(VERTICAL_NAV_QUERY).matches ? 'vertical' : 'horizontal';
 }
 
 function findHashTab(hash = window.location.hash): string | undefined {

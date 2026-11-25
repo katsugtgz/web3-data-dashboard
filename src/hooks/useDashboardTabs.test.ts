@@ -34,6 +34,14 @@ describe('computeNextTabIndex', () => {
     expect(computeNextTabIndex(IDS, 'missing', 'ArrowRight')).toBe(1);
     expect(computeNextTabIndex(IDS, 'missing', 'ArrowLeft')).toBe(7);
   });
+
+  test('horizontal strip ignores ArrowUp/ArrowDown but keeps Left/Right', () => {
+    expect(computeNextTabIndex(IDS, 'airdrops', 'ArrowUp', 'horizontal')).toBe(-1);
+    expect(computeNextTabIndex(IDS, 'airdrops', 'ArrowDown', 'horizontal')).toBe(-1);
+    expect(computeNextTabIndex(IDS, 'airdrops', 'ArrowLeft', 'horizontal')).toBe(0);
+    expect(computeNextTabIndex(IDS, 'airdrops', 'ArrowRight', 'horizontal')).toBe(2);
+    expect(computeNextTabIndex(IDS, 'airdrops', 'ArrowDown', 'vertical')).toBe(2);
+  });
 });
 
 describe('getTabGroupMeta', () => {

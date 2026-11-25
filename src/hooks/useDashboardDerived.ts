@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { MarketSection, SourceHealth } from '../../shared/types';
 
 export const STALE_AGE_MS = 86_400_000;
+const HEADER_CLOCK_TICK_MS = 60_000;
 
 export interface DashboardHeaderDerivedInput {
   tab: string;
@@ -101,7 +102,14 @@ export function useDashboardDerived(input: Input): {
     [marketSections, visitedTabs],
   );
 
-  const header = deriveDashboardHeaderState(input);
+  // Re-render periodically so time-based staleness advances between data updates.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(t => t + 1), HEADER_CLOCK_TICK_MS);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const header = deriveDashboardHeaderState({ ...input, now: Date.now() });
 
   return {
     xUnavailable,

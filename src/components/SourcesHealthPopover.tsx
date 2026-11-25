@@ -77,6 +77,13 @@ function SourcesPopoverBody({
       </p>
     );
   }
+  if (sources.length === 0) {
+    return (
+      <p className="note" role="status">
+        No sources configured.
+      </p>
+    );
+  }
   return (
     <ul className="sources-list">
       {!isLiveApi && (
