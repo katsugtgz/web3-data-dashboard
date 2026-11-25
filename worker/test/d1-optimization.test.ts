@@ -584,3 +584,40 @@ describe('migration 0007 hardening and indexes', () => {
     );
   });
 });
+
+describe('migration 0008 cluster timestamp reconciliation', () => {
+  test('repairs drifted clusters.first_seen and clusters.last_seen from stored posts idempotently', async () => {
+    const migration0007 = '../migrations/0007_hardening_and_indexes.sql';
+    const migration0008 = '../migrations/0008_reconcile_cluster_last_seen.sql';
+    const { db, sqlite } = createTestD1([...MIGRATION_FILES, migration0007]);
+
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_drift', 'DriftProto', '[]', '["testnet"]', 'Drift', 'rule', 'ok', '[]', 0.8, 1, 300, 350, 1),
+                ('c_clean', 'CleanProto', '[]', '["testnet"]', 'Clean', 'rule', 'ok', '[]', 0.8, 1, 100, 500, 1)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_old', 'telegram:en1', 'https://t.me/en1/1', 200, 'older', '[]', 'c_drift', 200),
+                ('p_new', 'telegram:en1', 'https://t.me/en1/2', 600, 'newer', '[]', 'c_drift', 600),
+                ('p_mid', 'telegram:en1', 'https://t.me/en1/3', 250, 'mid', '[]', 'c_clean', 250)`,
+      )
+      .run();
+
+    applyMigrations(sqlite, [migration0008]);
+    // Strictly idempotent when applied again
+    applyMigrations(sqlite, [migration0008]);
+
+    const drift = await db
+      .prepare(`SELECT first_seen, last_seen FROM clusters WHERE id = 'c_drift'`)
+      .first<{ first_seen: number; last_seen: number }>();
+    const clean = await db
+      .prepare(`SELECT first_seen, last_seen FROM clusters WHERE id = 'c_clean'`)
+      .first<{ first_seen: number; last_seen: number }>();
+    expect(drift).toEqual({ first_seen: 200, last_seen: 600 });
+    expect(clean).toEqual({ first_seen: 100, last_seen: 500 });
+  });
+});

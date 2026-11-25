@@ -3118,6 +3118,89 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     const planText = plan.map(p => p.detail).join('\n');
     expect(planText).toMatch(/SEARCH\s+c\s+USING\s+INDEX\s+clusters_feed_new\s*\(last_seen>\?\)/i);
   });
+
+  test('ingestPostIntoCluster preserves stored post timestamps on retry with older input.postedAt when cluster row is missing', async () => {
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:en1', 'telegram', 'en1', 'en', 0.85, 1)`,
+      )
+      .run();
+
+    // Pre-existing post already stored with posted_at = 500 and cluster_id = 'dom:retryproto.xyz',
+    // plus a sibling stored post at posted_at = 600, while the clusters row itself is missing.
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('tg:en1:1', 'telegram:en1', 'https://t.me/en1/1', 500, 'RetryProto testnet airdrop live https://retryproto.xyz', '["https://retryproto.xyz"]', 'dom:retryproto.xyz', 500),
+                ('tg:en1:2', 'telegram:en1', 'https://t.me/en1/2', 600, 'RetryProto faucet update https://retryproto.xyz', '["https://retryproto.xyz"]', 'dom:retryproto.xyz', 600)`,
+      )
+      .run();
+
+    // Retry post 1 with an older input.postedAt = 100
+    await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'tg:en1:1',
+        sourceId: 'telegram:en1',
+        sourceTrust: 0.85,
+        postUrl: 'https://t.me/en1/1',
+        postedAt: 100,
+        text: 'RetryProto testnet airdrop live https://retryproto.xyz',
+        htmlUrls: ['https://retryproto.xyz'],
+      },
+      { knownDomains: new Map([['retryproto.xyz', 'RetryProto']]) },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map([['retryproto.xyz', 'RetryProto']]),
+      undefined,
+      700,
+    );
+
+    const cluster = await db
+      .prepare(`SELECT first_seen, last_seen FROM clusters WHERE id = 'dom:retryproto.xyz'`)
+      .first<{ first_seen: number; last_seen: number }>();
+    expect(cluster).toEqual({ first_seen: 100, last_seen: 600 });
+
+    // queryFeed with since = 550 must still return the cluster because c.last_seen >= 600 >= 550.
+    const feed = await queryFeed(db, new Set(['retryproto.xyz']), { since: 550, sort: 'new', risk: 'include' });
+    expect(feed.items.map(i => [i.id, i.lastSeen])).toEqual([['dom:retryproto.xyz', 600]]);
+
+    // Also test existing post with cluster_id = NULL and newer stored posted_at = 800 retried with older input.postedAt = 200.
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('tg:en1:3', 'telegram:en1', 'https://t.me/en1/3', 800, 'NullLinkProto testnet airdrop live https://nulllink.xyz', '["https://nulllink.xyz"]', NULL, 800)`,
+      )
+      .run();
+
+    const nullRes = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'tg:en1:3',
+        sourceId: 'telegram:en1',
+        sourceTrust: 0.85,
+        postUrl: 'https://t.me/en1/3',
+        postedAt: 200,
+        text: 'NullLinkProto testnet airdrop live https://nulllink.xyz',
+        htmlUrls: ['https://nulllink.xyz'],
+      },
+      { knownDomains: new Map([['nulllink.xyz', 'NullLinkProto']]) },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map([['nulllink.xyz', 'NullLinkProto']]),
+      undefined,
+      900,
+    );
+
+    const nullLinkCluster = await db
+      .prepare(`SELECT first_seen, last_seen FROM clusters WHERE id = ?1`)
+      .bind(nullRes.clusterId)
+      .first<{ first_seen: number; last_seen: number }>();
+    expect(nullLinkCluster).toEqual({ first_seen: 200, last_seen: 800 });
+
+    const feedSince750 = await queryFeed(db, new Set(['nulllink.xyz']), { since: 750, sort: 'new', risk: 'include' });
+    expect(feedSince750.items.map(i => [i.id, i.lastSeen])).toEqual([[nullRes.clusterId, 800]]);
+  });
 });
 
 describe('Surf airdrops external URL normalization', () => {
