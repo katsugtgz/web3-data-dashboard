@@ -3,7 +3,8 @@ import type { SourceHealth } from '../../shared/types';
 import { usePopoverDismiss } from '../hooks/usePopoverDismiss';
 import { formatSourceHandle, formatSourcesSummary } from '../lib/feedDisplay';
 import { formatRelativeTime } from '../lib/format';
-import { ActivityIcon, XIcon } from './Icons';
+import { PlatformBadge } from './EntityVisual';
+import { ActivityIcon, ClockIcon, XIcon } from './Icons';
 
 type SourceFilter = 'all' | 'issues';
 
@@ -102,13 +103,14 @@ function SourcesPopoverBody({
           <li key={src.id} className="source-item">
             <span className="source-item-main">
               <span className={`status-dot status-dot-${src.status}`} aria-hidden="true" />
+              <PlatformBadge source={src.platform} size={12} className="source-item-platform" />
               <span className="mono source-item-handle">{formatSourceHandle(src.platform, src.handle) || src.id}</span>
-              <span className="note">({src.platform})</span>
             </span>
             <span className="source-item-meta">
               <span className={`badge status-${src.status}`}>{src.status}</span>
-              <span className="mono note">
-                {src.lastOkAt ? formatRelativeTime(src.lastOkAt) : 'never'}
+              <span className="mono note source-item-time">
+                <ClockIcon size={11} />
+                <span>{src.lastOkAt ? formatRelativeTime(src.lastOkAt) : 'never'}</span>
               </span>
             </span>
           </li>

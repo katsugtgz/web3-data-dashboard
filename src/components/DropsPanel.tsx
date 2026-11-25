@@ -3,6 +3,7 @@ import type { FeedItem } from '../../shared/types';
 import { DROPS_PAGE_STEP, type DropsFiltersState } from '../hooks/useDropsFilters';
 import { summarizeDrops, type DropsSummary } from '../lib/dropsSummary';
 import { formatRelativeTime } from '../lib/format';
+import type { ProjectLogoIndex } from '../lib/visualAssets';
 import { DropsFilterDock } from './DropsFilterDock';
 import { FeedCard } from './FeedCard';
 import { CheckCircle2Icon, LayersIcon, ShieldAlertIcon, ShieldCheckIcon, ZapIcon } from './Icons';
@@ -17,6 +18,7 @@ interface Props {
   xUnavailable: boolean;
   loading: boolean;
   failed: boolean;
+  logoIndex?: ProjectLogoIndex;
   searchRef: RefObject<HTMLInputElement | null>;
   onApplyPending: () => void;
   onCopyBrief: (item: FeedItem) => void;
@@ -134,12 +136,14 @@ function DropsBody({
   totalCount,
   loading,
   failed,
+  logoIndex,
   onCopyBrief,
 }: {
   filters: DropsFiltersState;
   totalCount: number;
   loading: boolean;
   failed: boolean;
+  logoIndex?: ProjectLogoIndex;
   onCopyBrief: (item: FeedItem) => void;
 }) {
   if (loading && totalCount === 0) {
@@ -169,7 +173,7 @@ function DropsBody({
     <>
       <div className="grid">
         {filters.rendered.map(item => (
-          <FeedCard key={item.id} item={item} onCopyBrief={onCopyBrief} />
+          <FeedCard key={item.id} item={item} logoIndex={logoIndex} onCopyBrief={onCopyBrief} />
         ))}
       </div>
       {filters.remaining > 0 && (
@@ -194,6 +198,7 @@ export function DropsPanel({
   xUnavailable,
   loading,
   failed,
+  logoIndex,
   searchRef,
   onApplyPending,
   onCopyBrief,
@@ -243,6 +248,7 @@ export function DropsPanel({
         totalCount={totalCount}
         loading={loading}
         failed={failed}
+        logoIndex={logoIndex}
         onCopyBrief={onCopyBrief}
       />
     </section>

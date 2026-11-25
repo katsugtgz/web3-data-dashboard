@@ -4,6 +4,7 @@ import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
 import { cardStorageKey, isCardSaved } from '../hooks/useWatchlist';
 import { formatRelativeTime, isStaleTimestamp } from '../lib/format';
+import type { ProjectLogoIndex } from '../lib/visualAssets';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';
@@ -20,6 +21,7 @@ interface Props {
   failed: boolean;
   saved: Set<string>;
   doneTasks: Set<string>;
+  logoIndex?: ProjectLogoIndex;
   searchRef: RefObject<HTMLInputElement | null>;
   onToggleSaved: (key: string, legacyKey?: string) => void;
   onSelectDetail: (card: Card) => void;
@@ -35,6 +37,7 @@ export function AirdropPanel({
   failed,
   saved,
   doneTasks,
+  logoIndex,
   searchRef,
   onToggleSaved,
   onSelectDetail,
@@ -104,6 +107,7 @@ export function AirdropPanel({
                 fit={FIT}
                 saved={isCardSaved(saved, c)}
                 doneTasks={doneTasks}
+                logoIndex={logoIndex}
                 onToggleSaved={onToggleSaved}
                 onDetails={onSelectDetail}
                 onCopyBrief={onCopyBrief}
@@ -143,7 +147,7 @@ export function AirdropPanel({
             </p>
           </div>
         </div>
-        <TgeCarousel items={tgeItems} />
+        <TgeCarousel items={tgeItems} logoIndex={logoIndex} />
       </div>
 
       <div className="categories-bar" role="group" aria-label="Airdrop categories">

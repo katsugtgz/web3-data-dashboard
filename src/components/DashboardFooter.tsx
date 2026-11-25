@@ -1,4 +1,5 @@
 import type { SourceHealth } from '../../shared/types';
+import { DatabaseIcon } from './Icons';
 import { SourcesHealthPopover } from './SourcesHealthPopover';
 
 interface Props {
@@ -22,7 +23,8 @@ export function DashboardFooter({
   return (
     <footer className="app-footer">
       <div className="footer-inner footer-row">
-        <p>
+        <p className="footer-copy">
+          <DatabaseIcon size={14} className="footer-brand-icon" />{' '}
           Web3 Radar · <span className="mono">{preCount}</span> curated pre-token projects &amp;{' '}
           <span className="mono">{dropsCount}</span> live drops · Keyless data from{' '}
           <a href="https://cryptorank.io" target="_blank" rel="noopener noreferrer">

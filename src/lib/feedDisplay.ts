@@ -133,10 +133,28 @@ const TURKISH_WORD_RE =
 const DANGLING_LABEL_RE =
   /\s*(?:(?:[\u{1F4D6}\u{1F4CC}\u{1F517}\u{27A1}\u{FE0F}\u{1F449}\u{2192}]+\s*)?(?:source|sorce|link|register|apply\s+here|apply\s+now|check\s+here|go\s+to|join\s+waitlist|winnerlist|lfg)\s*:|[\u{1F4D6}\u{1F4CC}\u{1F517}\u{27A1}\u{1F449}\u{2192}]\u{FE0F}?\s*(?:source|sorce|link|register|check\s+here|apply\s+now)?|[\u{27A1}\u{1F449}\u{2192}]\u{FE0F}?)\s*$/iu;
 
-const DANGLING_CONNECTOR_RE =
-  /\s+(?:and|or|the|a|an|of|to|in|for|with|on|at|by|from|as|is|are|was|were|be|that|this|but)$/i;
+const DANGLING_PHRASE_RE =
+  /\s+(?:as\s+part|such\s+as|as\s+well\s+as|in\s+order|due\s+to|up\s+to|based\s+on|along\s+with|according\s+to)$/i;
 
-const MAX_LINK_LABEL_LEN = 34;
+const DANGLING_CONNECTOR_RE =
+  /\s+(?:and|or|but|nor|so|yet|the|a|an|of|to|in|for|with|on|at|by|from|as|into|onto|upon|over|under|about|around|through|across|between|among|during|without|within|against|toward|towards|via|per|including|such|like|than|then|that|this|these|those|which|who|whom|whose|where|when|while|is|are|was|were|be|been|being|has|have|had|will|would|could|should|can|may|might|must|not|no|your|our|their|its|his|her|my|dan|atau|yang|di|ke|dari|untuk|dengan|pada|oleh)$/i;
+
+const COMPLETE_SHORT_ELLIPSIS_WORDS = new Set([
+  'soon',
+  'more',
+  'now',
+  'here',
+  'today',
+  'live',
+  'open',
+  'free',
+  'next',
+  'ready',
+]);
+
+const LINK_BOUNDARY_RE = /[\/\-_?&=#.]/;
+
+const MAX_LINK_LABEL_LEN = 48;
 const MAX_DISPLAY_BULLETS = 4;
 
 interface LinkCandidate {
@@ -337,7 +355,19 @@ function meaningfulPathSegments(url: URL): string[] {
 
 function truncateLabel(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return `${text.slice(0, maxLen - 1).replace(/[-/_]+$/, '')}\u2026`;
+  const budget = Math.max(1, maxLen - 1);
+  let slice = text.slice(0, budget);
+  if (budget >= 8 && !LINK_BOUNDARY_RE.test(text[budget] ?? '')) {
+    const minKeep = Math.max(4, Math.floor(budget * 0.55));
+    for (let i = slice.length - 1; i >= minKeep; i -= 1) {
+      if (LINK_BOUNDARY_RE.test(slice[i])) {
+        slice = slice.slice(0, i);
+        break;
+      }
+    }
+  }
+  const cleaned = slice.replace(/[-/_?&=#.]+$/, '') || text.slice(0, budget);
+  return `${cleaned}\u2026`;
 }
 
 function formatBotLabelWithSuffix(handle: string, suffix: string, maxLen: number): string {
@@ -378,7 +408,18 @@ function buildSameHostSuffix(url: URL, sameHostUrls: URL[]): string {
 function tailTruncateSuffix(suffix: string, maxLen: number): string {
   if (suffix.length <= maxLen) return suffix;
   const keep = Math.max(1, maxLen - 2);
-  const tail = suffix.slice(-keep).replace(/^[-/_]+/, '');
+  const startIdx = suffix.length - keep;
+  let tail = suffix.slice(startIdx);
+  if (startIdx > 0 && !LINK_BOUNDARY_RE.test(suffix[startIdx - 1])) {
+    const minTail = Math.max(6, Math.floor(keep * 0.4));
+    for (let i = 0; i < tail.length - minTail; i += 1) {
+      if (LINK_BOUNDARY_RE.test(tail[i])) {
+        tail = tail.slice(i + 1);
+        break;
+      }
+    }
+  }
+  tail = tail.replace(/^[-/_]+/, '');
   return `/\u2026${tail || suffix.slice(-keep)}`;
 }
 
@@ -397,8 +438,36 @@ function maxCommonPrefixIndex(value: string, peers: string[]): number {
 function diffWindowSuffix(suffix: string, peers: string[], maxLen: number): string {
   const diffIdx = maxCommonPrefixIndex(suffix, peers);
   const innerBudget = Math.max(1, maxLen - 3);
-  const start = Math.max(0, Math.min(diffIdx, Math.max(0, suffix.length - innerBudget)));
-  const end = start + innerBudget;
+  let start = Math.max(0, Math.min(diffIdx, Math.max(0, suffix.length - innerBudget)));
+  if (start > 0 && !LINK_BOUNDARY_RE.test(suffix[start - 1])) {
+    const backLimit = Math.max(0, start - Math.min(12, Math.floor(innerBudget * 0.45)));
+    let snapped = false;
+    for (let i = start - 1; i >= backLimit; i -= 1) {
+      if (LINK_BOUNDARY_RE.test(suffix[i])) {
+        start = i + 1;
+        snapped = true;
+        break;
+      }
+    }
+    if (!snapped) {
+      for (let i = start; i < diffIdx; i += 1) {
+        if (LINK_BOUNDARY_RE.test(suffix[i])) {
+          start = i + 1;
+          break;
+        }
+      }
+    }
+  }
+  let end = Math.min(suffix.length, start + innerBudget);
+  if (end < suffix.length && !LINK_BOUNDARY_RE.test(suffix[end])) {
+    const minEnd = Math.max(diffIdx + 2, start + Math.max(4, Math.floor(innerBudget * 0.5)));
+    for (let i = end - 1; i >= minEnd; i -= 1) {
+      if (LINK_BOUNDARY_RE.test(suffix[i])) {
+        end = i;
+        break;
+      }
+    }
+  }
   const chunk = suffix.slice(start, end).replace(/^[-/_]+/, '').replace(/[-/_]+$/, '') || suffix.slice(start, end);
   return end >= suffix.length ? `/\u2026${chunk}` : `/\u2026${chunk}\u2026`;
 }
@@ -954,11 +1023,88 @@ function stripDanglingLabels(input: string): string {
   return current;
 }
 
+function stripOrphanVariationSelectors(input: string): string {
+  return input
+    .replace(/(^|[\s\x20-\x7E\u00b7\u2022\u2013\u2014\u2026])\uFE0F+/g, '$1')
+    .replace(/\uFE0F{2,}/g, '\uFE0F');
+}
+
+function findLastUnclosedIndex(input: string, openChar: string, closeChar: string): number {
+  const stack: number[] = [];
+  for (let i = 0; i < input.length; i += 1) {
+    if (input[i] === openChar) {
+      stack.push(i);
+    } else if (input[i] === closeChar && stack.length > 0) {
+      stack.pop();
+    }
+  }
+  return stack.length > 0 ? stack[stack.length - 1] : -1;
+}
+
+function hasUnclosedEnclosure(input: string): boolean {
+  return findLastUnclosedIndex(input, '(', ')') >= 0 || findLastUnclosedIndex(input, '[', ']') >= 0;
+}
+
+function stripUnclosedEnclosures(input: string): string {
+  let current = input;
+  for (let i = 0; i < 4; i += 1) {
+    const openParen = findLastUnclosedIndex(current, '(', ')');
+    const openBracket = findLastUnclosedIndex(current, '[', ']');
+    const idx = Math.max(openParen, openBracket);
+    if (idx < 0) break;
+    const before = current.slice(0, idx).trimEnd();
+    if (before.length > 0) {
+      current = before;
+    } else {
+      current = `${current.slice(0, idx)}${current.slice(idx + 1)}`.trim();
+    }
+  }
+  return current;
+}
+
+function stripDanglingSuffixes(input: string): string {
+  let current = input.trimEnd();
+  for (let i = 0; i < 8; i += 1) {
+    let next = stripUnclosedEnclosures(current);
+    next = next.replace(DANGLING_PHRASE_RE, '').trimEnd();
+    next = next.replace(DANGLING_CONNECTOR_RE, '').trimEnd();
+    next = next.replace(/[,:;\-–—(\[{\u00b7"“'‘]+$/, '').trimEnd();
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+const ORPHAN_AFTER_SENTENCE_RE = /^(.{24,}?[.!?])\s+([^\s.!?][^.!?\n]{0,17})$/;
+const LIST_OR_INITIAL_END_RE = /(?:\b[A-Z]|\b\d{1,2})\.$/;
+
+function finalizeTrimmedTruncatedTail(cleaned: string, fallback: string): string {
+  const trimmed = cleaned.trimEnd();
+  if (!trimmed) return fallback;
+
+  if (/[.!?]$/.test(trimmed) && !LIST_OR_INITIAL_END_RE.test(trimmed)) {
+    return trimmed;
+  }
+
+  const orphanMatch = trimmed.match(ORPHAN_AFTER_SENTENCE_RE);
+  if (orphanMatch && !LIST_OR_INITIAL_END_RE.test(orphanMatch[1])) {
+    return orphanMatch[1];
+  }
+
+  const withoutDot = trimmed.replace(/\.+$/, '').trimEnd();
+  return withoutDot ? `${withoutDot}\u2026` : fallback;
+}
+
 function cleanTruncatedTail(input: string): string {
   let text = input.trim();
   const hadDoubleEllipsis = /(?:\u2026|\.{3})\s*\S{1,4}(?:\u2026|\.{3})\s*$/.test(text);
   if (hadDoubleEllipsis) {
     text = text.replace(/(?:\u2026|\.{3})\s*\S{1,4}(?:\u2026|\.{3})\s*$/, '\u2026');
+  }
+
+  const spacedMatch = text.match(/^(.*?\S)\s+(\u2026|\.{3})$/);
+  if (spacedMatch) {
+    return finalizeTrimmedTruncatedTail(stripDanglingSuffixes(spacedMatch[1]), text);
   }
 
   const match = text.match(/^(.*\s)(\S+)(\u2026|\.{3})$/);
@@ -967,17 +1113,16 @@ function cleanTruncatedTail(input: string): string {
   const [, prefix, lastToken, ellipsis] = match;
   const looksCut =
     hadDoubleEllipsis ||
-    text.length >= 140 ||
+    text.length >= 80 ||
+    hasUnclosedEnclosure(text) ||
     lastToken.length <= 3 ||
+    (ellipsis === '\u2026' && !COMPLETE_SHORT_ELLIPSIS_WORDS.has(lastToken.toLowerCase())) ||
     (ellipsis === '...' && /^[A-Z][a-z]{1,4}$/.test(lastToken)) ||
     /-[a-z]{1,3}$/i.test(lastToken);
 
   if (!looksCut || !prefix.trim()) return text;
 
-  let trimmed = prefix.trimEnd();
-  trimmed = trimmed.replace(DANGLING_CONNECTOR_RE, '').trimEnd();
-  trimmed = trimmed.replace(/[,:;\-–—(\u00b7]+$/, '').trimEnd();
-  return trimmed ? `${trimmed}\u2026` : text;
+  return finalizeTrimmedTruncatedTail(stripDanglingSuffixes(prefix), text);
 }
 
 function cleanBaseSummaryText(raw: string): string {
@@ -990,6 +1135,7 @@ function cleanBaseSummaryText(raw: string): string {
 
   text = stripBilingualTurkishDuplicate(text);
   text = text.replace(/\s+/g, ' ').trim();
+  text = stripOrphanVariationSelectors(text);
   text = dedupeDoubledText(text);
   text = text.replace(/^\*+\s*/, '');
   text = text.replace(/(\u{1F6A8}|\u{1F525}|\u{26A1}|\u{1FA82}|\u{1F4E2})(?:\s*\1)+/gu, '$1');
@@ -1005,6 +1151,7 @@ function cleanBaseSummaryText(raw: string): string {
   text = text.replace(/\s+:/g, ':');
   text = stripDanglingLabels(text);
   text = cleanTruncatedTail(text);
+  text = stripOrphanVariationSelectors(text);
   return text;
 }
 
@@ -1023,14 +1170,21 @@ function splitInlineBullets(text: string): { lead: string; bullets: string[] } |
     if (!matches || matches.length < 2) continue;
 
     const parts = text.split(pattern);
-    const lead = stripDanglingLabels(parts[0] ?? '');
+    const lead = stripOrphanVariationSelectors(stripDanglingLabels(parts[0] ?? ''));
     const seen = new Set<string>();
     const bullets: string[] = [];
 
     for (const rawPart of parts.slice(1)) {
-      let item = stripDanglingLabels(rawPart.replace(/^\u2705\s*/, '').trim());
+      let item = stripOrphanVariationSelectors(
+        rawPart.replace(/^[\uFE0F\u20E3\u2705\s]+/, '').trim(),
+      );
+      item = stripDanglingLabels(item);
       item = cleanTruncatedTail(item);
+      item = item.replace(/\s*\u2705\uFE0F?\s*done[.!]?\s*$/i, '').trim();
+      item = stripOrphanVariationSelectors(item).replace(/\s*[:;]+$/, '').trim();
       if (!item || /^done[.!]?$/i.test(item)) continue;
+      if (/^[\u2026.!?:\-–—\s]+$/.test(item)) continue;
+      if (!/\s/.test(item) && /\u2026$/.test(item)) continue;
       const donePrefix = item.match(/^done\b[\s:.-]+(.+)$/i);
       if (donePrefix) {
         item = donePrefix[1].trim();

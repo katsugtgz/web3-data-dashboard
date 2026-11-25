@@ -20,7 +20,13 @@ import {
   type SnapshotMetaWithLenRow,
   type SnapshotRow,
 } from './lib/db';
-import { queryFeed, querySourcesHealth, type IngestPostResult } from './normalize/cluster';
+import {
+  buildFeedLogoIndex,
+  queryFeed,
+  querySourcesHealth,
+  type FeedLogoIndex,
+  type IngestPostResult,
+} from './normalize/cluster';
 import { decayClusterScores } from './normalize/score';
 import {
   AI_MAX_ATTEMPTS,
@@ -38,6 +44,7 @@ import {
 import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
 import { computeFeedBackoff, pollFeedBatch } from './sources/feeds';
 import {
+  enrichYieldRowIcons,
   fetchCryptoSection,
   fetchGithubSection,
   fetchPredictionsSection,
@@ -201,6 +208,19 @@ async function loadCachedAirdrops(
     fetchedAt: feed && row ? row.fetched_at : 0,
     etag: feed && row ? row.etag : null,
   };
+}
+
+const FEED_LOGO_INDEX_TTL_MS = 5 * 60_000;
+const feedLogoIndexCache = new WeakMap<D1Database, { value: FeedLogoIndex; expiresAt: number }>();
+
+async function loadFeedLogoIndex(db: D1Database, nowMs = Date.now()): Promise<FeedLogoIndex> {
+  const cached = feedLogoIndexCache.get(db);
+  if (cached && nowMs < cached.expiresAt) return cached.value;
+
+  const [airdropsLoaded, defiLoaded] = await Promise.all([loadCachedAirdrops(db), loadCachedDefi(db)]);
+  const value = buildFeedLogoIndex(airdropsLoaded.feed, defiLoaded.defi);
+  feedLogoIndexCache.set(db, { value, expiresAt: nowMs + FEED_LOGO_INDEX_TTL_MS });
+  return value;
 }
 
 async function loadCachedDefi(db: D1Database): Promise<{ defi: MarketSection | null; fetchedAt: number }> {
@@ -516,6 +536,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
           },
         });
         await upsertSnapshot(env.DB, 'airdrops', res.feed, nowMs);
+        feedLogoIndexCache.delete(env.DB);
         inMemoryAirdrops = res.feed;
         airdropsLoaded = true;
         airdropsHasBody = true;
@@ -545,6 +566,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
                    ON CONFLICT(key) DO UPDATE SET last_run_at = MAX(cron_state.last_run_at + 1, excluded.last_run_at)`,
                 ).bind(pendingToken),
               ]);
+              feedLogoIndexCache.delete(env.DB);
               if ((updateRes.meta?.changes ?? 0) > 0) {
                 fallbackFeed = filtered;
                 filteredPendingToken = pendingToken;
@@ -709,6 +731,12 @@ async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ bod
 
   if (sections.length === 0) return null;
 
+  const defiSection = sections.find(s => s.id === 'defi');
+  const yieldsIdx = sections.findIndex(s => s.id === 'yields');
+  if (defiSection && yieldsIdx >= 0) {
+    sections[yieldsIdx] = enrichYieldRowIcons(sections[yieldsIdx], defiSection);
+  }
+
   // generatedAt = newest source fetchedAt: content-derived, so the exact body
   // (and its ETag) is stable across cache misses while no section updates.
   const generatedAt = sections.reduce((m, s) => Math.max(m, s.fetchedAt), 0);
@@ -868,8 +896,11 @@ export default {
       return stripBodyIfHead(
         await handleCachedJson(request, ctx, 'public, max-age=30, s-maxage=60', async () => {
           const feedParams = parseFeedParams(url);
-          const { allKnownDomains } = await loadKnownDomains(env.DB);
-          const feed = await queryFeed(env.DB, allKnownDomains, feedParams);
+          const [{ allKnownDomains }, logoIndex] = await Promise.all([
+            loadKnownDomains(env.DB),
+            loadFeedLogoIndex(env.DB),
+          ]);
+          const feed = await queryFeed(env.DB, allKnownDomains, { ...feedParams, logoIndex });
           const body = JSON.stringify(feed);
           return { body };
         }),

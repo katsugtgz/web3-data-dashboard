@@ -720,6 +720,67 @@ select.select-compact {
   white-space: nowrap;
 }
 
+.chain-badge,
+.platform-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.3;
+  max-width: 100%;
+  color: var(--color-text-primary);
+}
+
+.chain-badge.chain-badge-bare {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  border-radius: 0;
+}
+
+.crypto-ticker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--color-border);
+  background: var(--color-background-muted);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  flex: none;
+}
+
+.ticker-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-inner);
+  background: var(--color-background-muted);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.ticker-chain-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chain-more-pill {
+  padding: 1px 5px;
+  font-size: 11px;
+}
+
 /* Avatar */
 .avatar {
   position: relative;
@@ -733,6 +794,11 @@ select.select-compact {
   color: var(--color-text-secondary);
   flex: none;
   overflow: hidden;
+}
+
+.avatar.entity-avatar {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-border) 85%, transparent);
 }
 
 .avatar img {
@@ -814,12 +880,13 @@ select.select-compact {
   font: inherit;
   font-size: 15px;
   font-weight: 700;
+  line-height: 1.3;
   color: var(--color-text-primary);
   text-align: left;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .cardname-btn:hover {
@@ -827,12 +894,17 @@ select.select-compact {
 }
 
 .ticker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 5px;
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
-  margin: 2px 0 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin: 4px 0 0;
+  line-height: 1.35;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
 }
 
 .card-actions {
@@ -890,6 +962,10 @@ select.select-compact {
 }
 
 .meta div {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2px;
   font-size: var(--text-xs);
   color: var(--color-text-supporting);
   text-transform: uppercase;
@@ -897,17 +973,31 @@ select.select-compact {
   min-width: 0;
 }
 
+.meta-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+}
+
+.meta-icon {
+  opacity: 0.78;
+  flex: none;
+}
+
 .meta b {
   display: block;
   margin-top: 2px;
   font-size: var(--text-sm);
+  line-height: 1.3;
   color: var(--color-text-primary);
   font-weight: 600;
   text-transform: none;
   letter-spacing: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .fit {
@@ -1140,7 +1230,8 @@ select.select-compact {
 
 .tge-card {
   flex: none;
-  width: 248px;
+  width: 264px;
+  max-width: calc(100vw - 56px);
   scroll-snap-align: start;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-element);
@@ -1150,7 +1241,7 @@ select.select-compact {
   flex-direction: column;
   gap: 10px;
   content-visibility: auto;
-  contain-intrinsic-size: 248px 130px;
+  contain-intrinsic-size: 264px 140px;
   transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
@@ -1160,7 +1251,7 @@ select.select-compact {
 
 .tge-card-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-2);
 }
 
@@ -1169,19 +1260,27 @@ select.select-compact {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .tge-card .tn {
   font-weight: 700;
   font-size: var(--text-base);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .tge-card .tt {
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
+}
+
+.tge-meta-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .tge-card-meta {
@@ -1241,9 +1340,10 @@ select.select-compact {
 
 .feed-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
 .feed-title-wrap {
@@ -1272,10 +1372,15 @@ select.select-compact {
   line-height: 1.5;
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+}
+
+.feed-summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--text-xs);
+  padding: 0 2px;
+  vertical-align: baseline;
 }
 
 .feed-bullets {
@@ -1370,9 +1475,9 @@ select.select-compact {
 
 .feed-link-label {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .feed-link.is-known {
@@ -1409,17 +1514,34 @@ select.select-compact {
 
 .source-refs li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  gap: 4px var(--spacing-2);
   font-size: var(--text-xs);
+}
+
+.source-ref-main {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.source-ref-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  flex: none;
 }
 
 .source-refs a {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .risk-blocked {
@@ -2140,6 +2262,7 @@ dialog#agent-profile-dialog::backdrop {
 /* Sources Health Popover */
 .sources-health {
   position: relative;
+  max-width: 100%;
 }
 
 .sources-trigger {
@@ -2150,8 +2273,8 @@ dialog#agent-profile-dialog::backdrop {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
-  width: min(390px, calc(100vw - 28px));
-  max-width: calc(100vw - 28px);
+  width: min(420px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
   max-height: 360px;
   overflow: auto;
   background: var(--color-background-popover);
@@ -2187,9 +2310,10 @@ dialog#agent-profile-dialog::backdrop {
 
 .source-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  gap: 6px var(--spacing-2);
   font-size: var(--text-xs);
   padding-bottom: 6px;
   border-bottom: 1px solid var(--color-border);
@@ -2201,16 +2325,23 @@ dialog#agent-profile-dialog::backdrop {
 }
 
 .source-item-main {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
+  flex: 1 1 200px;
+}
+
+.source-item-platform {
+  flex: none;
 }
 
 .source-item-handle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .source-item-meta {
@@ -2218,6 +2349,13 @@ dialog#agent-profile-dialog::backdrop {
   align-items: center;
   gap: 6px;
   flex: none;
+}
+
+.source-item-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
 }
 
 .source-item-empty {
@@ -2555,6 +2693,17 @@ dialog#agent-profile-dialog::backdrop {
     border-bottom: 1px solid var(--color-border);
     padding-right: 0;
     padding-bottom: 10px;
+  }
+
+  .sources-popover {
+    width: min(420px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+  }
+}
+
+@media (max-width: 420px) {
+  .meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

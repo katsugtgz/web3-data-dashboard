@@ -468,6 +468,46 @@ describe('arndxt 2026 English Google Sheet parser', () => {
     expect(afterEnd.cards.map(c => c.n)).toEqual(['ProjectedQ4']);
     expect(afterEnd.tge.map(t => t.n)).toEqual(['ExplicitQ4']);
   });
+
+  test('extracts inline $TICKER and (TICKER) from sheet project cells and TGE launch notes without false positives', () => {
+    const header = makeAssoRow({ 0: '分类', 2: '项目名称', 3: '融资$', 13: '参与情况', 18: '项目状态', 21: '链接' });
+    const assoCsv = [
+      header,
+      makeAssoRow({ 0: '交易类', 2: 'HyperNova ($HNOVA)', 3: '1000万', 13: '在参与', 18: '持续', 21: 'https://hypernova.xyz' }),
+      makeAssoRow({ 0: '', 2: 'AeroSwap (AERO)', 3: '500万', 13: '在参与', 18: '持续', 21: 'https://aeroswap.xyz' }),
+      makeAssoRow({ 0: '', 2: 'NovaDex $NDX', 3: '500万', 13: '在参与', 18: '持续', 21: 'https://novadex.xyz' }),
+      makeAssoRow({ 0: '', 2: 'Vault (V2)', 3: '500万', 13: '在参与', 18: '持续', 21: 'https://vaultv2.xyz' }),
+      makeAssoRow({ 0: '', 2: 'AgentMesh (AI)', 3: '500万', 13: '在参与', 18: '持续', 21: 'https://agentmesh.xyz' }),
+      makeAssoRow({ 0: '下面这些项目已经发币（The project that has been TGE）' }),
+      makeAssoRow({ 0: '交易类', 2: 'LaunchedApp (LAPP)', 13: '已经发币', 17: 'https://launchedapp.xyz', 18: '持续' }),
+    ].join('\n');
+
+    const assoFeed = parseAsso7878Sheet(assoCsv, Date.parse('2026-11-24T00:00:00Z'));
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(assoFeed))).toBe(false);
+    const byAsso = new Map(assoFeed.cards.map(c => [c.n, c]));
+    expect(byAsso.get('HyperNova')?.t).toBe('HNOVA');
+    expect(byAsso.get('AeroSwap')?.t).toBe('AERO');
+    expect(byAsso.get('NovaDex')?.t).toBe('NDX');
+    expect(byAsso.get('Vault (V2)')?.t).toBeNull();
+    expect(byAsso.get('AgentMesh (AI)')?.t).toBeNull();
+    expect(assoFeed.tge[0].n).toBe('LaunchedApp');
+    expect(assoFeed.tge[0].t).toBe('LAPP');
+
+    const arndxtCsv = [
+      'Project,Website,Total fundraised,TGE (approx),Airdrop tasks',
+      'KiteAI ($KITE),https://kiteai.xyz,$12M,Q3 2026,Run testnet swaps',
+      'PulseNet (PULSE),https://pulsenet.xyz,$8M,Q4 2026,Bridge funds',
+      'ProtoAlpha (DEX),https://protoalpha.xyz,$5M,Q4 2026,Trade perps',
+      'Jupiter,https://jup.ag,$11M,Jan 31 2024 (JUP token launch),Claim',
+    ].join('\n');
+    const arndxtFeed = parseArndxtSheet(arndxtCsv, Date.parse('2026-11-24T00:00:00Z'));
+    const byArndxt = new Map(arndxtFeed.cards.map(c => [c.n, c]));
+    expect(byArndxt.get('KiteAI')?.t).toBe('KITE');
+    expect(byArndxt.get('PulseNet')?.t).toBe('PULSE');
+    expect(byArndxt.get('ProtoAlpha (DEX)')?.t).toBeNull();
+    expect(arndxtFeed.tge[0].n).toBe('Jupiter');
+    expect(arndxtFeed.tge[0].t).toBe('JUP');
+  });
 });
 
 describe('ASSO7878 section divider banner detection (PRRT_kwDOV0YtbM67w6DL)', () => {

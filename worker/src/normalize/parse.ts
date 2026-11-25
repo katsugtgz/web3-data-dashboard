@@ -121,6 +121,7 @@ export interface SurfMatch {
   name: string;
   tier?: 'S' | 'A' | 'B' | 'C';
   cardRank?: number;
+  logo?: string;
 }
 
 export interface ParseContext {
@@ -286,13 +287,13 @@ export function buildRuleSummary(
     const chainsText = chains.length > 0 ? ` on ${chains.join(', ')}` : '';
     const safeProject = stripOrTranslateCjk(project) || 'Web3 Project';
     return {
-      summary: truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`, 195),
+      summary: truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`),
       isNonLatin: needsTranslation,
     };
   }
 
   return {
-    summary: truncateAtWordBoundary(cleaned, 195),
+    summary: truncateAtWordBoundary(cleaned),
     isNonLatin: false,
   };
 }

@@ -1,9 +1,30 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
-import type { MarketRow, MarketSection, MarketSector } from '../../shared/types';
+import type { MarketRow, MarketSection, MarketSectionId, MarketSector } from '../../shared/types';
 import { formatRelativeTime, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
 import { cmpRows, rowKey } from '../lib/marketSort';
-import { classifyDeltaCell, detectNumericColumns } from '../lib/marketTable';
-import { ExternalLinkIcon, SearchIcon, XIcon } from './Icons';
+import {
+  classifyDeltaCell,
+  detectNumericColumns,
+  formatDeltaCell,
+  formatProtocolSlugLabel,
+  getLanguageVisual,
+  parseChainCell,
+  parseTrendingEntityCell,
+  resolveColumnKind,
+  resolveEntityCellMeta,
+  type MarketColumnKind,
+} from '../lib/marketTable';
+import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ExternalLinkIcon,
+  GlobeIcon,
+  LayersIcon,
+  SearchIcon,
+  TrendingUpIcon,
+  XIcon,
+} from './Icons';
 
 interface Sort {
   col: number;
@@ -17,10 +38,9 @@ interface Props {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ENTITY_TICKER_RE = /^(.+?)\s+\(([A-Z0-9.$_-]{2,12})\)$/;
 const STALE_THRESHOLD_MS = 86_400_000;
 
-const DEFAULT_SORT_TARGETS: Record<MarketSection['id'], readonly string[]> = {
+const DEFAULT_SORT_TARGETS: Record<MarketSectionId, readonly string[]> = {
   crypto: ['market cap', '24h volume'],
   defi: ['tvl'],
   yields: ['tvl'],
@@ -42,13 +62,6 @@ function defaultSortForSection(section: MarketSection): Sort {
   return { col: -1, dir: 1 };
 }
 
-function splitEntityLabel(raw: string): { name: string; ticker: string | null } {
-  const trimmed = raw.trim();
-  const match = trimmed.match(ENTITY_TICKER_RE);
-  if (!match) return { name: trimmed, ticker: null };
-  return { name: match[1], ticker: match[2] };
-}
-
 function rowChains(r: MarketRow): string[] {
   if (r.chains?.length) return r.chains;
   return r.chain ? [r.chain] : [];
@@ -58,10 +71,14 @@ function SectorStrip({ sectors }: { sectors: MarketSector[] }) {
   if (sectors.length === 0) return null;
   return (
     <div className="sector-strip" role="region" aria-label="Top sector movers (24h)">
-      <span className="sector-strip-label">24h Sector Movers</span>
+      <span className="sector-strip-label">
+        <TrendingUpIcon size={13} className="sector-strip-icon" />
+        <span>24h Sector Movers</span>
+      </span>
       <div className="chipline">
         {sectors.map(s => {
-          const delta = classifyDeltaCell(s.change24h);
+          const displayChange = formatDeltaCell(s.change24h);
+          const delta = classifyDeltaCell(displayChange);
           const pillClass =
             delta.tone === 'up'
               ? 'delta-up'
@@ -71,7 +88,11 @@ function SectorStrip({ sectors }: { sectors: MarketSector[] }) {
           return (
             <span key={s.name} className="sector-pill">
               <span className="sector-pill-name">{s.name}</span>
-              <span className={pillClass}>{s.change24h}</span>
+              <span className={`${pillClass} sector-pill-delta`}>
+                {delta.tone === 'up' && <ChevronUpIcon size={12} className="sector-delta-icon" />}
+                {delta.tone === 'down' && <ChevronDownIcon size={12} className="sector-delta-icon" />}
+                <span>{displayChange}</span>
+              </span>
               <span className="sector-pill-cap mono">({s.marketCap})</span>
             </span>
           );
@@ -85,13 +106,68 @@ interface MarketCellProps {
   cell: string;
   rowLabel: string;
   isNumCol: boolean;
+  colKind: MarketColumnKind;
 }
 
-function MarketDataCell({ cell, rowLabel, isNumCol }: MarketCellProps) {
+function MarketChainCell({ cell }: { cell: string }) {
+  const parsed = parseChainCell(cell);
+  if (parsed.chains.length === 0) {
+    return <td className="td-chain">—</td>;
+  }
+  return (
+    <td className="td-chain">
+      <div className="market-chain-list">
+        {parsed.chains.map(ch => (
+          <ChainBadge key={ch} chain={ch} size={13} />
+        ))}
+        {parsed.overflow && <span className="market-chain-overflow mono">{parsed.overflow}</span>}
+      </div>
+    </td>
+  );
+}
+
+function MarketProjectCell({ cell }: { cell: string }) {
+  return (
+    <td className="td-project">
+      <span className="market-project-label" title={cell.trim() || undefined}>
+        {formatProtocolSlugLabel(cell)}
+      </span>
+    </td>
+  );
+}
+
+function MarketLanguageCell({ cell }: { cell: string }) {
+  const lang = getLanguageVisual(cell);
+  return (
+    <td className="td-lang">
+      <span className={`market-lang-pill${lang.isUnknown ? ' is-unknown' : ''}`}>
+        <span className="market-lang-dot" style={{ backgroundColor: lang.color }} aria-hidden="true" />
+        <span>{lang.label}</span>
+      </span>
+    </td>
+  );
+}
+
+function MarketIlRiskCell({ cell }: { cell: string }) {
+  const trimmed = cell.trim();
+  if (!trimmed || trimmed === '—') {
+    return <td className="td-nowrap">—</td>;
+  }
+  const lower = trimmed.toLowerCase();
+  const toneClass = lower === 'yes' ? 'is-warn' : lower === 'no' ? 'is-ok' : 'is-neutral';
+  return (
+    <td className="td-nowrap">
+      <span className={`market-risk-pill ${toneClass}`}>{trimmed}</span>
+    </td>
+  );
+}
+
+function MarketValueCell({ cell, rowLabel, isNumCol }: { cell: string; rowLabel: string; isNumCol: boolean }) {
   if (isHttpUrl(cell)) {
     return (
-      <td>
+      <td className="td-nowrap">
         <a href={cell.trim()} target="_blank" rel="noopener noreferrer" className="table-link">
+          <GlobeIcon size={12} className="table-link-globe" />
           <span>{hostnameLabel(cell)}</span>
           <ExternalLinkIcon size={12} className="table-link-icon" />
           <span className="sr"> — {rowLabel} link (opens in a new tab)</span>
@@ -100,59 +176,164 @@ function MarketDataCell({ cell, rowLabel, isNumCol }: MarketCellProps) {
     );
   }
 
-  const delta = classifyDeltaCell(cell);
+  const displayCell = formatDeltaCell(cell);
+  const delta = classifyDeltaCell(displayCell);
   if (delta.isPercentOrSigned && delta.tone !== 'neutral') {
     return (
       <td className={isNumCol ? 'td-num' : undefined}>
-        <span className={delta.tone === 'up' ? 'delta-up' : 'delta-dn'}>{cell}</span>
+        <span className={delta.tone === 'up' ? 'delta-up' : 'delta-dn'}>{displayCell}</span>
       </td>
     );
   }
 
-  const trimmed = cell.trim();
-  const isMono = sortVal(cell) !== null || delta.isPercentOrSigned || ISO_DATE_RE.test(trimmed);
-  const classes = [isNumCol ? 'td-num' : '', isMono ? 'mono' : ''].filter(Boolean).join(' ');
-  return <td className={classes || undefined}>{cell || '—'}</td>;
+  const trimmed = displayCell.trim();
+  const isDate = ISO_DATE_RE.test(trimmed);
+  const isMono = sortVal(displayCell) !== null || delta.isPercentOrSigned || isDate;
+  const classes = [isNumCol ? 'td-num' : '', isMono ? 'mono' : '', isDate ? 'td-nowrap' : '']
+    .filter(Boolean)
+    .join(' ');
+  return <td className={classes || undefined}>{displayCell || '—'}</td>;
+}
+
+function MarketDataCell({ cell, rowLabel, isNumCol, colKind }: MarketCellProps) {
+  switch (colKind) {
+    case 'chain':
+      return <MarketChainCell cell={cell} />;
+    case 'project':
+      return <MarketProjectCell cell={cell} />;
+    case 'language':
+      return <MarketLanguageCell cell={cell} />;
+    case 'ilRisk':
+      return <MarketIlRiskCell cell={cell} />;
+    default:
+      return <MarketValueCell cell={cell} rowLabel={rowLabel} isNumCol={isNumCol} />;
+  }
 }
 
 interface EntityCellProps {
   rank: number;
-  rawCell: string;
-  href?: string;
+  row: MarketRow;
+  sectionId: MarketSectionId;
+  source: string;
 }
 
-function MarketEntityCell({ rank, rawCell, href }: EntityCellProps) {
-  const entity = splitEntityLabel(rawCell);
-  const displayName = entity.name || '—';
-  const safeRowHref = href && isHttpUrl(href) ? href.trim() : null;
+function TrendingEntityCell({ rank, row, source }: Omit<EntityCellProps, 'sectionId'>) {
+  const rawCell = row.cells[0] ?? '';
+  const safeRowHref = row.href && isHttpUrl(row.href) ? row.href.trim() : null;
+  const parsed = parseTrendingEntityCell(rawCell);
+  const avatarName = parsed.ticker ?? parsed.description ?? parsed.shortAddr ?? rawCell;
+
+  const content = (
+    <span className="market-trending-content">
+      <span className="market-trending-top">
+        {parsed.shortAddr && <span className="market-addr-pill mono">{parsed.shortAddr}</span>}
+        {parsed.ticker && <CryptoTickerPill ticker={parsed.ticker} size={13} className="market-entity-ticker" />}
+        {safeRowHref && <ExternalLinkIcon size={12} className="table-link-icon" />}
+      </span>
+      {parsed.description && (
+        <span className="market-trending-desc" title={rawCell}>
+          {parsed.description}
+        </span>
+      )}
+    </span>
+  );
+
+  return (
+    <div className="market-entity-cell market-entity-cell-top">
+      <span className="market-rank mono" aria-hidden="true">
+        {rank}
+      </span>
+      <EntityAvatar
+        name={avatarName}
+        ticker={parsed.ticker}
+        id={row.id}
+        icon={row.icon}
+        chain={row.chain}
+        url={row.href}
+        source={source}
+        sectionId="trending"
+        size={26}
+        shape="circle"
+        className="market-row-avatar"
+      />
+      {safeRowHref ? (
+        <a href={safeRowHref} target="_blank" rel="noopener noreferrer" className="table-link table-entity-link">
+          {content}
+          <span className="sr"> (opens in a new tab)</span>
+        </a>
+      ) : (
+        <span className="table-entity-plain">{content}</span>
+      )}
+    </div>
+  );
+}
+
+function StandardEntityCell({ rank, row, sectionId, source }: EntityCellProps) {
+  const meta = resolveEntityCellMeta(row, sectionId);
+  const safeRowHref = row.href && isHttpUrl(row.href) ? row.href.trim() : null;
+
+  const labelNode = meta.repoParts ? (
+    <span className="table-entity-label market-repo-label" title={meta.rawCell}>
+      <span className="market-repo-owner">{meta.repoParts.owner}/</span>
+      <wbr />
+      <span className="market-repo-name">{meta.repoParts.repo}</span>
+    </span>
+  ) : (
+    <span className="table-entity-label" title={meta.rawCell}>
+      {meta.displayName}
+    </span>
+  );
+
+  const entityBody = (
+    <span className="market-entity-text">
+      {labelNode}
+      {meta.displayTicker && (
+        <CryptoTickerPill ticker={meta.displayTicker} size={13} className="market-entity-ticker" />
+      )}
+      {safeRowHref && <ExternalLinkIcon size={12} className="table-link-icon" />}
+    </span>
+  );
 
   return (
     <div className="market-entity-cell">
       <span className="market-rank mono" aria-hidden="true">
         {rank}
       </span>
+      <EntityAvatar
+        name={meta.displayName}
+        ticker={meta.avatarTicker}
+        symbol={meta.avatarTicker}
+        id={row.id}
+        protocolSlug={meta.protocolSlug}
+        icon={row.icon}
+        chain={row.chain}
+        url={row.href}
+        source={source}
+        sectionId={sectionId}
+        size={26}
+        shape={meta.avatarShape}
+        className="market-row-avatar"
+      />
       {safeRowHref ? (
         <a href={safeRowHref} target="_blank" rel="noopener noreferrer" className="table-link table-entity-link">
-          <span className="table-entity-label" title={rawCell}>
-            {displayName}
-          </span>
-          {entity.ticker && <span className="market-ticker-badge mono">{entity.ticker}</span>}
-          <ExternalLinkIcon size={12} className="table-link-icon" />
+          {entityBody}
           <span className="sr"> (opens in a new tab)</span>
         </a>
       ) : (
-        <span className="table-entity-plain">
-          <span className="table-entity-label" title={rawCell}>
-            {displayName}
-          </span>
-          {entity.ticker && <span className="market-ticker-badge mono">{entity.ticker}</span>}
-        </span>
+        <span className="table-entity-plain">{entityBody}</span>
       )}
     </div>
   );
 }
 
-function buildRowKeys(rows: readonly MarketRow[], sectionId: MarketSection['id']): Map<MarketRow, string> {
+function MarketEntityCell({ rank, row, sectionId, source }: EntityCellProps) {
+  if (sectionId === 'trending') {
+    return <TrendingEntityCell rank={rank} row={row} source={source} />;
+  }
+  return <StandardEntityCell rank={rank} row={row} sectionId={sectionId} source={source} />;
+}
+
+function buildRowKeys(rows: readonly MarketRow[], sectionId: MarketSectionId): Map<MarketRow, string> {
   const ids = new Set<string>();
   const duplicates = new Set<string>();
   for (const r of rows) {
@@ -208,12 +389,14 @@ function MarketPanelHeader({
               rel="noopener noreferrer"
               className="badge badge-demo market-source-badge"
             >
-              <span>{section.source}</span>
+              <PlatformBadge source={section.source} label={section.source} size={13} className="market-source-platform" />
               <ExternalLinkIcon size={12} />
               <span className="sr"> data source (opens in a new tab)</span>
             </a>
           ) : (
-            <span className="badge badge-demo market-source-badge">{section.source}</span>
+            <span className="badge badge-demo market-source-badge">
+              <PlatformBadge source={section.source} label={section.source} size={13} className="market-source-platform" />
+            </span>
           )}
           {isStale ? (
             <span className="badge badge-warn market-stale-pill mono">
@@ -273,7 +456,14 @@ function MarketControls({
               aria-pressed={c === chain}
               onClick={() => onSelectChain(c)}
             >
-              {c}
+              {c === 'All' ? (
+                <>
+                  <LayersIcon size={13} className="market-chain-all-icon" />
+                  <span>All</span>
+                </>
+              ) : (
+                <ChainBadge chain={c} size={13} className="market-chain-chip-badge" />
+              )}
             </button>
           ))}
         </div>
@@ -322,6 +512,7 @@ function MarketTable({
   rows,
   rowKeys,
   numericCols,
+  colKinds,
   sort,
   captionId,
   query,
@@ -334,6 +525,7 @@ function MarketTable({
   rows: readonly MarketRow[];
   rowKeys: Map<MarketRow, string>;
   numericCols: readonly boolean[];
+  colKinds: readonly MarketColumnKind[];
   sort: Sort;
   captionId: string;
   query: string;
@@ -384,7 +576,12 @@ function MarketTable({
                 if (ci === 0) {
                   return (
                     <th key={col} scope="row">
-                      <MarketEntityCell rank={rowIndex + 1} rawCell={cell} href={row.href} />
+                      <MarketEntityCell
+                        rank={rowIndex + 1}
+                        row={row}
+                        sectionId={section.id}
+                        source={section.source}
+                      />
                     </th>
                   );
                 }
@@ -394,6 +591,7 @@ function MarketTable({
                     cell={cell}
                     rowLabel={row.cells[0] ?? section.title}
                     isNumCol={numericCols[ci] ?? false}
+                    colKind={colKinds[ci] ?? 'data'}
                   />
                 );
               })}
@@ -448,16 +646,25 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
     [section.cols, section.rows],
   );
 
+  const colKinds = useMemo(
+    () => section.cols.map((col, idx) => resolveColumnKind(section.id, col, idx)),
+    [section.id, section.cols],
+  );
+
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = section.rows.filter(r => {
       if (activeChain !== 'All' && !rowChainSets.get(r)?.has(activeChain)) return false;
       if (!q) return true;
-      return r.cells.some(c => c.toLowerCase().includes(q));
+      if (r.cells.some(c => c.toLowerCase().includes(q))) return true;
+      if (section.id === 'yields' && r.cells[1]) {
+        return formatProtocolSlugLabel(r.cells[1]).toLowerCase().includes(q);
+      }
+      return false;
     });
     if (sort.col < 0) return filtered;
     return filtered.slice().sort((a, b) => cmpRows(a, b, sort.col, sort.dir));
-  }, [section.rows, rowChainSets, activeChain, query, sort]);
+  }, [section.id, section.rows, rowChainSets, activeChain, query, sort]);
 
   const rowKeys = useMemo(() => buildRowKeys(section.rows, section.id), [section.rows, section.id]);
 
@@ -511,6 +718,7 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
         rows={rows}
         rowKeys={rowKeys}
         numericCols={numericCols}
+        colKinds={colKinds}
         sort={sort}
         captionId={captionId}
         query={query}

@@ -213,7 +213,7 @@ export function cleanSummaryText(raw: string, sourceLang?: string): string {
   // Normalize decorative divider lines (`____`, `----`) and convert bullet markers to ` · `.
   text = text
     .replace(/[_]{3,}|[-]{4,}/g, ' ')
-    .replace(/(?:^|\n|\s)(?:[\u2796\u2022\u25AA\u25CF\u25B8\u25BA]|\u2615\uFE0F?|\u{1F7E2}|-\s+)/gu, ' \u00b7 ');
+    .replace(/(?:^|\n|\s)(?:[\u2796\u2022\u25AA\u25CF\u25B8\u25BA]\uFE0F?|\u2615\uFE0F?|\u{1F7E2}|-\s+)/gu, ' \u00b7 ');
 
   // Strip dangling empty link/source labels left behind after URL removal.
   // Repeat twice to catch chained labels like `Register : -> Link :`.
@@ -224,9 +224,11 @@ export function cleanSummaryText(raw: string, sourceLang?: string): string {
     );
   }
 
-  // Strip stray pointer arrows, emojis standing alone as labels, and excess punctuation.
+  // Strip stray pointer arrows, orphan variation selectors, dangling colons before ` · `, and excess punctuation.
   text = text
     .replace(/[\u27A1\u2192\u{1F449}\u{1F517}\u{1F4D6}\u{1FA82}\u2728]\uFE0F?/gu, ' ')
+    .replace(/(^|[\s\u00b7])[\uFE0E\uFE0F]+/gu, '$1')
+    .replace(/:\s*(?=\u00b7|$)/g, ' ')
     .replace(/\s*\u00b7\s*/g, ' \u00b7 ')
     .replace(/(?:\s*\u00b7\s*){2,}/g, ' \u00b7 ')
     .replace(/^[\s\u00b7:;,\-|\u2013\u2014]+/, '')
@@ -237,19 +239,110 @@ export function cleanSummaryText(raw: string, sourceLang?: string): string {
   return text;
 }
 
-/**
- * Truncates text at a word boundary (code-point safe so emoji surrogate pairs
- * never split) instead of cutting mid-word (`including s...`).
- */
-export function truncateAtWordBoundary(text: string, maxLen = 195): string {
-  const cps = [...text.trim()];
-  if (cps.length <= maxLen) return text.trim();
+export const DEFAULT_SUMMARY_MAX_LEN = 320;
 
-  const slice = cps.slice(0, maxLen - 1).join('');
-  const minBoundary = Math.floor(maxLen * 0.6);
+const SENTENCE_ABBREVIATIONS = new Set([
+  'e.g', 'i.e', 'vs', 'etc', 'est', 'approx', 'min', 'max', 'no', 'mr', 'mrs', 'ms', 'dr', 'st', 'inc', 'ltd', 'co', 'u.s',
+]);
+
+const DANGLING_CONNECTORS = new Set([
+  'and', 'or', 'but', 'nor', 'so', 'yet',
+  'with', 'without', 'for', 'of', 'to', 'in', 'on', 'at', 'by', 'from', 'into', 'onto', 'over', 'under', 'via', 'as',
+  'a', 'an', 'the',
+  'that', 'which', 'who', 'whose', 'where', 'when', 'if', 'than',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'will', 'can', 'may',
+  'their', 'your', 'our', 'its', 'this', 'these', 'those',
+  'including', 'across', 'through', 'between', 'among', 'about', 'after', 'before', 'during', 'using', 'per',
+]);
+
+const TRAILING_CUT_PUNCT_RE = /[\s,;:\-\u2013\u2014(\[\u00b7/+&"'\u2018\u201C]+$/;
+
+function findCleanSentenceEnd(cps: string[], maxLen: number): string | null {
+  const minSentenceLen = Math.floor(maxLen * 0.65);
+  let bestEndIdx = -1;
+
+  for (let i = minSentenceLen - 1; i < maxLen && i < cps.length; i++) {
+    const ch = cps[i];
+    if (ch !== '.' && ch !== '!' && ch !== '?') continue;
+    const next = cps[i + 1];
+    // Require whitespace (or end) after sentence punctuation so decimals ($1.5M) and domains (app.xyz) never split.
+    if (next !== undefined && !/\s/.test(next)) continue;
+
+    if (ch === '.') {
+      // Skip ellipses ("..") and numeric lists ("1.").
+      const prev = i > 0 ? cps[i - 1] : '';
+      if (prev === '.' || /[0-9]/.test(prev)) continue;
+      // Skip common abbreviations ("e.g.", "vs.", "U.S.") and single-letter initials.
+      const prefix = cps.slice(Math.max(0, i - 12), i).join('');
+      const wordMatch = prefix.match(/(?:^|\s)([A-Za-z](?:\.[A-Za-z])*|[A-Za-z]{1,8})$/);
+      if (wordMatch) {
+        const token = wordMatch[1];
+        if (token.length === 1 || SENTENCE_ABBREVIATIONS.has(token.toLowerCase())) continue;
+      }
+    }
+
+    bestEndIdx = i;
+  }
+
+  return bestEndIdx >= 0 ? cps.slice(0, bestEndIdx + 1).join('').trimEnd() : null;
+}
+
+/**
+ * Truncates text cleanly without cutting mid-word or mid-thought (code-point
+ * safe so emoji surrogate pairs never split). Prefers a complete sentence
+ * boundary (`.` / `!` / `?`) when >= 65% of `maxLen`, otherwise truncates at
+ * a word boundary and strips trailing dangling connectors before `…`.
+ */
+export function truncateAtWordBoundary(text: string, maxLen = DEFAULT_SUMMARY_MAX_LEN): string {
+  const trimmed = text.trim();
+  const cps = [...trimmed];
+  if (cps.length <= maxLen) return trimmed;
+  if (maxLen <= 1) return cps.slice(0, Math.max(0, maxLen)).join('');
+
+  const sentenceFit = findCleanSentenceEnd(cps, maxLen);
+  if (sentenceFit) return sentenceFit;
+
+  const budget = maxLen - 1;
+  const slice = cps.slice(0, budget).join('');
+  const nextCp = cps[budget];
+  const isExactWordEnd = !nextCp || /\s/.test(nextCp);
+  const minBoundary = Math.floor(maxLen * 0.45);
   const lastSpace = slice.lastIndexOf(' ');
-  const candidate = lastSpace >= minBoundary ? slice.slice(0, lastSpace) : slice;
-  return `${candidate.replace(/[\s,;:\-\u2013\u2014(\u00b7]+$/, '')}\u2026`;
+
+  let candidate = isExactWordEnd
+    ? slice
+    : lastSpace >= minBoundary
+      ? slice.slice(0, lastSpace)
+      : slice;
+  candidate = candidate.replace(TRAILING_CUT_PUNCT_RE, '');
+
+  // Avoid cutting mid-parenthetical like "(TikTok, Instagram…".
+  const lastOpenParen = candidate.lastIndexOf('(');
+  const lastCloseParen = candidate.lastIndexOf(')');
+  if (lastOpenParen > lastCloseParen) {
+    const beforeParen = candidate.slice(0, lastOpenParen).replace(TRAILING_CUT_PUNCT_RE, '');
+    if ([...beforeParen].length >= minBoundary) {
+      candidate = beforeParen;
+    }
+  }
+
+  const minAfterStrip = Math.floor(maxLen * 0.4);
+  for (let step = 0; step < 4; step++) {
+    const m = candidate.match(/\s+([A-Za-z0-9'\u2019-]+)$/);
+    if (!m || !DANGLING_CONNECTORS.has(m[1].toLowerCase())) break;
+    const shortened = candidate.slice(0, m.index).replace(TRAILING_CUT_PUNCT_RE, '');
+    if ([...shortened].length < minAfterStrip) break;
+    candidate = shortened;
+  }
+
+  candidate = candidate.replace(TRAILING_CUT_PUNCT_RE, '');
+  if (!candidate) {
+    return `${cps.slice(0, budget).join('').trimEnd()}\u2026`;
+  }
+  if (/[.!?]$/.test(candidate)) {
+    return candidate;
+  }
+  return `${candidate}\u2026`;
 }
 
 // --- Drop Relevance Classification ---

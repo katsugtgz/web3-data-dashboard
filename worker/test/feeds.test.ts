@@ -785,6 +785,105 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
     }
   });
 
+  test('extracts Merkl token icon fallback & protocol ticker, AirdropAlert https media/img & parenthesized ticker, and Pendle icon', () => {
+    const merklRaw = [
+      {
+        id: 'm-tok-1',
+        name: 'Supply USDC on Euler',
+        chain: { name: 'Ethereum' },
+        protocol: { name: 'Euler' },
+        tokens: [
+          { symbol: 'USDC', icon: 'https://icons.merkl.xyz/usdc.png' },
+          { symbol: 'EUL', icon: 'https://icons.merkl.xyz/eul.png' },
+        ],
+        rewardsRecord: {
+          breakdowns: [{ token: { symbol: 'EUL', icon: 'https://icons.merkl.xyz/eul-reward.png' } }],
+        },
+        status: 'LIVE',
+        tvl: 5_000_000,
+        depositUrl: 'https://app.euler.finance/',
+      },
+      {
+        id: 'm-tok-2',
+        name: 'Supply WETH on Euler',
+        chain: { name: 'Base' },
+        protocol: { name: 'Euler', icon: 'https://icons.merkl.xyz/euler-proto.png' },
+        status: 'LIVE',
+        tvl: 3_000_000,
+        depositUrl: 'https://app.euler.finance/base',
+      },
+      {
+        id: 'm-only-token',
+        name: 'LP on Velodrome',
+        chain: { name: 'Optimism' },
+        protocol: { name: 'Velodrome' },
+        tokens: [{ symbol: 'VELO', icon: 'https://icons.merkl.xyz/velo.png' }],
+        rewardsRecord: {
+          breakdowns: [{ token: { symbol: 'OP', icon: 'https://icons.merkl.xyz/op.png' } }],
+        },
+        status: 'LIVE',
+        tvl: 2_000_000,
+        depositUrl: 'https://velodrome.finance/',
+      },
+    ];
+    const mf = parseMerklOpportunities(merklRaw, NOW);
+    const euler = mf.cards.find(c => c.n === 'Euler')!;
+    // Later opportunity's authoritative protocol.icon upgrades earlier token fallback.
+    expect(euler.img).toBe('https://icons.merkl.xyz/euler-proto.png');
+    expect(euler.t).toBe('EUL');
+    const velo = mf.cards.find(c => c.n === 'Velodrome')!;
+    // Token icon fallback used when protocol.icon is absent; unrelated OP reward does not hijack ticker.
+    expect(velo.img).toBe('https://icons.merkl.xyz/velo.png');
+    expect(velo.t).toBe('VELO');
+
+    const wpPayload = [
+      {
+        id: 701,
+        date_gmt: '2026-11-23T12:00:00',
+        title: { rendered: 'HyperGrid (HGRD) TGE Event' },
+        jetpack_featured_media_url: 'https://cdn.airdropalert.com/wp-content/uploads/hypergrid.png',
+        content: { rendered: '<p>TGE schedule announced.</p>' },
+        link: 'https://airdropalert.com/calendar/hypergrid/',
+      },
+      {
+        id: 702,
+        date_gmt: '2026-11-23T13:00:00',
+        title: { rendered: 'InlineImgProto $IIP Claim' },
+        content: {
+          rendered:
+            '<p><img src="http://insecure.example/a.png" /><img src="https://cdn.airdropalert.com/img/iip-logo.webp" /></p>',
+        },
+        link: 'https://airdropalert.com/calendar/iip/',
+      },
+    ];
+    const wpFeed = parseWpCalendarToAirdropFeed(wpPayload, NOW);
+    expect(wpFeed.tge[0].t).toBe('HGRD');
+    expect(wpFeed.tge[0].logo).toBe('https://cdn.airdropalert.com/wp-content/uploads/hypergrid.png');
+    expect(wpFeed.tge[1].t).toBe('IIP');
+    expect(wpFeed.tge[1].logo).toBe('https://cdn.airdropalert.com/img/iip-logo.webp');
+
+    const pendleFeed = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'sUSDe',
+            address: '0x123',
+            protocol: 'Ethena',
+            proIcon: 'https://storage.googleapis.com/prod-pendle-bucket-a/images/assets/pro/ethena.svg',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 20_000_000 },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(pendleFeed.cards[0].img).toBe(
+      'https://storage.googleapis.com/prod-pendle-bucket-a/images/assets/pro/ethena.svg',
+    );
+  });
+
   test('normalizePostId keeps clean GUIDs verbatim and prevents distinct upstream GUIDs from colliding', () => {
     const longSuffix = 'x'.repeat(80);
     const rss = `<?xml version="1.0" encoding="UTF-8"?>

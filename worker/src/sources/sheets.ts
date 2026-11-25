@@ -29,6 +29,7 @@ import {
   translateAssoTge,
 } from '../normalize/i18n';
 import { normalizeExternalUrl } from './surf';
+import { isStopName, MAJOR_TICKERS } from '../normalize/text';
 
 export const ASSO7878_SHEET_URL =
   'https://docs.google.com/spreadsheets/d/1q0_lHlDxgYASN_lcB8TFlIOKealVPPCQY5_aA7R3h60/gviz/tq?tqx=out:csv';
@@ -446,6 +447,82 @@ const KNOWN_CHAINS = [
 const CHAIN_LABEL_RE = new RegExp(`\\b(${KNOWN_CHAINS.join('|')})\\b`, 'i');
 const CHAIN_CANONICAL = new Map<string, string>(KNOWN_CHAINS.map(c => [c.toLowerCase(), c]));
 
+const SHEET_NON_TICKER_LABELS = new Set([
+  'L1', 'L2', 'L3', 'V1', 'V2', 'V3', 'V4',
+  'DEFI', 'GAMEFI', 'SOCIALFI', 'INFOFI', 'DEPIN', 'RWA', 'PERP', 'PERPS',
+  'TGE', 'IDO', 'IEO', 'ICO', 'TVL', 'APR', 'APY',
+  'EVM', 'SVM', 'TVM', 'ZKP', 'ZK', 'HOT', 'TOP', 'VIP',
+  'BETA', 'ALPHA', 'MAINNET', 'TESTNET', 'SEED', 'TOTAL', 'REPORTED', 'EST',
+  'OLD', 'PRO', 'APP', 'BOT', 'SDK', 'API', 'RPC', 'MEV', 'AMM', 'CLOB',
+  'LST', 'LRT', 'CDP', 'LP', 'YT', 'PT', 'S1', 'S2', 'S3', 'Q1', 'Q2', 'Q3', 'Q4',
+]);
+
+const SHEET_TICKER_TOKEN_RE = /^[A-Z][A-Z0-9]{1,9}$/;
+const SHEET_TRAILING_PAREN_TICKER_RE = /\s*(?:\(|\uFF08)\s*\$?([A-Z][A-Z0-9]{1,9})\s*(?:\)|\uFF09)\s*$/;
+const SHEET_TRAILING_DOLLAR_TICKER_RE = /\s+\$([A-Z][A-Z0-9]{1,9})\s*$/;
+const SHEET_INLINE_DOLLAR_TICKER_RE = /(?:^|[\s([\-/])\$([A-Z][A-Z0-9]{1,9})\b/;
+const SHEET_INLINE_PAREN_TICKER_RE = /(?:\(|\uFF08)\s*\$?([A-Z][A-Z0-9]{1,9})\s*(?:\)|\uFF09)/;
+const ARNDXT_TGE_TOKEN_LAUNCH_RE = /\(\s*\$?([A-Z][A-Z0-9]{1,9})\s+token\s+launch(?:ed)?\s*\)/;
+
+function isValidSheetTicker(sym: string): boolean {
+  return (
+    SHEET_TICKER_TOKEN_RE.test(sym) &&
+    !MAJOR_TICKERS.has(sym) &&
+    !isStopName(sym) &&
+    !SHEET_NON_TICKER_LABELS.has(sym)
+  );
+}
+
+/**
+ * Extracts an inline `$TICKER` or `(TICKER)` from a sheet project cell without
+ * false-positiving on generic version/category labels like `(V2)` or `(DEX)`.
+ * Strips a trailing ticker suffix from the display name only when a valid
+ * project prefix remains.
+ */
+function extractSheetProjectAndTicker(
+  rawCell: string,
+  translatedName: string,
+): { name: string; ticker: string | null } {
+  const trailingParen = translatedName.match(SHEET_TRAILING_PAREN_TICKER_RE);
+  if (trailingParen && isValidSheetTicker(trailingParen[1])) {
+    const stripped = translatedName.slice(0, trailingParen.index).trim();
+    if (stripped.length >= 2 && !isStopName(stripped)) {
+      return { name: stripped, ticker: trailingParen[1] };
+    }
+    return { name: translatedName, ticker: trailingParen[1] };
+  }
+
+  const trailingDollar = translatedName.match(SHEET_TRAILING_DOLLAR_TICKER_RE);
+  if (trailingDollar && isValidSheetTicker(trailingDollar[1])) {
+    const stripped = translatedName.slice(0, trailingDollar.index).trim();
+    if (stripped.length >= 2 && !isStopName(stripped)) {
+      return { name: stripped, ticker: trailingDollar[1] };
+    }
+    return { name: translatedName, ticker: trailingDollar[1] };
+  }
+
+  for (const sourceText of [translatedName, rawCell]) {
+    const dollarMatch = sourceText.match(SHEET_INLINE_DOLLAR_TICKER_RE);
+    if (dollarMatch && isValidSheetTicker(dollarMatch[1])) {
+      return { name: translatedName, ticker: dollarMatch[1] };
+    }
+    const parenMatch = sourceText.match(SHEET_INLINE_PAREN_TICKER_RE);
+    if (parenMatch && isValidSheetTicker(parenMatch[1])) {
+      return { name: translatedName, ticker: parenMatch[1] };
+    }
+  }
+
+  return { name: translatedName, ticker: null };
+}
+
+function extractArndxtTgeTicker(tgeRaw: string): string | null {
+  const m = tgeRaw.match(ARNDXT_TGE_TOKEN_LAUNCH_RE);
+  if (m && isValidSheetTicker(m[1])) return m[1];
+  const dollarMatch = tgeRaw.match(SHEET_INLINE_DOLLAR_TICKER_RE);
+  if (dollarMatch && isValidSheetTicker(dollarMatch[1])) return dollarMatch[1];
+  return null;
+}
+
 function inferChainFromLabel(label: string): string | undefined {
   const m = CHAIN_LABEL_RE.exec(label);
   return m ? CHAIN_CANONICAL.get(m[1].toLowerCase()) : undefined;
@@ -529,8 +606,9 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     if (catInfo?.skip === 'cex' || catInfo?.skip === 'abandoned') continue;
 
     if (!col2) continue;
-    const name = translateAssoProjectName(col2);
-    if (!name) continue;
+    const translatedName = translateAssoProjectName(col2);
+    if (!translatedName) continue;
+    const { name, ticker: sheetTicker } = extractSheetProjectAndTicker(col2, translatedName);
 
     const participation = translateAssoParticipation(row[13]);
     if (participation.isBankrupt) continue;
@@ -564,7 +642,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
 
       tge.push({
         n: name,
-        t: '',
+        t: sheetTicker ?? '',
         s: status.isEnded ? 'Ended' : 'Token live',
         d: bookmark.label || (tgeTimeline !== 'TBA' ? tgeTimeline : 'Launched'),
         tier: gradeFromScore(sc),
@@ -670,7 +748,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
       id: '',
       chain: inferredChain,
       chains: inferredChain ? [inferredChain] : undefined,
-      t: null,
+      t: sheetTicker,
       g: grade,
       b: badges,
       x: null,
@@ -858,8 +936,10 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     const cell = (idx: number | undefined): string | undefined => (idx !== undefined ? row[idx] : undefined);
-    const name = stripOrTranslateCjk(cell(colIndex.project) ?? '');
-    if (!name) continue;
+    const rawProjectCell = cell(colIndex.project) ?? '';
+    const cleanedName = stripOrTranslateCjk(rawProjectCell);
+    if (!cleanedName) continue;
+    const { name, ticker: sheetTicker } = extractSheetProjectAndTicker(rawProjectCell, cleanedName);
 
     const url = extractCleanSheetUrl(cell(colIndex.website));
     const raiseNum = parseCjkRaiseUsd(cell(colIndex.raise));
@@ -876,7 +956,7 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
     if (isArndxtPastTge(tgeRaw, nowMs)) {
       tge.push({
         n: name,
-        t: '',
+        t: sheetTicker ?? extractArndxtTgeTicker(tgeRaw) ?? '',
         s: 'Token live',
         d: tgeRaw.slice(0, 32) || 'Launched',
         tier: grade,
@@ -913,7 +993,7 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
       id: '',
       chain: inferredChain,
       chains: inferredChain ? [inferredChain] : undefined,
-      t: null,
+      t: sheetTicker,
       g: grade,
       b: badges,
       x: null,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { FeedItem } from '../../shared/types';
 import {
   dedupeFeedSources,
@@ -12,22 +12,35 @@ import {
   type FormattedSummary,
 } from '../lib/feedDisplay';
 import { formatRelativeTime, isHttpUrl } from '../lib/format';
+import { resolveEntityVisual, type ProjectLogoIndex } from '../lib/visualAssets';
+import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronUpIcon,
+  ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
+  GithubIcon,
+  GlobeIcon,
   LockIcon,
+  SheetIcon,
   ShieldAlertIcon,
   SparklesIcon,
+  TagIcon,
+  TelegramIcon,
+  XBrandIcon,
 } from './Icons';
 
 const MAX_VISIBLE_RISK_NOTES = 2;
+const SUMMARY_COLLAPSE_THRESHOLD = 380;
+const SUMMARY_PREVIEW_LIMIT = 340;
 const ROUTINE_CAUTION_RE = /(?:not in verified registry|unverified domain|shortener|shortened url)/i;
 
 interface Props {
   item: FeedItem;
+  logoIndex?: ProjectLogoIndex;
   onCopyBrief: (item: FeedItem) => void;
 }
 
@@ -48,11 +61,42 @@ function RiskBadge({ level, notes }: { level: FeedItem['risk']['level']; notes: 
   );
 }
 
+function buildSummaryPreview(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const window = text.slice(0, limit);
+  const lastSpace = window.lastIndexOf(' ');
+  const cut = lastSpace >= Math.floor(limit * 0.6) ? window.slice(0, lastSpace) : window;
+  return `${cut.replace(/[,:;\-–—(\u00b7]+$/, '').trimEnd()}\u2026`;
+}
+
 function FeedSummaryBlock({ summary }: { summary: FormattedSummary }) {
+  const [expanded, setExpanded] = useState(false);
   if (!summary.lead && summary.bullets.length === 0) return null;
+
+  const isLongLead = summary.lead.length > SUMMARY_COLLAPSE_THRESHOLD;
+  const leadText = isLongLead && !expanded ? buildSummaryPreview(summary.lead, SUMMARY_PREVIEW_LIMIT) : summary.lead;
+
   return (
     <div className="feed-summary-wrap">
-      {summary.lead && <p className="feed-summary">{summary.lead}</p>}
+      {leadText && (
+        <p className="feed-summary">
+          {leadText}
+          {isLongLead && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link-btn feed-summary-toggle"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(v => !v)}
+              >
+                <span>{expanded ? 'Show less' : 'Show more'}</span>
+                {expanded ? <ChevronUpIcon size={13} /> : <ChevronDownIcon size={13} />}
+              </button>
+            </>
+          )}
+        </p>
+      )}
       {summary.bullets.length > 0 && (
         <ul className="feed-bullets" aria-label="Task steps">
           {summary.bullets.map(bullet => (
@@ -113,6 +157,30 @@ function cleanLinkLabel(label: string): string {
   return label.replace(/[-/_]+(?=\u2026$)/, '').replace(/[-_]+$/, '\u2026');
 }
 
+function renderLinkLeadingIcon(url: string, known: boolean): ReactElement {
+  if (known) {
+    return <CheckCircle2Icon size={13} className="feed-link-verified" />;
+  }
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 't.me' || host === 'telegram.me') {
+      return <TelegramIcon size={12} className="feed-link-platform is-telegram" />;
+    }
+    if (host === 'x.com' || host === 'twitter.com') {
+      return <XBrandIcon size={12} className="feed-link-platform is-x" />;
+    }
+    if (host === 'github.com') {
+      return <GithubIcon size={12} className="feed-link-platform is-github" />;
+    }
+    if (host === 'docs.google.com') {
+      return <SheetIcon size={12} className="feed-link-platform is-sheet" />;
+    }
+  } catch {
+    // Fall back to globe icon for any unparseable href
+  }
+  return <GlobeIcon size={12} className="feed-link-platform" />;
+}
+
 function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectTitle: string }) {
   if (links.length === 0) return null;
   return (
@@ -128,7 +196,7 @@ function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectT
             title={link.url}
             className={`feed-link${link.known ? ' is-known' : ''}`}
           >
-            {link.known && <CheckCircle2Icon size={13} className="feed-link-verified" />}
+            {renderLinkLeadingIcon(link.url, link.known)}
             <span className="feed-link-label">{displayLabel}</span>
             <span className="sr"> — {projectTitle} (opens in a new tab)</span>
             <ExternalLinkIcon size={12} className="feed-link-ext" />
@@ -144,19 +212,25 @@ function FeedSourceRefs({ sources }: { sources: FeedItem['sources'] }) {
     <ul className="source-refs" aria-label="Source posts">
       {sources.map(src => {
         const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
-        const label = `${formatSourceHandle(src.platform, src.handle) || src.platform} (${src.platform})`;
+        const handleLabel = formatSourceHandle(src.platform, src.handle) || src.platform;
         return (
           <li key={src.postUrl}>
-            {safePostUrl ? (
-              <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
-                <span>{label}</span>
-                <span className="sr"> post (opens in a new tab)</span>
-                <ExternalLinkIcon size={11} />
-              </a>
-            ) : (
-              <span>{label}</span>
-            )}
-            <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
+            <span className="source-ref-main">
+              <PlatformBadge source={src.platform} size={12} className="source-ref-platform" />
+              {safePostUrl ? (
+                <a href={safePostUrl} target="_blank" rel="noopener noreferrer" className="mono">
+                  <span>{handleLabel}</span>
+                  <span className="sr"> ({src.platform}) post (opens in a new tab)</span>
+                  <ExternalLinkIcon size={11} />
+                </a>
+              ) : (
+                <span className="mono">{handleLabel}</span>
+              )}
+            </span>
+            <span className="mono note source-ref-time">
+              <ClockIcon size={11} />
+              <span>{formatRelativeTime(src.postedAt)}</span>
+            </span>
           </li>
         );
       })}
@@ -175,7 +249,7 @@ function dedupeStrings(values: string[]): string[] {
   return out;
 }
 
-export function FeedCard({ item, onCopyBrief }: Props) {
+export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
   const [showSources, setShowSources] = useState(false);
   const isRisk = item.risk.level === 'risk';
   const title = formatProjectTitle(item.project);
@@ -185,30 +259,46 @@ export function FeedCard({ item, onCopyBrief }: Props) {
   const chains = dedupeStrings(item.chains);
   const taskTypes = dedupeStrings(item.taskTypes);
   const sources = dedupeFeedSources(item.sources);
+  const visual = resolveEntityVisual({
+    name: title,
+    logo: item.logo,
+    ticker: item.ticker,
+    domain: item.domain,
+    url: displayLinks[0]?.url,
+    chain: chains[0],
+    source: sources[0]?.platform,
+    sectionId: 'drops',
+    logoIndex,
+  });
+  const resolvedTicker = visual.resolvedTicker;
 
   return (
     <article className={`cardx feed-card${isRisk ? ' is-risk' : ''}`}>
       <div className="feed-head">
-        <div className="feed-title-wrap">
-          <h3 className="feed-title">{title}</h3>
-          <p className="ticker">
-            <span className="mono">{item.ticker ? `$${item.ticker}` : 'Pre-token'}</span>
-            {item.domain && (
-              <>
-                {' · '}
-                <span className="mono feed-domain">{item.domain}</span>
-              </>
-            )}
-            {item.summarySource === 'ai' && (
-              <>
-                {' · '}
+        <div className="feed-head-left">
+          <EntityAvatar name={title} resolved={visual} size={38} />
+          <div className="feed-title-wrap">
+            <h3 className="feed-title">{title}</h3>
+            <div className="ticker">
+              {resolvedTicker ? (
+                <CryptoTickerPill ticker={resolvedTicker} size={13} />
+              ) : (
+                <span className="ticker-status mono">Pre-token</span>
+              )}
+              {item.domain && (
+                <span className="feed-domain-chip mono" title={`Domain: ${item.domain}`}>
+                  <GlobeIcon size={11} className="feed-domain-icon" />
+                  <span>{item.domain}</span>
+                </span>
+              )}
+              {item.summarySource === 'ai' && (
                 <span className="ai-tag">
                   <SparklesIcon size={11} />
                   <span>AI summary</span>
                 </span>
-              </>
-            )}
-          </p>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="card-actions feed-head-right">
@@ -232,13 +322,12 @@ export function FeedCard({ item, onCopyBrief }: Props) {
       {(chains.length > 0 || taskTypes.length > 0) && (
         <div className="chipline feed-tags">
           {chains.map(c => (
-            <span key={c} className="typetip">
-              {c}
-            </span>
+            <ChainBadge key={c} chain={c} size={12} />
           ))}
           {taskTypes.map(t => (
             <span key={t} className="badge feed-task-tag">
-              {t}
+              <TagIcon size={11} className="feed-task-icon" />
+              <span>{t}</span>
             </span>
           ))}
         </div>

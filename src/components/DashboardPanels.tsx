@@ -3,6 +3,7 @@ import { TABS } from '../../shared/constants';
 import type { Card, FeedItem, MarketSection, MarketSector, Tge } from '../../shared/types';
 import type { AirdropFiltersState } from '../hooks/useAirdropFilters';
 import type { DropsFiltersState } from '../hooks/useDropsFilters';
+import type { ProjectLogoIndex } from '../lib/visualAssets';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { DropsPanel } from './DropsPanel';
 import {
@@ -170,6 +171,7 @@ interface MainContentProps {
     xUnavailable: boolean;
     loading: boolean;
     failed: boolean;
+    logoIndex?: ProjectLogoIndex;
     searchRef: RefObject<HTMLInputElement | null>;
     onApplyPending: () => void;
     onCopyBrief: (item: FeedItem) => void;
@@ -185,6 +187,7 @@ interface MainContentProps {
     isLive: boolean;
     saved: Set<string>;
     doneTasks: Set<string>;
+    logoIndex?: ProjectLogoIndex;
     searchRef: RefObject<HTMLInputElement | null>;
     onToggleSaved: (name: string, legacyKey?: string) => void;
     onSelectDetail: (card: Card) => void;

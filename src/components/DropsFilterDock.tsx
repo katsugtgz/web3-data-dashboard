@@ -1,6 +1,7 @@
 import { useState, type RefObject } from 'react';
 import { TASK_TYPES } from '../../shared/constants';
 import type { DropsFiltersState, DropsSort } from '../hooks/useDropsFilters';
+import { ChainBadge } from './EntityVisual';
 import { SearchIcon, ShieldAlertIcon, ShieldCheckIcon, XIcon } from './Icons';
 
 const MIN_SOURCE_OPTIONS = [1, 2, 3] as const;
@@ -46,7 +47,7 @@ function DropsChainStrip({ filters }: { filters: DropsFiltersState }) {
           aria-pressed={filters.chain === name}
           onClick={() => filters.setChain(name)}
         >
-          <span>{name}</span>
+          <ChainBadge chain={name} size={13} className="chain-badge-bare" />
           <span className="chip-count mono">{cnt}</span>
         </button>
       ))}
