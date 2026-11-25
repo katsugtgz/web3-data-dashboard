@@ -502,7 +502,8 @@ select.select-compact {
   border-color: var(--color-border-emphasized);
 }
 
-.dock-toggle-btn[aria-pressed="true"] {
+.dock-toggle-btn[aria-pressed="true"],
+.dock-toggle-btn.is-active {
   background: var(--color-accent-muted);
   color: var(--color-text-accent);
   border-color: var(--color-accent);
@@ -546,7 +547,8 @@ select.select-compact {
   border-color: var(--color-border-emphasized);
 }
 
-.chip[aria-pressed="true"] {
+.chip[aria-pressed="true"],
+.chip.is-active {
   background: var(--color-accent-muted);
   color: var(--color-text-accent);
   border-color: var(--color-accent);
@@ -1444,6 +1446,7 @@ select.select-compact {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
+  min-width: 0;
 }
 
 .paneltitle {
@@ -1484,7 +1487,10 @@ select.select-compact {
 }
 
 .table-wrap {
+  position: relative;
   overflow: auto;
+  width: 100%;
+  min-width: 0;
   max-inline-size: 100%;
   max-block-size: min(640px, 74vh);
   border: 1px solid var(--color-border);
@@ -1513,6 +1519,14 @@ table.demo thead {
   position: sticky;
   inset-block-start: 0;
   z-index: 2;
+}
+
+table.demo thead th:first-child {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 3;
+  background: var(--color-background-surface);
+  border-right: 1px solid var(--color-border);
 }
 
 table.demo th[scope="col"] {
@@ -1550,6 +1564,7 @@ table.demo tbody th[scope="row"] {
   padding: 10px 14px;
   text-align: left;
   max-width: 280px;
+  overflow-wrap: anywhere;
 }
 
 table.demo td {
@@ -1558,6 +1573,7 @@ table.demo td {
   text-align: left;
   vertical-align: middle;
   max-width: 320px;
+  overflow-wrap: anywhere;
 }
 
 table.demo tbody tr:last-child th,
@@ -1607,6 +1623,9 @@ table.demo tbody tr:hover th[scope="row"] {
 
 .table-link {
   font-weight: 600;
+}
+
+table.demo td .table-link {
   white-space: nowrap;
 }
 
@@ -1816,6 +1835,17 @@ dialog#agent-profile-dialog::backdrop {
 
 .copy-status-warn .copy-status-icon {
   color: var(--color-status-warning);
+}
+
+.stale-banner {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius-element);
+  border: 1px solid color-mix(in srgb, var(--color-status-warning) 35%, var(--color-border));
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .dlg-scores {
@@ -2121,6 +2151,7 @@ dialog#agent-profile-dialog::backdrop {
   right: 0;
   bottom: calc(100% + 8px);
   width: min(390px, calc(100vw - 28px));
+  max-width: calc(100vw - 28px);
   max-height: 360px;
   overflow: auto;
   background: var(--color-background-popover);
@@ -2386,6 +2417,13 @@ dialog#agent-profile-dialog::backdrop {
 
   .dock-right {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 900px) {
+  .sources-popover {
+    left: 0;
+    right: auto;
   }
 }
 

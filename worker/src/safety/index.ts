@@ -1,4 +1,4 @@
-import type { AirdropFeed, MarketSection, RiskLevel } from '../../../shared/types';
+import type { AirdropFeed, Card, MarketSection, RiskLevel } from '../../../shared/types';
 import {
   BENIGN_DNS_IPS,
   canonicalLinkKey,
@@ -8,6 +8,7 @@ import {
   isAlwaysHttpsDomain,
   isPlatformDomain,
   isRawIpHost,
+  PLATFORM_DOMAINS,
 } from '../normalize/domains';
 import { URL_SHORTENERS } from './shorteners';
 
@@ -19,7 +20,7 @@ export { URL_SHORTENERS };
 // wallet word is capped so 'Claim your rewards to your wallet' style ordinary
 // announcements with later 'wallet' mentions don't trip it.
 export const DRAINER_RE =
-  /claim (?:now|your)[^,.!?;]{0,40}\b(?:connect|connect your|verify)\b[^,.!?;]{0,30}\bwallet\b|connect (?:your )?wallet to (?:claim|receive|check)|eligib\w+ [^,.!?;]{0,40}(?:verify|validate) wallet|airdrop is live[^.!?]{0,60}(?:connect (?:your )?wallet|verify (?:your )?wallet|claim[^.!?]{0,30}connect (?:your )?wallet)/i;
+  /\bclaim\s+(?:[\d.,]+\s+)?(?:now|your|free|airdrop|rewards?|tokens?|sol|eth|btc|usdt|usdc|bnb|sui|ton|allocation|\$[a-z0-9]{2,10})\b[^.!?;]{0,50}\b(?:connect|verify|validate)\b[^.!?;]{0,30}\bwallet\b|\bconnect\s+(?:your\s+|an?\s+)?(?:active\s+|main\s+|primary\s+|funded\s+|eligible\s+)?(?:evm\s+|sol\s+|solana\s+|eth\s+)?wallet\b[^,.!?;]{0,30}\bto\s+(?:claim|receive|check|verify|mint|unlock)\b|\bconnect\s+(?:your\s+|an?\s+)?active(?:\s+[a-z0-9]{1,15}){0,3}\s+wallet\b|\beligib\w+\s+[^,.!?;]{0,40}(?:verify|validate)\s+wallet\b|\bairdrop\s+is\s+live\b[^.!?]{0,60}(?:connect\s+(?:your\s+)?wallet|verify\s+(?:your\s+)?wallet|claim[^.!?]{0,30}connect\s+(?:your\s+)?wallet)/i;
 
 // Crypto doubling / advance-fee scam phrasing ("send 100 USDT to receive 1000 back",
 // "double your ETH", "deposit ... 2x back", "guaranteed 2x return / 200% ROI").
@@ -74,19 +75,102 @@ export function isPunycodeOrMixedScript(hostOrDomain: string): boolean {
   return NON_ASCII_RE.test(lower);
 }
 
-export function findLookalikeDomain(domain: string, knownDomains: Map<string, string>): string | null {
-  const lower = domain.toLowerCase();
-  if (knownDomains.has(lower)) return null;
-  const labelLen = (lower.split('.')[0] ?? lower).length;
-  if (labelLen < 5) return null;
+const GENERIC_SUBDOMAIN_LABELS = new Set([
+  'app', 'www', 'api', 'docs', 'doc', 'blog', 'web', 'portal', 'dashboard', 'dash',
+  'swap', 'bridge', 'stake', 'staking', 'claim', 'mint', 'quest', 'quests', 'drop', 'drops',
+  'airdrop', 'testnet', 'mainnet', 'faucet', 'rewards', 'reward', 'points', 'trade', 'perp',
+  'perps', 'dex', 'nft', 'nfts', 'dao', 'gov', 'vote', 'pool', 'pools', 'farm', 'vault',
+  'vaults', 'earn', 'play', 'game', 'games', 'beta', 'alpha', 'dev', 'test', 'staging',
+  'stage', 'launch', 'launchpad', 'early', 'waitlist', 'whitelist', 'checker', 'check',
+  'verify', 'auth', 'login', 'pay', 'wallet', 'scan', 'explorer', 'stats', 'info', 'help',
+  'support', 'status', 'news', 'media', 'mail', 'cdn', 'static', 'assets', 'img', 'images',
+  'link', 'links', 'go', 'get', 'join', 'try', 'pro', 'hub', 'lab', 'labs', 'studio',
+  'network', 'chain', 'core', 'base', 'open', 'live', 'node', 'nodes', 'rpc', 'ws',
+  'platform', 'cloud', 'site', 'page', 'pages', 'event', 'events', 'campaign', 'campaigns',
+  'social', 'token', 'tokens', 'finance', 'protocol', 'market', 'markets', 'store', 'shop',
+  'home', 'index', 'account', 'accounts', 'profile', 'user', 'users', 'admin', 'data', 'graph',
+]);
+
+const SCAM_DOMAIN_WORDS = new Set([
+  'claim', 'claims', 'airdrop', 'airdrops', 'drop', 'drops', 'reward', 'rewards', 'bonus',
+  'free', 'mint', 'verify', 'verification', 'validate', 'connect', 'wallet', 'portal',
+  'check', 'checker', 'eligibility', 'allocation', 'redeem', 'gift', 'promo', 'official',
+  'secure', 'support', 'recovery', 'restore', 'sync', 'dapp', 'tge', 'whitelist', 'waitlist',
+  'presale', 'refund', 'giveaway', 'distribution', 'snapshot', 'token', 'tokens', 'coin',
+  'login', 'auth',
+]);
+
+export function findLookalikeDomain(hostOrDomain: string, knownDomains: Map<string, string>): string | null {
+  const lower = hostOrDomain.trim().toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
+  if (!lower || !lower.includes('.')) return null;
+
+  const reg = getRegistrableDomain(`https://${lower}`) ?? lower;
+  if (knownDomains.has(lower) || knownDomains.has(reg)) return null;
+
+  const regLabel = reg.split('.')[0] ?? reg;
+  const subPart =
+    lower.length > reg.length && lower.endsWith(`.${reg}`)
+      ? lower.slice(0, lower.length - reg.length - 1)
+      : '';
+  const subLabels = subPart ? subPart.split('.') : [];
+  const subLabelSet = subPart ? new Set(subLabels) : null;
+  const hyphenTokens = regLabel.includes('-') ? regLabel.split('-').filter(Boolean) : [];
+  const hyphenTokenSet = hyphenTokens.length >= 2 ? new Set(hyphenTokens) : null;
 
   for (const known of knownDomains.keys()) {
-    if (known === lower) return null;
-    if (Math.abs(known.length - lower.length) > 2) continue;
-    const knownLabelLen = (known.split('.')[0] ?? known).length;
-    if (knownLabelLen < 5) continue;
-    const d = levenshtein(lower, known, 2);
-    if (d >= 1 && d <= 2) return known;
+    const knownLower = known.toLowerCase();
+    if (knownLower === lower || knownLower === reg) return null;
+    const knownReg = getRegistrableDomain(`https://${knownLower}`) ?? knownLower;
+    if (knownReg === reg) return null;
+    const knownLabel = knownReg.split('.')[0] ?? knownReg;
+
+    // 1. Subdomain impersonation: full known domain (`arbitrum.io.evil.xyz`) or
+    //    non-generic known brand label (`galxe.claim-drop.xyz`) in subdomain prefix.
+    if (subPart) {
+      if (
+        subPart === knownReg ||
+        subPart.startsWith(`${knownReg}.`) ||
+        subPart.endsWith(`.${knownReg}`) ||
+        subPart.includes(`.${knownReg}.`)
+      ) {
+        return known;
+      }
+      if (
+        knownLabel.length >= 4 &&
+        !GENERIC_SUBDOMAIN_LABELS.has(knownLabel) &&
+        subLabelSet?.has(knownLabel)
+      ) {
+        return known;
+      }
+    }
+
+    // 2. Exact SLD cross-TLD mismatch (`uniswap.com` vs `uniswap.org`) for label len >= 4.
+    if (regLabel.length >= 4 && regLabel === knownLabel && reg !== knownReg) {
+      return known;
+    }
+
+    // 3. Hyphenated brand+scam-word patterns (`arbitrum-claim`, `claim-arbitrum`, `uniswap-airdrop`).
+    if (
+      hyphenTokenSet !== null &&
+      knownLabel.length >= 4 &&
+      !GENERIC_SUBDOMAIN_LABELS.has(knownLabel) &&
+      hyphenTokenSet.has(knownLabel) &&
+      hyphenTokens.some(tok => tok !== knownLabel && SCAM_DOMAIN_WORDS.has(tok))
+    ) {
+      return known;
+    }
+
+    // 4. Typo distance: maxDist=1 for 4-char labels (`aav3.com`, `1ido.fi`), maxDist=2 for >=5-char labels.
+    const maxDist =
+      regLabel.length === 4 && knownLabel.length === 4
+        ? 1
+        : regLabel.length >= 5 && knownLabel.length >= 5
+          ? 2
+          : 0;
+    if (maxDist === 0) continue;
+    if (Math.abs(knownReg.length - reg.length) > maxDist) continue;
+    const d = levenshtein(reg, knownReg, maxDist);
+    if (d >= 1 && d <= maxDist) return known;
   }
   return null;
 }
@@ -184,9 +268,13 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
         bump('warn', `URL shortener used: ${reg}`);
       }
       if (reg && !isPlatformDomain(reg) && !URL_SHORTENERS[reg]) {
-        const similar = findLookalikeDomain(reg, lookalikeBaseline);
+        const cleanHost = host.replace(/^www\./, '');
+        const similar = findLookalikeDomain(cleanHost, lookalikeBaseline);
         if (similar) {
-          bump('risk', `Possible lookalike domain (${reg} vs ${similar})`);
+          bump('risk', `Possible lookalike domain (${cleanHost} vs ${similar})`);
+        }
+        if (!input.knownProjectDomains.has(reg.toLowerCase())) {
+          bump('warn', `Domain not in verified registry: ${reg}`);
         }
       }
     } catch {
@@ -240,11 +328,15 @@ export interface ReconcileSafetyInput {
  */
 export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResult {
   const httpsKeys = new Set<string>();
+  const shownHttpKeys = new Set<string>();
   for (const u of input.cleanedLinks) {
     try {
       const parsed = new URL(u);
+      const key = canonicalLinkKey(cleanUrl(u) ?? u);
       if (parsed.protocol === 'https:') {
-        httpsKeys.add(canonicalLinkKey(cleanUrl(u) ?? u));
+        httpsKeys.add(key);
+      } else if (parsed.protocol === 'http:') {
+        shownHttpKeys.add(key);
       }
     } catch {
       // Ignore
@@ -269,7 +361,14 @@ export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResul
         const host = parsed.hostname.toLowerCase();
         const reg = getRegistrableDomain(rawUrl);
         const key = canonicalLinkKey(cleanUrl(rawUrl) ?? rawUrl);
-        if (BENIGN_DNS_IPS.has(host) || isAlwaysHttpsDomain(reg) || httpsKeys.has(key)) continue;
+        if (
+          BENIGN_DNS_IPS.has(host) ||
+          isAlwaysHttpsDomain(reg) ||
+          httpsKeys.has(key) ||
+          !shownHttpKeys.has(key)
+        ) {
+          continue;
+        }
         if (seenHttpKeys.has(key)) continue;
         seenHttpKeys.add(key);
       } catch {
@@ -299,6 +398,19 @@ export interface KnownDomainEntry {
   origin: 'surf' | 'defi' | 'platform';
 }
 
+/**
+ * Extracts the trusted registrable project domain for a non-risk Surf card.
+ * Only `card.url` (and task links sharing its exact registrable domain) may
+ * represent the card; third-party task links, platform hosts, and shorteners
+ * are never trusted.
+ */
+export function getTrustedSurfCardDomain(card: Pick<Card, 'b' | 'url' | 'tasks'>): string | undefined {
+  if (card.b?.includes('risk')) return undefined;
+  const cardDom = card.url ? getRegistrableDomain(card.url) : undefined;
+  if (!cardDom || isPlatformDomain(cardDom) || URL_SHORTENERS[cardDom]) return undefined;
+  return cardDom;
+}
+
 export function collectKnownDomainEntries(
   surfFeed?: AirdropFeed | null,
   defiSection?: MarketSection | null,
@@ -311,13 +423,9 @@ export function collectKnownDomainEntries(
 
   if (surfFeed) {
     for (const card of surfFeed.cards) {
-      const candidates = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
-      for (const raw of candidates) {
-        if (!raw) continue;
-        const dom = getRegistrableDomain(raw);
-        if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
-        if (!map.has(dom)) map.set(dom, { domain: dom, project: card.n, origin: 'surf' });
-      }
+      const dom = getTrustedSurfCardDomain(card);
+      if (!dom) continue;
+      if (!map.has(dom)) map.set(dom, { domain: dom, project: card.n, origin: 'surf' });
     }
   }
 
@@ -341,7 +449,59 @@ export async function seedKnownDomains(
   const entries = collectKnownDomainEntries(surfFeed, defiSection);
   if (entries.length === 0) return 0;
 
-  const stmts = entries.map(e =>
+  const blockedHostsJson = JSON.stringify([...PLATFORM_DOMAINS, ...Object.keys(URL_SHORTENERS)]);
+  const platformDomainsJson = JSON.stringify(KNOWN_QUEST_PLATFORMS.map(([domain]) => domain));
+
+  const pruneStmts: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `DELETE FROM known_domains
+         WHERE origin != 'platform'
+           AND (
+             lower(domain) IN (SELECT value FROM json_each(?1))
+             OR EXISTS (
+               SELECT 1 FROM json_each(?1) AS b
+               WHERE substr(lower(known_domains.domain), -length(b.value) - 1) = '.' || b.value
+             )
+           )`,
+      )
+      .bind(blockedHostsJson),
+    db
+      .prepare(
+        `DELETE FROM known_domains
+         WHERE origin = 'platform'
+           AND domain NOT IN (SELECT value FROM json_each(?1))`,
+      )
+      .bind(platformDomainsJson),
+  ];
+
+  if (surfFeed?.cards.length) {
+    const surfDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'surf').map(e => e.domain));
+    pruneStmts.push(
+      db
+        .prepare(
+          `DELETE FROM known_domains
+           WHERE origin = 'surf'
+             AND domain NOT IN (SELECT value FROM json_each(?1))`,
+        )
+        .bind(surfDomainsJson),
+    );
+  }
+
+  if (defiSection?.rows.length) {
+    const defiDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'defi').map(e => e.domain));
+    pruneStmts.push(
+      db
+        .prepare(
+          `DELETE FROM known_domains
+           WHERE origin = 'defi'
+             AND domain NOT IN (SELECT value FROM json_each(?1))`,
+        )
+        .bind(defiDomainsJson),
+    );
+  }
+
+  const upsertStmts = entries.map(e =>
     db
       .prepare(
         `INSERT INTO known_domains (domain, project, origin) VALUES (?1, ?2, ?3)
@@ -352,12 +512,8 @@ export async function seedKnownDomains(
       .bind(e.domain, e.project, e.origin),
   );
 
-  const chunks = [];
-  for (let i = 0; i < stmts.length; i += 40) {
-    chunks.push(db.batch(stmts.slice(i, i + 40)));
-  }
   try {
-    await Promise.all(chunks);
+    await db.batch([...pruneStmts, ...upsertStmts]);
   } finally {
     knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
     knownDomainsCache.delete(db);

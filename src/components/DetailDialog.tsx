@@ -5,7 +5,14 @@ import { downloadMarkdown } from '../lib/clipboard';
 import { orderDetailTasks, type OrderedDetailTask } from '../lib/detailTasks';
 import { normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { getCardTasks, getTaskStorageKeys, cardStorageKey } from '../hooks/useWatchlist';
+import {
+  cardLegacyStorageKey,
+  cardStorageKey,
+  getCardTaskKeyPairs,
+  getCardTasks,
+  isTaskKeyDone,
+  type TaskKeyPair,
+} from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import {
@@ -36,13 +43,15 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
+  const tickerLabel = card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'No ticker yet';
+  const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
   return [
     { label: 'Rank', value: `#${card.r}`, mono: true },
-    { label: 'Ticker', value: card.t ? `$${card.t}` : 'No ticker yet', mono: Boolean(card.t) },
+    { label: 'Ticker', value: tickerLabel, mono: Boolean(card.t) },
     { label: 'Chains', value: chains.length ? chains.join(', ') : 'Not specified' },
     { label: 'Funding', value: card.f, mono: true },
     { label: 'Tasks (Open / Total)', value: card.tk, mono: true },
-    { label: 'Heat (X Score)', value: card.h.toLocaleString('en-US'), mono: true },
+    { label: 'Heat (X Score)', value: safeHeat.toLocaleString('en-US'), mono: true },
     { label: 'Updated', value: card.u === 'today' ? 'Today' : card.u },
     { label: 'Best for', value: card.fit.map(f => fit[f]).join(', ') || '—' },
     ...(card.x ? [{ label: 'Code', value: card.x, mono: true }] : []),
@@ -51,10 +60,11 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
 }
 
 function DetailScores({ card }: { card: Card }) {
-  const hasHeatSubScore = card.sub[2] != null;
+  const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
+  const hasHeatSubScore = card.sub[2] != null && Number.isFinite(card.sub[2]);
   const heatPercent = hasHeatSubScore
     ? Math.min(100, Math.max(0, (card.sub[2] ?? 0) * 10))
-    : Math.min(100, Math.max(0, Math.round((card.h / 10000) * 100)));
+    : Math.min(100, Math.max(0, Math.round((safeHeat / 10000) * 100)));
 
   return (
     <div className="dlg-scores">
@@ -93,7 +103,7 @@ function DetailScores({ card }: { card: Card }) {
             <div className="subbar-heat-head">
               <span className="subbar-heat-title">Heat</span>
               <span className="subbar-heat-caption">Community heat · 10k max</span>
-              <b className="mono subbar-heat-val">{orDash(card.h.toLocaleString('en-US'))}</b>
+              <b className="mono subbar-heat-val">{orDash(safeHeat.toLocaleString('en-US'))}</b>
             </div>
             <div className="scorebar">
               <span className="fill-heat" style={{ width: `${heatPercent}%` }} />
@@ -157,9 +167,21 @@ function DetailBriefActions({ card, profile, slug, showBrief, onToggleBrief, onC
 interface TaskRowProps {
   entry: OrderedDetailTask;
   storageKey: string;
+  legacyKey: string | null;
   checked: boolean;
   duplicateTitle: boolean;
-  onToggle: (taskKey: string) => void;
+  onToggle: (taskKey: string, legacyKey?: string) => void;
+}
+
+function formatTaskCost(cost: number): string {
+  if (!Number.isFinite(cost) || cost < 0) return '—';
+  return cost > 0 ? `$${cost}` : 'Free';
+}
+
+function formatTaskTime(timeMinutes: number | null): string {
+  return typeof timeMinutes === 'number' && Number.isFinite(timeMinutes) && timeMinutes > 0
+    ? ` · ${timeMinutes} min`
+    : '';
 }
 
 function TaskMetaDetails({
@@ -173,8 +195,8 @@ function TaskMetaDetails({
 }) {
   const normStatus = t.status.trim().toUpperCase();
   const showStatus = normStatus === 'OPEN' || isClosed;
-  const costLabel = t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
-  const timeLabel = t.timeMinutes ? ` · ${t.timeMinutes} min` : '';
+  const costLabel = formatTaskCost(t.cost);
+  const timeLabel = formatTaskTime(t.timeMinutes);
   const displayTitle = duplicateTitle && t.type ? `${t.title} · ${t.type}` : t.title;
 
   return (
@@ -198,7 +220,7 @@ function TaskMetaDetails({
   );
 }
 
-function TaskRow({ entry, storageKey, checked, duplicateTitle, onToggle }: TaskRowProps) {
+function TaskRow({ entry, storageKey, legacyKey, checked, duplicateTitle, onToggle }: TaskRowProps) {
   const { task: t, isClosed } = entry;
   const href = normalizeExternalUrl(t.url);
 
@@ -213,7 +235,11 @@ function TaskRow({ entry, storageKey, checked, duplicateTitle, onToggle }: TaskR
         </div>
       ) : (
         <label className="task-check">
-          <input type="checkbox" checked={checked} onChange={() => onToggle(storageKey)} />
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={() => onToggle(storageKey, legacyKey ?? undefined)}
+          />
           <TaskMetaDetails task={t} isClosed={false} duplicateTitle={duplicateTitle} />
         </label>
       )}
@@ -230,12 +256,12 @@ function TaskRow({ entry, storageKey, checked, duplicateTitle, onToggle }: TaskR
 
 interface TaskSectionProps {
   taskList: CardTask[];
-  taskKeys: string[];
+  taskPairs: TaskKeyPair[];
   doneTasks: Set<string>;
-  onToggleTask: (taskKey: string) => void;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
 }
 
-function DetailTaskSection({ taskList, taskKeys, doneTasks, onToggleTask }: TaskSectionProps) {
+function DetailTaskSection({ taskList, taskPairs, doneTasks, onToggleTask }: TaskSectionProps) {
   const ordered = orderDetailTasks(taskList);
   const titleCounts = new Map<string, number>();
   for (const t of taskList) {
@@ -246,7 +272,9 @@ function DetailTaskSection({ taskList, taskKeys, doneTasks, onToggleTask }: Task
   const closedItems = ordered.filter(item => item.isClosed);
 
   const actionableCount = openItems.length;
-  const openCompletedCount = openItems.filter(item => doneTasks.has(taskKeys[item.originalIndex])).length;
+  const openCompletedCount = openItems.filter(item =>
+    isTaskKeyDone(doneTasks, taskPairs[item.originalIndex]),
+  ).length;
   const completionPct = actionableCount > 0 ? Math.round((openCompletedCount / actionableCount) * 100) : 0;
 
   return (
@@ -282,16 +310,20 @@ function DetailTaskSection({ taskList, taskKeys, doneTasks, onToggleTask }: Task
 
       {openItems.length > 0 && (
         <ul className="task-list">
-          {openItems.map(entry => (
-            <TaskRow
-              key={taskKeys[entry.originalIndex]}
-              entry={entry}
-              storageKey={taskKeys[entry.originalIndex]}
-              checked={doneTasks.has(taskKeys[entry.originalIndex])}
-              duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
-              onToggle={onToggleTask}
-            />
-          ))}
+          {openItems.map(entry => {
+            const pair = taskPairs[entry.originalIndex];
+            return (
+              <TaskRow
+                key={pair.primary}
+                entry={entry}
+                storageKey={pair.primary}
+                legacyKey={pair.legacy}
+                checked={isTaskKeyDone(doneTasks, pair)}
+                duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
+                onToggle={onToggleTask}
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -301,16 +333,20 @@ function DetailTaskSection({ taskList, taskKeys, doneTasks, onToggleTask }: Task
             <span>Closed tasks ({closedItems.length})</span>
           </div>
           <ul className="task-list task-list-closed">
-            {closedItems.map(entry => (
-              <TaskRow
-                key={taskKeys[entry.originalIndex]}
-                entry={entry}
-                storageKey={taskKeys[entry.originalIndex]}
-                checked={doneTasks.has(taskKeys[entry.originalIndex])}
-                duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
-                onToggle={onToggleTask}
-              />
-            ))}
+            {closedItems.map(entry => {
+              const pair = taskPairs[entry.originalIndex];
+              return (
+                <TaskRow
+                  key={pair.primary}
+                  entry={entry}
+                  storageKey={pair.primary}
+                  legacyKey={pair.legacy}
+                  checked={isTaskKeyDone(doneTasks, pair)}
+                  duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
+                  onToggle={onToggleTask}
+                />
+              );
+            })}
           </ul>
         </div>
       )}
@@ -324,8 +360,8 @@ interface BodyProps {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (name: string) => void;
-  onToggleTask: (taskKey: string) => void;
+  onToggleSaved: (name: string, legacyKey?: string) => void;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
   onDismiss: () => void;
   copyStatus: CopyStatus | null;
@@ -347,7 +383,7 @@ function DetailDialogBody({
   const icon = card.img ?? '';
   const chains = resolveCardChains(card);
   const taskList = getCardTasks(card);
-  const taskKeys = getTaskStorageKeys(cardStorageKey(card), taskList);
+  const taskPairs = getCardTaskKeyPairs(card, taskList);
   const rows = buildDetailRows(card, chains, fit);
   const renderedBrief = showBrief ? buildBrief(card, profile) : null;
   const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
@@ -361,7 +397,7 @@ function DetailDialogBody({
             <div className="dlg-title-meta">
               <h2 id="detail-title">{card.n}</h2>
               <p className="ticker mono">
-                {card.t ? `$${card.t}` : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
+                {card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
               </p>
             </div>
           </div>
@@ -370,7 +406,7 @@ function DetailDialogBody({
               type="button"
               className="chip dlg-save-btn"
               aria-pressed={saved}
-              onClick={() => onToggleSaved(cardStorageKey(card))}
+              onClick={() => onToggleSaved(cardStorageKey(card), cardLegacyStorageKey(card))}
             >
               <StarIcon size={14} fill={saved ? 'currentColor' : 'none'} />
               <span>{saved ? 'Saved' : 'Save'}</span>
@@ -409,7 +445,7 @@ function DetailDialogBody({
 
         <DetailTaskSection
           taskList={taskList}
-          taskKeys={taskKeys}
+          taskPairs={taskPairs}
           doneTasks={doneTasks}
           onToggleTask={onToggleTask}
         />
@@ -438,8 +474,8 @@ interface Props {
   profile: AgentProfile;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (name: string) => void;
-  onToggleTask: (taskKey: string) => void;
+  onToggleSaved: (name: string, legacyKey?: string) => void;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
   onCopyBrief: (card: Card) => void;
   onClose: () => void;
   copyStatus: CopyStatus | null;
@@ -478,7 +514,7 @@ export function DetailDialog({
     >
       {card && (
         <DetailDialogBody
-          key={`${card.r}-${card.n}`}
+          key={cardStorageKey(card)}
           card={card}
           fit={fit}
           profile={profile}

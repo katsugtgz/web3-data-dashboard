@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeedItem, TaskType } from '../../shared/types';
 import { TASK_TYPES } from '../../shared/constants';
-import { isDropsQueryHash } from './useDashboardTabs';
+import { isDropsQueryHash, safeReplaceHash } from './useDashboardTabs';
 
 export type DropsSort = 'score' | 'new';
 export const DROPS_PAGE_STEP = 24;
+const HASH_SYNC_DEBOUNCE_MS = 250;
 
 interface ParsedHashParams {
   taskType: 'All' | TaskType;
@@ -50,7 +51,7 @@ function writeDropsHashParams(state: ParsedHashParams): void {
   const qs = params.toString();
   const nextHash = qs ? `#drops?${qs}` : '#drops';
   if (window.location.hash !== nextHash) {
-    history.replaceState(history.state, '', nextHash);
+    safeReplaceHash(nextHash);
   }
 }
 
@@ -58,16 +59,19 @@ export function useDropsFilters(items: FeedItem[]) {
   const [filters, setFilters] = useState(readDropsHashParams);
   const { taskType, chain, hideRisk, minSources, sort, query } = filters;
   const [limit, setLimit] = useState(DROPS_PAGE_STEP);
+  const syncPendingRef = useRef(false);
 
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash;
       if (hash === '') {
+        syncPendingRef.current = false;
         setFilters(DEFAULT_FILTERS);
         setLimit(DROPS_PAGE_STEP);
         return;
       }
       if (!isDropsQueryHash(hash)) return;
+      syncPendingRef.current = false;
       setFilters(readDropsHashParams());
       setLimit(DROPS_PAGE_STEP);
     };
@@ -75,19 +79,46 @@ export function useDropsFilters(items: FeedItem[]) {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const updateFilters = useCallback((next: ParsedHashParams) => {
-    setFilters(next);
-    writeDropsHashParams(next);
+  useEffect(() => {
+    if (!syncPendingRef.current) return;
+    const id = setTimeout(() => {
+      syncPendingRef.current = false;
+      writeDropsHashParams(filters);
+    }, HASH_SYNC_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [filters]);
+
+  const updateFilters = useCallback((updater: (prev: ParsedHashParams) => ParsedHashParams) => {
+    syncPendingRef.current = true;
+    setFilters(updater);
     setLimit(DROPS_PAGE_STEP);
   }, []);
 
-  const setTaskType = (taskType: ParsedHashParams['taskType']) => updateFilters({ ...filters, taskType });
-  const setChain = (chain: string) => updateFilters({ ...filters, chain });
-  const toggleHideRisk = () => updateFilters({ ...filters, hideRisk: !filters.hideRisk });
-  const setMinSources = (minSources: number) => updateFilters({ ...filters, minSources });
-  const setSort = (sort: DropsSort) => updateFilters({ ...filters, sort });
-  const setQuery = (query: string) => updateFilters({ ...filters, query });
-  const resetFilters = () => updateFilters(DEFAULT_FILTERS);
+  const setTaskType = useCallback(
+    (nextTaskType: ParsedHashParams['taskType']) => updateFilters(prev => ({ ...prev, taskType: nextTaskType })),
+    [updateFilters],
+  );
+  const setChain = useCallback(
+    (nextChain: string) => updateFilters(prev => ({ ...prev, chain: nextChain })),
+    [updateFilters],
+  );
+  const toggleHideRisk = useCallback(
+    () => updateFilters(prev => ({ ...prev, hideRisk: !prev.hideRisk })),
+    [updateFilters],
+  );
+  const setMinSources = useCallback(
+    (nextMinSources: number) => updateFilters(prev => ({ ...prev, minSources: nextMinSources })),
+    [updateFilters],
+  );
+  const setSort = useCallback(
+    (nextSort: DropsSort) => updateFilters(prev => ({ ...prev, sort: nextSort })),
+    [updateFilters],
+  );
+  const setQuery = useCallback(
+    (nextQuery: string) => updateFilters(prev => ({ ...prev, query: nextQuery })),
+    [updateFilters],
+  );
+  const resetFilters = useCallback(() => updateFilters(() => DEFAULT_FILTERS), [updateFilters]);
 
   const chainOptions = useMemo(() => {
     const counts = new Map<string, number>();

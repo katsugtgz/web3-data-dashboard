@@ -9,10 +9,23 @@ function createSqliteD1(): D1Database {
 async function seedCluster(db: D1Database, id: string, score: number, lastSeen: number): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
-       VALUES (?1, ?2, '[]', '[]', ?2, 'rule', 'ok', '[]', ?3, 1, ?4, ?4)`,
+      `INSERT OR IGNORE INTO sources (id, platform, handle, lang, trust, enabled)
+       VALUES ('telegram:det', 'telegram', 'det', 'en', 0.8, 1)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+       VALUES (?1, ?2, '[]', '["quest"]', ?2, 'rule', 'ok', '[]', ?3, 1, ?4, ?4, 1)`,
     )
     .bind(id, `Project ${id}`, score, lastSeen)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+       VALUES (?1, 'telegram:det', ?2, ?3, ?4, '[]', ?5, ?3)`,
+    )
+    .bind(`p_${id}`, `https://t.me/det/${id}`, lastSeen, `Project ${id} quest live`, id)
     .run();
 }
 
@@ -56,5 +69,19 @@ describe('feed response determinism', () => {
     }
     const feed = await queryFeed(db, new Set(), { sort: 'new' });
     expect(feed.items.map(i => i.id)).toEqual(['beta', 'delta', 'kappa']);
+  });
+
+  test('excludes 0-post orphan clusters from queryFeed (M-32b)', async () => {
+    const db = createSqliteD1();
+    await seedCluster(db, 'live_cluster', 0.5, 2000);
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('orphan_cluster', 'OrphanProto', '[]', '["quest"]', 'OrphanProto: quest', 'rule', 'ok', '[]', 9.9, 1, 3000, 3000, 1)`,
+      )
+      .run();
+
+    const feed = await queryFeed(db, new Set());
+    expect(feed.items.map(i => i.id)).toEqual(['live_cluster']);
   });
 });

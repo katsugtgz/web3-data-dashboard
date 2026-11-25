@@ -178,6 +178,7 @@ interface MainContentProps {
     filters: AirdropFiltersState;
     cardCount: number;
     tgeItems: Tge[];
+    fetchedAt: number | null;
     hasFeed: boolean;
     loading: boolean;
     failed: boolean;
@@ -185,7 +186,7 @@ interface MainContentProps {
     saved: Set<string>;
     doneTasks: Set<string>;
     searchRef: RefObject<HTMLInputElement | null>;
-    onToggleSaved: (name: string) => void;
+    onToggleSaved: (name: string, legacyKey?: string) => void;
     onSelectDetail: (card: Card) => void;
     onCopyBrief: (card: Card) => void;
   };

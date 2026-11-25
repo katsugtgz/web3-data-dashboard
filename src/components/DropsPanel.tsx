@@ -213,8 +213,11 @@ export function DropsPanel({
             {xUnavailable && <span className="x-unavail"> · X unavailable (Telegram unaffected)</span>}
           </p>
         </div>
+        <span className="sr-only" aria-live="polite">
+          {pendingCount > 0 ? `${pendingCount} new ${pendingCount === 1 ? 'drop' : 'drops'} available` : ''}
+        </span>
         {pendingCount > 0 && (
-          <button type="button" className="new-drops-pill" aria-live="polite" onClick={onApplyPending}>
+          <button type="button" className="new-drops-pill" onClick={onApplyPending}>
             {pendingCount} new {pendingCount === 1 ? 'drop' : 'drops'} ↑
           </button>
         )}

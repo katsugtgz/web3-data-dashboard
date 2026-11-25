@@ -101,11 +101,22 @@ function EnvironmentSection({ form, onUpdate }: SectionFieldsProps) {
 }
 
 interface GuardrailsSectionProps extends SectionFieldsProps {
+  budgetText: string;
   timeCap: string;
+  onBudgetChange: (value: string) => void;
+  onBudgetBlur: () => void;
   onTimeCapChange: (value: string) => void;
 }
 
-function GuardrailsSection({ form, timeCap, onUpdate, onTimeCapChange }: GuardrailsSectionProps) {
+function GuardrailsSection({
+  form,
+  budgetText,
+  timeCap,
+  onUpdate,
+  onBudgetChange,
+  onBudgetBlur,
+  onTimeCapChange,
+}: GuardrailsSectionProps) {
   return (
     <section className="profile-section" aria-labelledby="profile-section-guardrails">
       <h3 id="profile-section-guardrails" className="profile-section-title">
@@ -150,8 +161,9 @@ function GuardrailsSection({ form, timeCap, onUpdate, onTimeCapChange }: Guardra
               min={0}
               max={10000}
               step="any"
-              value={form.budgetUsd}
-              onChange={e => onUpdate({ budgetUsd: Math.max(0, Number(e.target.value) || 0) })}
+              value={budgetText}
+              onChange={e => onBudgetChange(e.target.value)}
+              onBlur={onBudgetBlur}
             />
           </span>
         </label>
@@ -206,13 +218,29 @@ function AgentProfileForm({
   onCopyPending,
 }: FormProps) {
   const [form, setForm] = useState<AgentProfile>(initialProfile);
+  const [budgetText, setBudgetText] = useState(String(initialProfile.budgetUsd));
   const [timeCap, setTimeCap] = useState(String(initialProfile.maxMinutes));
 
   const updateForm = (patch: Partial<AgentProfile>) => setForm(prev => ({ ...prev, ...patch }));
 
+  const parseBudget = (raw: string): number => {
+    const trimmed = raw.trim();
+    if (!trimmed) return initialProfile.budgetUsd;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n >= 0 ? Math.min(10_000, n) : initialProfile.budgetUsd;
+  };
+
+  const handleBudgetBlur = () => {
+    const trimmed = budgetText.trim();
+    if (!trimmed) return;
+    const nextBudget = parseBudget(trimmed);
+    setForm(prev => ({ ...prev, budgetUsd: nextBudget }));
+    setBudgetText(String(nextBudget));
+  };
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    onSave({ ...form, maxMinutes: Number(timeCap) });
+    onSave({ ...form, budgetUsd: parseBudget(budgetText), maxMinutes: Number(timeCap) });
   };
 
   return (
@@ -259,8 +287,11 @@ function AgentProfileForm({
 
         <GuardrailsSection
           form={form}
+          budgetText={budgetText}
           timeCap={timeCap}
           onUpdate={updateForm}
+          onBudgetChange={setBudgetText}
+          onBudgetBlur={handleBudgetBlur}
           onTimeCapChange={setTimeCap}
         />
       </div>

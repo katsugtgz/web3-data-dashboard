@@ -186,6 +186,7 @@ export function createFeedSession(
 
   return {
     async fetch(signal, opts) {
+      signal?.throwIfAborted();
       if (opts?.resetResume) {
         pendingResume = null;
       }
@@ -203,6 +204,7 @@ export function createFeedSession(
 
       if (!active) {
         const root = await fetchPageWithCache('/feed.json', signal, nextPages);
+        signal?.throwIfAborted();
         if (root.kind === 'fallback') {
           cachedPages = new Map();
           pendingResume = null;
@@ -233,6 +235,7 @@ export function createFeedSession(
         const remaining = Math.max(1, limit - merged.length);
         const pagePath = buildCursorPath(nextCursor, remaining);
         const page = await fetchPageWithCache(pagePath, signal, nextPages);
+        signal?.throwIfAborted();
         if (page.kind === 'fallback') {
           cachedPages = new Map();
           pendingResume = null;
@@ -250,6 +253,7 @@ export function createFeedSession(
         nextCursor = page.body.cursor;
       }
 
+      signal?.throwIfAborted();
       const preservedCursor =
         merged.length < limit && nextCursor && !seenCursors.has(nextCursor) ? nextCursor : undefined;
 

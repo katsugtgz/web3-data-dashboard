@@ -75,4 +75,35 @@ describe('source auto-discovery', () => {
     const top = await getTopCandidates(db, 50);
     expect(top.map(c => c.handle)).toEqual(['alpha_cand', 'zeta_cand']);
   });
+
+  test('excludes Telegram bot handles from forwards and t.me links while keeping non-bot handles', () => {
+    const handles = extractCandidateHandles(
+      'lfwallet_airdropbot',
+      [
+        'https://t.me/ppurestorebot',
+        'https://t.me/keycraftshopbot/start',
+        'https://t.me/helper_bot',
+        'https://t.me/s/PromoBot',
+        'https://t.me/robot_news/12',
+        'https://t.me/bottle_drops',
+      ],
+      'self_channel',
+      new Set(),
+    );
+    expect(handles.sort()).toEqual(['bottle_drops', 'robot_news']);
+  });
+
+  test('recordCandidates caps batch writes at 20 handles per call', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_240_000_000;
+    const handles = Array.from({ length: 25 }, (_, i) => `cand_${String(i + 1).padStart(2, '0')}`);
+
+    await recordCandidates(db, handles, 'telegram:ch1', now);
+
+    const rows = await db
+      .prepare('SELECT handle FROM source_candidates ORDER BY handle ASC')
+      .all<{ handle: string }>();
+    expect(rows.results.length).toBe(20);
+    expect(rows.results.map(r => r.handle)).toEqual(handles.slice(0, 20));
+  });
 });

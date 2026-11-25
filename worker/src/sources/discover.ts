@@ -1,4 +1,6 @@
 const HANDLE_RE = /^[A-Za-z0-9_]{4,32}$/;
+const TELEGRAM_BOT_RE = /bot$/i;
+const MAX_CANDIDATE_BATCH = 20;
 const RESERVED_PATHS = new Set([
   's',
   'addlist',
@@ -37,7 +39,9 @@ export function extractCandidateHandles(
     const h = raw.trim().replace(/^@/, '');
     if (!HANDLE_RE.test(h)) return;
     const lower = h.toLowerCase();
-    if (lower === selfLower || RESERVED_PATHS.has(lower) || existingHandles.has(lower)) return;
+    if (lower === selfLower || RESERVED_PATHS.has(lower) || existingHandles.has(lower) || TELEGRAM_BOT_RE.test(lower)) {
+      return;
+    }
     // Store the canonical lowercase form: source_candidates.handle is a
     // case-sensitive PRIMARY KEY, so mixed-case variants would split rows.
     if (!found.has(lower)) found.set(lower, lower);
@@ -76,7 +80,7 @@ export async function recordCandidates(
   // Merge inside the upsert: reading from_sources first and writing the
   // extended list loses sources when two ingests for the same handle race.
   // json_group_array(DISTINCT ...) unions the stored list with the new source.
-  const stmts = handles.map(h =>
+  const stmts = handles.slice(0, MAX_CANDIDATE_BATCH).map(h =>
     db
       .prepare(
         `INSERT INTO source_candidates (handle, mentions, first_seen, last_seen, from_sources)

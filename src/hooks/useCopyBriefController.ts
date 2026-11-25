@@ -20,6 +20,8 @@ interface CopyControllerInput {
   saveProfile: (next: AgentProfile) => { profile: AgentProfile; persisted: boolean };
   /** Freshness source for first-copy: validate risk against the CURRENT feed. */
   getVisibleItems: () => FeedItem[];
+  /** Freshness source for curated Cards: validate live RISK state and presence. */
+  getVisibleCards: () => Card[];
 }
 
 export interface CopyController {
@@ -28,6 +30,8 @@ export interface CopyController {
   dismissToast: () => void;
   /** Region-scoped copy outcome; null when nothing is showing. */
   copyStatus: CopyStatus | null;
+  /** Clears dialog-scoped copy status and invalidates in-flight copy callbacks. */
+  clearCopyStatus: () => void;
   /** Entry point for every "Copy agent brief" button. */
   handleCopyBrief: (target: FeedItem | Card, region?: CopyRegion) => void;
   /** Profile dialog props. */
@@ -46,13 +50,39 @@ const nameOf = (target: FeedItem | Card): string =>
   isFeedItem(target) ? formatProjectTitle(target.project) : target.n;
 
 /**
+ * Resolves a copy target against the latest live FeedItems or Cards so
+ * background polls (e.g. a newly applied RISK flag or removal) take effect
+ * before a brief is generated.
+ */
+export function resolveLiveBriefTarget(
+  target: FeedItem | Card,
+  visibleItems: readonly FeedItem[],
+  visibleCards: readonly Card[],
+): FeedItem | Card | null {
+  if (isFeedItem(target)) {
+    return visibleItems.find(it => it.id === target.id) ?? null;
+  }
+  if (target.id) {
+    return visibleCards.find(c => c.id === target.id) ?? null;
+  }
+  return visibleCards.find(c => c.n === target.n) ?? null;
+}
+
+export function formatCopyBlockedMessage(target: FeedItem | Card, region: CopyRegion): string {
+  if (region === 'page' || isFeedItem(target)) {
+    return 'Clipboard blocked — use your browser clipboard permissions and retry.';
+  }
+  return 'Clipboard blocked — open Preview in details to copy.';
+}
+
+/**
  * Owns the entire copy-agent-brief flow: clipboard execution, region-scoped
  * outcome reporting (page toast vs. visible banner inside the active modal),
  * the first-copy profile gate, and risk revalidation against the live feed at
  * save time. App renders; this decides where messages land.
  */
 export function useCopyBriefController(input: CopyControllerInput): CopyController {
-  const { hasConfigured, profile, saveProfile, getVisibleItems } = input;
+  const { hasConfigured, profile, saveProfile, getVisibleItems, getVisibleCards } = input;
 
   const [toast, setToast] = useState<ToastState | null>(null);
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
@@ -60,6 +90,7 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   const [pendingCopyName, setPendingCopyName] = useState<FeedItem | Card | null>(null);
 
   const pendingCopyTargetRef = useRef<{ target: FeedItem | Card; region: CopyRegion } | null>(null);
+  const copySeqRef = useRef(0);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const copyStatusTimerRef = useRef<number | undefined>(undefined);
 
@@ -82,6 +113,12 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
     copyStatusTimerRef.current = Number(setTimeout(() => setCopyStatus(null), COPY_STATUS_MS));
   }, []);
 
+  const clearCopyStatus = useCallback(() => {
+    copySeqRef.current += 1;
+    clearTimeout(copyStatusTimerRef.current);
+    setCopyStatus(null);
+  }, []);
+
   const reportOutcome = useCallback(
     (region: CopyRegion, message: string, tone: ToastState['tone']) => {
       if (region === 'page') showToast(message, tone);
@@ -92,16 +129,18 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
 
   const executeCopyBrief = useCallback(
     (target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
+      const seq = ++copySeqRef.current;
       const md = buildBrief(target, activeProfile);
       if (!md) {
         reportOutcome(region, `Brief unavailable for RISK items.${notice}`, 'warn');
         return;
       }
       void copyText(md).then(ok => {
+        if (copySeqRef.current !== seq) return;
         const isWarn = isFeedItem(target) && target.risk.level === 'warn';
         const label = nameOf(target);
         const message = !ok
-          ? 'Clipboard blocked — open Preview in details to copy.'
+          ? formatCopyBlockedMessage(target, region)
           : isWarn
             ? `Copied ${label} brief (WARN item: verify links before running).`
             : `Copied ${label} agent brief to clipboard.`;
@@ -111,14 +150,22 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
     [reportOutcome],
   );
 
-  const copyCurrent = useCallback((target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
-    const current = isFeedItem(target) ? getVisibleItems().find(it => it.id === target.id) : target;
-    if (!current) {
-      reportOutcome(region, `Brief unavailable. This drop is no longer in the feed.${notice}`, 'warn');
-      return;
-    }
-    executeCopyBrief(current, activeProfile, region, notice);
-  }, [executeCopyBrief, getVisibleItems, reportOutcome]);
+  const copyCurrent = useCallback(
+    (target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
+      const current = resolveLiveBriefTarget(target, getVisibleItems(), getVisibleCards());
+      if (!current) {
+        copySeqRef.current += 1;
+        reportOutcome(
+          region,
+          `Brief unavailable. This ${isFeedItem(target) ? 'drop' : 'project'} is no longer in the feed.${notice}`,
+          'warn',
+        );
+        return;
+      }
+      executeCopyBrief(current, activeProfile, region, notice);
+    },
+    [executeCopyBrief, getVisibleCards, getVisibleItems, reportOutcome],
+  );
 
   const handleCopyBrief = useCallback(
     (target: FeedItem | Card, region: CopyRegion = 'page') => {
@@ -161,16 +208,18 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   );
 
   const openProfile = useCallback(() => {
+    clearCopyStatus();
     pendingCopyTargetRef.current = null;
     setPendingCopyName(null);
     setProfileOpen(true);
-  }, []);
+  }, [clearCopyStatus]);
 
   const closeProfile = useCallback(() => {
+    clearCopyStatus();
     pendingCopyTargetRef.current = null;
     setPendingCopyName(null);
     setProfileOpen(false);
-  }, []);
+  }, [clearCopyStatus]);
 
   const dismissToast = useCallback(() => setToast(null), []);
 
@@ -178,6 +227,7 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
     toast,
     dismissToast,
     copyStatus,
+    clearCopyStatus,
     handleCopyBrief,
     profileOpen,
     pendingCopyName: pendingCopyName ? nameOf(pendingCopyName) : null,

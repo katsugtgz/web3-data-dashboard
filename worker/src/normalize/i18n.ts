@@ -6,7 +6,9 @@ export const HAN_RE = /\p{Script=Han}/u;
 // forbidden in output. Exported so rule-summary builders enforce the exact
 // same contract as CI.
 export const FORBIDDEN_CJK_RE =
-  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\uFF01-\uFF9F]/u;
+  /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\u3000-\u303F\u3200-\u32FF\uFE30-\uFE4F\uFF01-\uFFEF]/u;
+
+const CYRILLIC_RE = /\p{Script=Cyrillic}/u;
 
 // CJK airdrop/drop action keywords live strictly here (the sole file exempted
 // from scripts/check-no-cjk.sh) so the drop relevance gate can accept genuine
@@ -112,18 +114,19 @@ export function stripOrTranslateCjk(raw: string): string {
   if (Object.hasOwn(TGE_STATUS_MAP, trimmed)) return TGE_STATUS_MAP[trimmed];
   if (Object.hasOwn(TAG_LABEL_MAP, trimmed)) return TAG_LABEL_MAP[trimmed];
   if (Object.hasOwn(RISK_ITEM_MAP, trimmed)) return RISK_ITEM_MAP[trimmed];
-  if (FORBIDDEN_CJK_RE.test(trimmed)) {
-    console.warn('i18n-miss', trimmed);
+  const hasForbidden = FORBIDDEN_CJK_RE.test(trimmed);
+  if (hasForbidden || CYRILLIC_RE.test(trimmed)) {
+    if (hasForbidden) console.warn('i18n-miss', trimmed);
     // Keep the Latin remainder of mixed labels instead of dropping the whole
     // value: callers fall back to the raw CJK string when this returns '',
     // which defeats the zero-CJK contract. The gate mirrors check-no-cjk.sh
-    // exactly (Han/Kana/Hangul/Bopomofo + U+3000-303F + U+FF01-FF9F), so
-    // anything CI would reject enters this strip; if nothing ASCII-safe
-    // remains, return '' so CALLERS apply their own fallbacks
-    // ('Unknown project', '—') instead of a hardcoded global placeholder.
+    // exactly (Han/Kana/Hangul/Bopomofo + CJK symbols/enclosed/compat/fullwidth),
+    // plus Cyrillic so non-English scripts never leak into English UI fields;
+    // if nothing ASCII-safe remains, return '' so CALLERS apply their own
+    // fallbacks ('Unknown project', '—') instead of a hardcoded placeholder.
     const stripped = trimmed
       // Fullwidth digits are content, not decoration: fold to ASCII first —
-      // U+FF10-FF19 sit inside the U+FF01-FF9F range below — so edge digits
+      // U+FF10-FF19 sit inside the U+FF01-FFEF range below — so edge digits
       // survive. Fullwidth Latin (ABC) is decoration and collapses away.
       .replace(/[\uFF10-\uFF19]/gu, d => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
       .replace(/\p{Script=Han}+/gu, ' ')
@@ -131,11 +134,12 @@ export function stripOrTranslateCjk(raw: string): string {
       .replace(/\p{Script=Katakana}+/gu, ' ')
       .replace(/\p{Script=Hangul}+/gu, ' ')
       .replace(/\p{Script=Bopomofo}+/gu, ' ')
-      // Each CJK run swaps to a space, not '': deleting would fuse adjacent
+      .replace(/\p{Script=Cyrillic}+/gu, ' ')
+      // Each CJK/Cyrillic run swaps to a space, not '': deleting would fuse adjacent
       // Latin tokens (Galxe任务Zealy -> 'GalxeZealy'). Punctuation/fullwidth
       // forms swap to spaces globally — single pass, no edge-only regexes —
       // so mixed labels keep token boundaries; trailing trim cleans the edges.
-      .replace(/[\u3000-\u303F\uFF01-\uFF9F]/gu, ' ')
+      .replace(/[\u3000-\u303F\u3200-\u32FF\uFE30-\uFE4F\uFF01-\uFFEF]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (stripped) return stripped;

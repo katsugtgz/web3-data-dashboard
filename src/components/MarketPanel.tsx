@@ -49,10 +49,15 @@ function splitEntityLabel(raw: string): { name: string; ticker: string | null } 
   return { name: match[1], ticker: match[2] };
 }
 
+function rowChains(r: MarketRow): string[] {
+  if (r.chains?.length) return r.chains;
+  return r.chain ? [r.chain] : [];
+}
+
 function SectorStrip({ sectors }: { sectors: MarketSector[] }) {
   if (sectors.length === 0) return null;
   return (
-    <div className="sector-strip" aria-label="Top sector movers (24h)">
+    <div className="sector-strip" role="region" aria-label="Top sector movers (24h)">
       <span className="sector-strip-label">24h Sector Movers</span>
       <div className="chipline">
         {sectors.map(s => {
@@ -119,14 +124,15 @@ interface EntityCellProps {
 function MarketEntityCell({ rank, rawCell, href }: EntityCellProps) {
   const entity = splitEntityLabel(rawCell);
   const displayName = entity.name || '—';
+  const safeRowHref = href && isHttpUrl(href) ? href.trim() : null;
 
   return (
     <div className="market-entity-cell">
       <span className="market-rank mono" aria-hidden="true">
         {rank}
       </span>
-      {href && isHttpUrl(href) ? (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="table-link table-entity-link">
+      {safeRowHref ? (
+        <a href={safeRowHref} target="_blank" rel="noopener noreferrer" className="table-link table-entity-link">
           <span className="table-entity-label" title={rawCell}>
             {displayName}
           </span>
@@ -188,21 +194,27 @@ function MarketPanelHeader({
   announcedCount: number | null;
   isStale: boolean;
 }) {
+  const safeSourceUrl = isHttpUrl(section.sourceUrl) ? section.sourceUrl.trim() : null;
+
   return (
     <div className="panelhead">
       <div>
         <div className="paneltitle">
           <h2 className="section">{section.title}</h2>
-          <a
-            href={section.sourceUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="badge badge-demo market-source-badge"
-          >
-            <span>{section.source}</span>
-            <ExternalLinkIcon size={12} />
-            <span className="sr"> data source (opens in a new tab)</span>
-          </a>
+          {safeSourceUrl ? (
+            <a
+              href={safeSourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="badge badge-demo market-source-badge"
+            >
+              <span>{section.source}</span>
+              <ExternalLinkIcon size={12} />
+              <span className="sr"> data source (opens in a new tab)</span>
+            </a>
+          ) : (
+            <span className="badge badge-demo market-source-badge">{section.source}</span>
+          )}
           {isStale ? (
             <span className="badge badge-warn market-stale-pill mono">
               <span className="status-dot status-dot-degraded" aria-hidden="true" />
@@ -278,6 +290,12 @@ function MarketControls({
           placeholder={`Search ${title.toLowerCase()}…`}
           value={query}
           onChange={e => onChangeQuery(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Escape' && query) {
+              e.stopPropagation();
+              onChangeQuery('');
+            }
+          }}
         />
         {query ? (
           <button
@@ -412,13 +430,18 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
   const searchId = useId();
   const captionId = useId();
 
-  const chains = useMemo(() => {
+  const { chains, chainSet, rowChainSets } = useMemo(() => {
     const unique = new Set<string>();
+    const map = new Map<MarketRow, Set<string>>();
     for (const r of section.rows) {
-      if (r.chain) unique.add(r.chain);
+      const list = rowChains(r);
+      map.set(r, new Set(list));
+      for (const c of list) unique.add(c);
     }
-    return [...unique];
+    return { chains: [...unique], chainSet: unique, rowChainSets: map };
   }, [section.rows]);
+
+  const activeChain = chain !== 'All' && chainSet.has(chain) ? chain : 'All';
 
   const numericCols = useMemo(
     () => detectNumericColumns(section.cols, section.rows),
@@ -428,13 +451,13 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = section.rows.filter(r => {
-      if (chain !== 'All' && r.chain !== chain) return false;
+      if (activeChain !== 'All' && !rowChainSets.get(r)?.has(activeChain)) return false;
       if (!q) return true;
       return r.cells.some(c => c.toLowerCase().includes(q));
     });
     if (sort.col < 0) return filtered;
     return filtered.slice().sort((a, b) => cmpRows(a, b, sort.col, sort.dir));
-  }, [section.rows, chain, query, sort]);
+  }, [section.rows, rowChainSets, activeChain, query, sort]);
 
   const rowKeys = useMemo(() => buildRowKeys(section.rows, section.id), [section.rows, section.id]);
 
@@ -455,7 +478,7 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
 
   const isStale =
     section.stale || (section.fetchedAt > 0 && Date.now() - section.fetchedAt > STALE_THRESHOLD_MS);
-  const hasFilters = query.trim().length > 0 || chain !== 'All';
+  const hasFilters = query.trim().length > 0 || activeChain !== 'All';
   const clearFilters = () => {
     setQuery('');
     setChain('All');
@@ -471,7 +494,7 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
       <MarketControls
         title={section.title}
         chains={chains}
-        chain={chain}
+        chain={activeChain}
         query={query}
         searchId={searchId}
         searchInputRef={activeSearchRef}
@@ -491,7 +514,7 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
         sort={sort}
         captionId={captionId}
         query={query}
-        chain={chain}
+        chain={activeChain}
         hasFilters={hasFilters}
         onToggleSort={toggleSort}
         onClearFilters={clearFilters}

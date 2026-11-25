@@ -9,13 +9,14 @@ import type {
   TaskType,
 } from '../../../shared/types';
 import { sha1Hex } from '../lib/hash';
-import { evaluateSafety, reconcileSafetyReasons } from '../safety';
+import { evaluateSafety, getTrustedSurfCardDomain, reconcileSafetyReasons } from '../safety';
 import {
   getRegistrableDomain,
   isNewsDomain,
   isPlatformDomain,
   selectFeedLinks,
 } from './domains';
+import { stripOrTranslateCjk } from './i18n';
 import {
   buildRuleSummary,
   parseDropPost,
@@ -90,14 +91,11 @@ export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   if (!feed) return { byDomain, byTicker };
 
   for (const card of feed.cards) {
+    if (card.b?.includes('risk')) continue;
     const match: SurfMatch = { name: card.n, tier: card.g, cardRank: card.r };
     if (card.t) byTicker.set(card.t.toUpperCase(), match);
-    const urls = [card.url, ...(card.tasks?.map(t => t.url) ?? [])];
-    for (const raw of urls) {
-      if (!raw) continue;
-      const dom = getRegistrableDomain(raw);
-      if (dom && !isPlatformDomain(dom) && !byDomain.has(dom)) byDomain.set(dom, match);
-    }
+    const dom = getTrustedSurfCardDomain(card);
+    if (dom && !byDomain.has(dom)) byDomain.set(dom, match);
   }
   return { byDomain, byTicker };
 }
@@ -671,21 +669,8 @@ export async function ingestPostIntoCluster(
                  ELSE 'ok'
                END,
                score = CASE
-                 WHEN CASE
-                        WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
-                        WHEN (clusters.risk_level = 'warn' OR ?9 = 'warn')
-                             AND EXISTS (
-                               SELECT 1
-                               FROM (SELECT value FROM json_each(clusters.risk_reasons)
-                                     UNION
-                                     SELECT value FROM json_each(?10))
-                               WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, ?12) <= 1)
-                                 AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
-                             )
-                          THEN 'warn'
-                        ELSE 'ok'
-                      END = 'risk'
-                 THEN MIN(clusters.score, ?11)
+                 WHEN ?9 = 'risk' THEN ?11
+                 WHEN clusters.risk_level = 'risk' THEN ROUND(?11 * 0.2, 4)
                  ELSE MAX(clusters.score, ?11)
                END,
                source_count = MAX(clusters.source_count, ?12),
@@ -792,23 +777,14 @@ export async function ingestPostIntoCluster(
                END,
                summary = CASE WHEN clusters.summary_source = 'ai' THEN clusters.summary ELSE excluded.summary END,
                summary_source = CASE WHEN clusters.summary_source = 'ai' THEN 'ai' ELSE 'rule' END,
+               ticker = COALESCE(clusters.ticker, excluded.ticker),
+               domain = COALESCE(clusters.domain, excluded.domain),
+               surf_tier = COALESCE(clusters.surf_tier, excluded.surf_tier),
+               surf_rank = COALESCE(clusters.surf_rank, excluded.surf_rank),
                first_seen = MIN(clusters.first_seen, excluded.first_seen),
                score = CASE
-                 WHEN CASE
-                        WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'
-                        WHEN (clusters.risk_level = 'warn' OR excluded.risk_level = 'warn')
-                             AND EXISTS (
-                               SELECT 1
-                               FROM (SELECT value FROM json_each(clusters.risk_reasons)
-                                     UNION
-                                     SELECT value FROM json_each(excluded.risk_reasons))
-                               WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, excluded.source_count) <= 1)
-                                 AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
-                             )
-                          THEN 'warn'
-                        ELSE 'ok'
-                      END = 'risk'
-                 THEN MIN(clusters.score, excluded.score)
+                 WHEN excluded.risk_level = 'risk' THEN excluded.score
+                 WHEN clusters.risk_level = 'risk' THEN ROUND(excluded.score * 0.2, 4)
                  ELSE MAX(clusters.score, excluded.score)
                END,
                source_count = MAX(clusters.source_count, excluded.source_count),
@@ -866,6 +842,20 @@ export async function ingestPostIntoCluster(
         }
       }
 
+      if (fallbackIdentity && Number.isFinite(input.postedAt)) {
+        await db
+          .prepare(
+            `UPDATE fallback_windows
+             SET first_seen = MIN(first_seen, ?3),
+                 last_seen = MAX(last_seen, ?3)
+             WHERE identity_key = ?1
+               AND cluster_id = ?2
+               AND (?3 < first_seen OR ?3 > last_seen)`,
+          )
+          .bind(fallbackIdentity.key, clusterId, input.postedAt)
+          .run();
+      }
+
       let postInserted = false;
       if (!existingPost) {
         const insertPost = await db
@@ -896,18 +886,65 @@ export async function ingestPostIntoCluster(
         postInserted = true;
       }
 
-      // Sync source_count from posts when concurrent ingests both raced past prevAgg
-      // before either post row was committed.
+      let finalRiskLevel: RiskLevel = mergedRisk;
+      // Sync source_count, low-trust warning, and score from posts when concurrent
+      // ingests both raced past prevAgg before either post row was committed.
       if (postInserted) {
-        await db
+        const syncRes = await db
           .prepare(
             `UPDATE clusters
-             SET source_count = (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1)
+             SET source_count = (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1),
+                 risk_reasons = CASE
+                   WHEN (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1) > 1
+                   THEN COALESCE(
+                     (SELECT json_group_array(value) FROM json_each(clusters.risk_reasons) WHERE value != 'Single low-trust source'),
+                     '[]'
+                   )
+                   ELSE clusters.risk_reasons
+                 END,
+                 risk_level = CASE
+                   WHEN clusters.risk_level = 'risk' THEN 'risk'
+                   WHEN clusters.risk_level = 'warn'
+                        AND EXISTS (
+                          SELECT 1 FROM json_each(clusters.risk_reasons)
+                          WHERE value != 'Single low-trust source'
+                             OR (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1) <= 1
+                        )
+                     THEN 'warn'
+                   ELSE 'ok'
+                 END
              WHERE id = ?1
                AND source_count < (SELECT COUNT(DISTINCT source_id) FROM posts WHERE cluster_id = ?1)`,
           )
           .bind(clusterId)
           .run();
+        if ((syncRes.meta?.changes ?? 0) > 0) {
+          const synced = await db
+            .prepare('SELECT trust_max, source_count, last_seen, surf_tier, risk_level FROM clusters WHERE id = ?1')
+            .bind(clusterId)
+            .first<{
+              trust_max: number;
+              source_count: number;
+              last_seen: number;
+              surf_tier: Grade | null;
+              risk_level: RiskLevel;
+            }>();
+          if (synced) {
+            finalRiskLevel = synced.risk_level;
+            const syncedScore = computeScore({
+              trustMax: synced.trust_max,
+              sourceCount: synced.source_count,
+              lastSeen: synced.last_seen,
+              nowMs,
+              surfTier: synced.surf_tier,
+              riskLevel: synced.risk_level,
+            });
+            await db
+              .prepare('UPDATE clusters SET score = ?2 WHERE id = ?1')
+              .bind(clusterId, syncedScore)
+              .run();
+          }
+        }
       }
 
       return {
@@ -917,7 +954,7 @@ export async function ingestPostIntoCluster(
         forwardedFrom: input.forwardedFrom ?? null,
         isNewCluster: !existing && postInserted,
         isNonLatinSource: parsed.isNonLatinSource,
-        riskLevel: mergedRisk,
+        riskLevel: finalRiskLevel,
         parsed,
       };
     }
@@ -984,6 +1021,7 @@ interface ClusterFeedRow {
 
 interface FeedPostRow {
   cluster_id: string;
+  source_id: string;
   post_url: string;
   posted_at: number;
   urls: string;
@@ -997,17 +1035,40 @@ interface LegacyPostRow {
   urls: string;
 }
 
+interface ClusterPostAgg {
+  sources: FeedSourceRef[];
+  seenSourceKeys: Set<string>;
+  distinctSourceIds: Set<string>;
+  minPostedAt: number;
+  maxPostedAt: number;
+  projectUrls: string[];
+  platformUrls: string[];
+  oldestPostUrls: string[];
+  seenProjectUrls: Set<string>;
+  seenPlatformUrls: Set<string>;
+}
+
+function parseJsonArray<T>(raw: string): T[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function polishLegacyRuleSummary(
   summary: string,
   project: string,
   taskTypes: TaskType[],
   chains: string[],
 ): string {
-  const cleaned = cleanSummaryText(summary);
+  const safeProject = stripOrTranslateCjk(project) || 'Web3 Project';
+  const cleaned = cleanSummaryText(stripOrTranslateCjk(summary));
   if (!cleaned || detectNonEnglishLatin(cleaned)) {
     const tasksText = taskTypes.join(', ');
     const chainsText = chains.length > 0 ? ` on ${chains.join(', ')}` : '';
-    return truncateAtWordBoundary(`${project}: ${tasksText}${chainsText}`, 195);
+    return truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`, 195);
   }
   return truncateAtWordBoundary(cleaned, 195);
 }
@@ -1054,13 +1115,10 @@ export async function queryFeed(
            AND COALESCE(is_drop, 1) = 1
            ${riskClause}
            ${cursorClause}
-           AND (
-             NOT EXISTS (SELECT 1 FROM posts p WHERE p.cluster_id = clusters.id)
-             OR EXISTS (
-               SELECT 1 FROM posts p
-               LEFT JOIN sources s ON s.id = p.source_id
-               WHERE p.cluster_id = clusters.id AND COALESCE(s.enabled, 1) = 1
-             )
+           AND EXISTS (
+             SELECT 1 FROM posts p
+             LEFT JOIN sources s ON s.id = p.source_id
+             WHERE p.cluster_id = clusters.id AND COALESCE(s.enabled, 1) = 1
            )
          ORDER BY ${orderCol}
          LIMIT ?2`,
@@ -1093,7 +1151,7 @@ export async function queryFeed(
     const [postRows, legacyRows] = await Promise.all([
       db
         .prepare(
-          `SELECT p.cluster_id, p.post_url, p.posted_at, p.urls, s.platform, s.handle
+          `SELECT p.cluster_id, p.source_id, p.post_url, p.posted_at, p.urls, s.platform, s.handle
            FROM posts p
            LEFT JOIN sources s ON s.id = p.source_id
            WHERE p.cluster_id IN (${placeholders})
@@ -1117,31 +1175,64 @@ export async function queryFeed(
         : Promise.resolve({ results: [] as LegacyPostRow[] }),
     ]);
 
-    const postsByCluster = new Map<string, { sources: FeedSourceRef[]; urls: string[] }>();
+    const postsByCluster = new Map<string, ClusterPostAgg>();
     for (const row of postRows.results ?? []) {
       let entry = postsByCluster.get(row.cluster_id);
       if (!entry) {
-        entry = { sources: [], urls: [] };
+        entry = {
+          sources: [],
+          seenSourceKeys: new Set(),
+          distinctSourceIds: new Set(),
+          minPostedAt: row.posted_at,
+          maxPostedAt: row.posted_at,
+          projectUrls: [],
+          platformUrls: [],
+          oldestPostUrls: [],
+          seenProjectUrls: new Set(),
+          seenPlatformUrls: new Set(),
+        };
         postsByCluster.set(row.cluster_id, entry);
+      } else {
+        if (row.posted_at < entry.minPostedAt) entry.minPostedAt = row.posted_at;
+        if (row.posted_at > entry.maxPostedAt) entry.maxPostedAt = row.posted_at;
       }
-      if (entry.sources.length < 10) {
-        entry.sources.push({
-          platform: row.platform ?? 'telegram',
-          handle: row.handle ?? 'unknown',
-          postUrl: row.post_url,
-          postedAt: row.posted_at,
-        });
-      }
-      if (entry.urls.length < MAX_CLUSTER_URLS) {
-        try {
-          const parsedUrls = JSON.parse(row.urls) as string[];
-          for (const u of parsedUrls) {
-            if (entry.urls.length >= MAX_CLUSTER_URLS) break;
-            entry.urls.push(u);
-          }
-        } catch {
-          // Ignore malformed URL JSON
+
+      entry.distinctSourceIds.add(row.source_id);
+
+      const platform = row.platform ?? 'telegram';
+      const handle = row.handle ?? 'unknown';
+      const sourceKey = `${platform}:${handle.toLowerCase()}`;
+      if (!entry.seenSourceKeys.has(sourceKey)) {
+        entry.seenSourceKeys.add(sourceKey);
+        if (entry.sources.length < 10) {
+          entry.sources.push({
+            platform,
+            handle,
+            postUrl: row.post_url,
+            postedAt: row.posted_at,
+          });
         }
+      }
+
+      try {
+        const parsedUrls = JSON.parse(row.urls) as string[];
+        if (Array.isArray(parsedUrls) && parsedUrls.length > 0) {
+          entry.oldestPostUrls = parsedUrls;
+          for (const u of parsedUrls) {
+            const dom = getRegistrableDomain(u);
+            if (dom && !isPlatformDomain(dom)) {
+              if (entry.projectUrls.length < MAX_CLUSTER_URLS && !entry.seenProjectUrls.has(u)) {
+                entry.seenProjectUrls.add(u);
+                entry.projectUrls.push(u);
+              }
+            } else if (entry.platformUrls.length < MAX_CLUSTER_URLS && !entry.seenPlatformUrls.has(u)) {
+              entry.seenPlatformUrls.add(u);
+              entry.platformUrls.push(u);
+            }
+          }
+        }
+      } catch {
+        // Ignore malformed URL JSON
       }
     }
 
@@ -1163,10 +1254,13 @@ export async function queryFeed(
 
     for (const c of clusters) {
       const postData = postsByCluster.get(c.id);
-      const rawUrls = postData?.urls ?? [];
-      const chains = JSON.parse(c.chains) as string[];
-      const taskTypes = JSON.parse(c.task_types) as TaskType[];
-      const storedReasons = JSON.parse(c.risk_reasons) as string[];
+      const rawUrls = postData
+        ? [...new Set([...postData.projectUrls, ...postData.oldestPostUrls, ...postData.platformUrls])]
+        : [];
+      const project = stripOrTranslateCjk(c.project) || 'Web3 Project';
+      const chains = parseJsonArray<string>(c.chains).map(ch => stripOrTranslateCjk(ch)).filter(Boolean);
+      const taskTypes = parseJsonArray<TaskType>(c.task_types);
+      const storedReasons = parseJsonArray<string>(c.risk_reasons);
 
       // Defensive read-time gate for legacy D1 rows stored before pipeline cleanup.
       const domLower = c.domain?.toLowerCase();
@@ -1211,8 +1305,9 @@ export async function queryFeed(
         maxLinks: 6,
       });
       const links = selectedUrls.map(url => {
-        const dom = getRegistrableDomain(url);
-        return { url, known: Boolean(dom && allKnownDomains.has(dom)) };
+        const isHttps = /^https:\/\//i.test(url);
+        const dom = isHttps ? getRegistrableDomain(url) : undefined;
+        return { url, known: Boolean(isHttps && dom && allKnownDomains.has(dom)) };
       });
 
       const reconciledRisk = reconcileSafetyReasons({
@@ -1225,23 +1320,23 @@ export async function queryFeed(
 
       const summary =
         c.summary_source === 'rule'
-          ? polishLegacyRuleSummary(c.summary, c.project, taskTypes, chains)
-          : c.summary;
+          ? polishLegacyRuleSummary(c.summary, project, taskTypes, chains)
+          : stripOrTranslateCjk(c.summary) || polishLegacyRuleSummary(c.summary, project, taskTypes, chains);
 
       const item: FeedItem = {
         id: c.id,
-        project: c.project,
+        project,
         chains,
         taskTypes,
         summary,
         summarySource: c.summary_source,
         links,
         sources: postData?.sources ?? [],
-        sourceCount: c.source_count,
+        sourceCount: postData ? postData.distinctSourceIds.size : c.source_count,
         score: c.score,
         risk: reconciledRisk,
-        firstSeen: c.first_seen,
-        lastSeen: c.last_seen,
+        firstSeen: postData ? postData.minPostedAt : c.first_seen,
+        lastSeen: postData ? postData.maxPostedAt : c.last_seen,
       };
       if (c.ticker && !MAJOR_TICKERS.has(c.ticker.toUpperCase())) item.ticker = c.ticker;
       if (cleanDomain) item.domain = cleanDomain;

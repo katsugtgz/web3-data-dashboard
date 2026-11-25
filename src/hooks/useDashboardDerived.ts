@@ -8,9 +8,15 @@ export interface DashboardHeaderDerivedInput {
   tab: string;
   marketSections: MarketSection[] | null;
   marketsGeneratedAt?: number | null;
+  marketsFailed?: boolean;
+  marketsIsLiveApi?: boolean;
   dropsCount: number;
   dropsGeneratedAt: number | null;
+  dropsFailed?: boolean;
+  dropsIsLiveApi?: boolean;
   airdropsFetchedAt: number | null | undefined;
+  airdropsFailed?: boolean;
+  airdropsIsLiveApi?: boolean;
   cardsCount: number;
   now?: number;
 }
@@ -18,6 +24,8 @@ export interface DashboardHeaderDerivedInput {
 export interface DashboardHeaderDerived {
   totalCount: number;
   headerFetchedAt: number | null;
+  headerFailed: boolean;
+  headerIsLiveApi: boolean;
   headerStale: boolean;
   isMarketTab: boolean;
 }
@@ -31,9 +39,15 @@ export function deriveDashboardHeaderState(input: DashboardHeaderDerivedInput): 
     tab,
     marketSections,
     marketsGeneratedAt = null,
+    marketsFailed = false,
+    marketsIsLiveApi = false,
     dropsCount,
     dropsGeneratedAt,
+    dropsFailed = false,
+    dropsIsLiveApi = false,
     airdropsFetchedAt,
+    airdropsFailed = false,
+    airdropsIsLiveApi = false,
     cardsCount,
     now = Date.now(),
   } = input;
@@ -43,6 +57,8 @@ export function deriveDashboardHeaderState(input: DashboardHeaderDerivedInput): 
     return {
       totalCount: dropsCount,
       headerFetchedAt: dropsGeneratedAt,
+      headerFailed: dropsFailed,
+      headerIsLiveApi: dropsIsLiveApi && !dropsFailed,
       headerStale: stale,
       isMarketTab: false,
     };
@@ -54,6 +70,8 @@ export function deriveDashboardHeaderState(input: DashboardHeaderDerivedInput): 
     return {
       totalCount: cardsCount,
       headerFetchedAt: fetchedAt,
+      headerFailed: airdropsFailed,
+      headerIsLiveApi: airdropsIsLiveApi && !airdropsFailed,
       headerStale: stale,
       isMarketTab: false,
     };
@@ -67,6 +85,8 @@ export function deriveDashboardHeaderState(input: DashboardHeaderDerivedInput): 
   return {
     totalCount: activeMarket?.rows.length ?? 0,
     headerFetchedAt: fetchedAt,
+    headerFailed: marketsFailed,
+    headerIsLiveApi: marketsIsLiveApi && !marketsFailed,
     headerStale: stale,
     isMarketTab: true,
   };
@@ -79,7 +99,7 @@ interface Input extends Omit<DashboardHeaderDerivedInput, 'now'> {
 
 /**
  * Values App derives from the polling hooks for header/panels: X availability,
- * lazily-mounted market sections, and the active tab's counts/fetch time/staleness.
+ * lazily-mounted market sections, and the active tab's counts/fetch time/status/staleness.
  * Keeps App a pure composition shell.
  */
 export function useDashboardDerived(input: Input): {
@@ -87,6 +107,8 @@ export function useDashboardDerived(input: Input): {
   mountedMarkets: MarketSection[];
   totalCount: number;
   headerFetchedAt: number | null;
+  headerFailed: boolean;
+  headerIsLiveApi: boolean;
   headerStale: boolean;
   isMarketTab: boolean;
 } {

@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
-import { cardStorageKey, getCardTasks, getTaskStorageKeys } from '../hooks/useWatchlist';
+import {
+  cardLegacyStorageKey,
+  cardStorageKey,
+  getCardTaskKeyPairs,
+  getCardTasks,
+  isTaskKeyDone,
+} from '../hooks/useWatchlist';
 import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import {
@@ -111,6 +117,7 @@ export function Avatar({ name, src, size = 38 }: { name: string; src: string; si
           alt=""
           loading="lazy"
           decoding="async"
+          referrerPolicy="no-referrer"
           width={size}
           height={size}
           onError={() => setBroken(true)}
@@ -125,7 +132,7 @@ interface CardHeaderProps {
   icon: string;
   chains: string[];
   saved: boolean;
-  onToggleSaved: (key: string) => void;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
 }
 
@@ -145,7 +152,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           </button>
         </div>
         <p className="ticker">
-          <span className="mono">{c.t ? `$${c.t}` : 'Pre-token'}</span>
+          <span className="mono">{c.t ? `$${c.t}` : c.b.includes('token') ? 'Token live' : 'Pre-token'}</span>
           {chains.length > 0 && (
             <>
               {' · '}
@@ -167,7 +174,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           aria-pressed={saved}
           aria-label={`Save ${c.n} to watchlist`}
           title={saved ? 'Remove from watchlist' : 'Save to watchlist'}
-          onClick={() => onToggleSaved(cardStorageKey(c))}
+          onClick={() => onToggleSaved(cardStorageKey(c), cardLegacyStorageKey(c))}
         >
           <StarIcon size={14} fill={saved ? 'currentColor' : 'none'} />
         </button>
@@ -277,7 +284,7 @@ interface Props {
   fit: Record<FitKey, string>;
   saved: boolean;
   doneTasks: Set<string>;
-  onToggleSaved: (key: string) => void;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
   onDetails: (card: Card) => void;
   onCopyBrief: (card: Card) => void;
 }
@@ -287,10 +294,11 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);
-  const taskKeys = getTaskStorageKeys(cardStorageKey(c), tasks);
-  const doneCount = taskKeys.filter(k => doneTasks.has(k)).length;
+  const taskPairs = getCardTaskKeyPairs(c, tasks);
+  const doneCount = taskPairs.filter(pair => isTaskKeyDone(doneTasks, pair)).length;
   const tags = buildProjectTags(c, fit, doneCount, tasks.length);
   const isRisk = c.b.includes('risk');
+  const safeHeat = Number.isFinite(c.h) && c.h >= 0 ? c.h : 0;
   const subTitle = `Launch potential ${c.sub[0]}/10, Airdrop value ${c.sub[1]}/10${c.sub[2] != null ? `, Heat ${c.sub[2]}/10` : ''}`;
 
   return (
@@ -318,7 +326,7 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
           </div>
           <div>
             Heat
-            <b className="mono">{c.h.toLocaleString('en-US')}</b>
+            <b className="mono">{safeHeat.toLocaleString('en-US')}</b>
           </div>
           <div>
             Updated

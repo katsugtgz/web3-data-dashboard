@@ -875,7 +875,7 @@ dialog#agent-profile-dialog .dlg-actions-bar {
   table.demo tbody th[scope='row'] {
     width: auto;
     min-width: 170px;
-    max-width: 220px;
+    max-width: min(220px, 52vw);
   }
 
   .dlg-sticky-head {

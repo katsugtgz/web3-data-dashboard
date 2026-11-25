@@ -149,7 +149,10 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
             <button
               type="button"
               className="iconbtn"
-              onClick={dismiss}
+              onClick={() => {
+                dismiss();
+                triggerRef.current?.focus();
+              }}
               aria-label="Close sources health"
             >
               <XIcon size={14} />

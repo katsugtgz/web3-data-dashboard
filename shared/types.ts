@@ -90,6 +90,7 @@ export interface MarketRow {
    */
   sortValues?: (string | number | null)[];
   chain?: string;
+  chains?: string[];
   href?: string;
 }
 

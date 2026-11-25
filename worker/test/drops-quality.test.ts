@@ -14,10 +14,14 @@ import {
   classifyDropRelevance,
   cleanSummaryText,
   detectNonEnglishLatin,
+  isStopName,
+  MAJOR_TICKERS,
   stripBilingualDuplicate,
+  stripNonEnglishLines,
   truncateAtWordBoundary,
 } from '../src/normalize/text';
-import { evaluateSafety, reconcileSafetyReasons } from '../src/safety';
+import { FORBIDDEN_CJK_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
+import { DRAINER_RE, evaluateSafety, findLookalikeDomain, reconcileSafetyReasons, URL_SHORTENERS } from '../src/safety';
 import { normalizeSurf } from '../src/sources/surf';
 import { parseTelegramHtml, pollTelegramBatch } from '../src/sources/telegram';
 
@@ -166,6 +170,31 @@ describe('Domain classification & URL hygiene', () => {
       'tokenops.xyz',
       'moongate.com',
       'chungdailynote.com',
+      // Shared PaaS hosts
+      'vercel.app',
+      'netlify.app',
+      'github.io',
+      'pages.dev',
+      'workers.dev',
+      'web.app',
+      'firebaseapp.com',
+      'onrender.com',
+      'fly.dev',
+      'railway.app',
+      'herokuapp.com',
+      // Major CEX domains
+      'binance.com',
+      'coinbase.com',
+      'bybit.com',
+      'okx.com',
+      'kucoin.com',
+      'bitget.com',
+      'gate.io',
+      'kraken.com',
+      'mexc.com',
+      'htx.com',
+      'upbit.com',
+      'bingx.com',
     ]) {
       expect(isPlatformDomain(dom)).toBe(true);
     }
@@ -208,6 +237,23 @@ describe('Domain classification & URL hygiene', () => {
     expect(cleanUrl('https://voice.cc/socialcamp/')).toBe('https://voice.cc/socialcamp');
     // Always-HTTPS platform upgrade.
     expect(cleanUrl('http://t.me/atoms_chat')).toBe('https://t.me/atoms_chat');
+    // M-14: reject URLs containing embedded username or password credentials.
+    expect(cleanUrl('https://arbitrum.io@evil.xyz/claim')).toBeNull();
+    expect(cleanUrl('https://user:pass@evil.xyz/claim')).toBeNull();
+    // M-06c: restrict idGlue to pathname only, skip hex slugs and YYYYMMDD date slugs.
+    expect(cleanUrl('https://example.com/status/123456789?note=123456789Update')).toBe(
+      'https://example.com/status/123456789?note=123456789Update',
+    );
+    expect(cleanUrl('https://example.com/tx/12345678abcdef')).toBe('https://example.com/tx/12345678abcdef');
+    expect(cleanUrl('https://example.com/blog/20261121launch')).toBe('https://example.com/blog/20261121launch');
+    expect(cleanUrl('https://x.com/foo/status/2094749026323189786Update?keep=1')).toBe(
+      'https://x.com/foo/status/2094749026323189786?keep=1',
+    );
+    // M-41b: strip only trailing percent-encoded punctuation, preserving %25, %20, %3D.
+    expect(cleanUrl('https://example.com/claim%2C%2E%29')).toBe('https://example.com/claim');
+    expect(cleanUrl('https://example.com/claim?bonus=100%25')).toBe('https://example.com/claim?bonus=100%25');
+    expect(cleanUrl('https://example.com/claim?token=abc%3D')).toBe('https://example.com/claim?token=abc%3D');
+    expect(cleanUrl('https://example.com/path%20')).toBe('https://example.com/path%20');
   });
 
   test('extractUrls captures bare-domain URLs with paths from plain post text (H3)', () => {
@@ -619,6 +665,31 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
     expect(cut.length).toBeLessThanOrEqual(120);
     expect(cut.endsWith('\u2026')).toBe(true);
     expect(cut).not.toMatch(/\b[a-zA-Z]{1,2}\u2026$/);
+
+    // M-16a/b: extended CJK ranges (￥, ㈱, ︰) and Cyrillic stripping keep Latin remainder.
+    expect(FORBIDDEN_CJK_RE.test('\uFFE5100')).toBe(true);
+    expect(FORBIDDEN_CJK_RE.test('\u3231Corp')).toBe(true);
+    expect(FORBIDDEN_CJK_RE.test('Test\uFE30Note')).toBe(true);
+    expect(stripOrTranslateCjk('\uFFE5100 Bonus')).toBe('100 Bonus');
+    expect(stripOrTranslateCjk('\u3231Corp')).toBe('Corp');
+    expect(stripOrTranslateCjk('Nova \u0442\u0435\u0441\u0442')).toBe('Nova');
+    expect(stripOrTranslateCjk('\u041F\u0440\u0438\u0432\u0435\u0442')).toBe('');
+
+    // M-46c / M-25b: HYPE in MAJOR_TICKERS, new STOP_NAMES, expanded Indonesian markers, new shorteners.
+    expect(MAJOR_TICKERS.has('HYPE')).toBe(true);
+    expect(parseDropPost('$HYPE testnet quest live on HyperEVM').ticker).toBeUndefined();
+    for (const w of ['PHASE', 'EPOCH', 'REMINDER', 'URGENT', 'GIVEAWAY', 'PUNYA', 'OIYA']) {
+      expect(isStopName(w)).toBe(true);
+    }
+    expect(detectNonEnglishLatin('Coba aja nih hoki sirkel klaim')).toBe(true);
+    expect(detectNonEnglishLatin('Akhirnya pengidap penyakit gila hantam jejak')).toBe(true);
+    // Mixed single-line EN+ID strips Indonesian sentence while retaining English instructions.
+    expect(
+      stripNonEnglishLines('Complete Base testnet quests now. Coba aja nih mumpung masih sepi dan langsung klaim!'),
+    ).toBe('Complete Base testnet quests now.');
+    for (const s of ['bitly.com', 'x.gd', 'soo.gd', 'j.mp']) {
+      expect(URL_SHORTENERS[s]).toBe(true);
+    }
   });
 });
 
@@ -756,6 +827,85 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     });
     expect(reconciled.level).toBe('warn');
     expect(reconciled.reasons).toEqual(['URL shortener used: t.co']);
+
+    // M-26: drops stale plain-http warning when canonical link key is absent from cleanedLinks,
+    // while retaining it when the plain-http URL is actually present in cleanedLinks.
+    const droppedStaleHttp = reconcileSafetyReasons({
+      level: 'warn',
+      reasons: [
+        'Insecure transport (plain http): http://dropped-noisy.xyz/old',
+        'Insecure transport (plain http): http://still-shown.xyz/claim',
+      ],
+      cleanedLinks: ['http://still-shown.xyz/claim'],
+      knownDomains: new Set(),
+    });
+    expect(droppedStaleHttp.level).toBe('warn');
+    expect(droppedStaleHttp.reasons).toEqual(['Insecure transport (plain http): http://still-shown.xyz/claim']);
+  });
+
+  test('M-07: warns on secondary unverified URLs, catches lookalike patterns with FP guards, and expands DRAINER_RE', () => {
+    const known = new Map([
+      ['arbitrum.io', 'Arbitrum'],
+      ['uniswap.org', 'Uniswap'],
+      ['aave.com', 'Aave'],
+      ['lido.fi', 'Lido'],
+      ['novaprotocol.xyz', 'Nova Protocol'],
+      ['magicblock.app', 'MagicBlock'],
+    ]);
+    const platforms = new Set(['galxe.com', 'zealy.io']);
+
+    // M-07a: secondary non-platform URL not in knownProjectDomains triggers warn even when primary domain is known.
+    const secondaryWarn = evaluateSafety({
+      domain: 'novaprotocol.xyz',
+      urls: ['https://novaprotocol.xyz/quest', 'https://unverified-partner.xyz/claim', 'https://galxe.com/nova'],
+      text: 'Nova Protocol quest live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.8,
+      sourceCount: 2,
+    });
+    expect(secondaryWarn.level).toBe('warn');
+    expect(secondaryWarn.reasons).toContain('Domain not in verified registry: unverified-partner.xyz');
+    expect(secondaryWarn.reasons.some(r => r.includes('galxe.com'))).toBe(false);
+
+    // M-07b: subdomain impersonation, cross-TLD exact SLD, hyphenated brand+scam-word, 4-char maxDist=1.
+    expect(findLookalikeDomain('arbitrum.io.evil.xyz', known)).toBe('arbitrum.io');
+    expect(findLookalikeDomain('galxe.claim-drop.xyz', new Map([['galxe.com', 'platform']]))).toBe('galxe.com');
+    expect(findLookalikeDomain('uniswap.com', known)).toBe('uniswap.org');
+    expect(findLookalikeDomain('arbitrum-claim.xyz', known)).toBe('arbitrum.io');
+    expect(findLookalikeDomain('claim-arbitrum.io', known)).toBe('arbitrum.io');
+    expect(findLookalikeDomain('uniswap-airdrop.xyz', known)).toBe('uniswap.org');
+    expect(findLookalikeDomain('aav3.com', known)).toBe('aave.com');
+    expect(findLookalikeDomain('1ido.fi', known)).toBe('lido.fi');
+
+    // FP guards: legitimate subdomains of known domains, generic subdomains, unrelated 4-char cross-TLD, unrelated scam-word domains.
+    expect(findLookalikeDomain('app.arbitrum.io', known)).toBeNull();
+    expect(findLookalikeDomain('quests.magicblock.app', known)).toBeNull();
+    expect(findLookalikeDomain('app.newproto.xyz', known)).toBeNull();
+    expect(findLookalikeDomain('wave.xyz', known)).toBeNull();
+    expect(findLookalikeDomain('promo-claim.xyz', known)).toBeNull();
+
+    // End-to-end evaluateSafety catches subdomain impersonation inside input.urls.
+    const subImpersonation = evaluateSafety({
+      domain: 'evil.xyz',
+      urls: ['https://arbitrum.io.evil.xyz/claim'],
+      text: 'Arbitrum claim live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.9,
+      sourceCount: 3,
+    });
+    expect(subImpersonation.level).toBe('risk');
+    expect(subImpersonation.reasons.some(r => r.includes('lookalike') && r.includes('arbitrum.io'))).toBe(true);
+
+    // M-07c: expanded DRAINER_RE catches "claim sol ... connect ... wallet" and "connect active ... wallet" without benign FPs.
+    expect(DRAINER_RE.test('Claim SOL now and connect your wallet')).toBe(true);
+    expect(DRAINER_RE.test('Claim 5 SOL — connect wallet to receive')).toBe(true);
+    expect(DRAINER_RE.test('Connect active Solana wallet for instant airdrop')).toBe(true);
+    expect(DRAINER_RE.test('Connect your active wallet to check allocation')).toBe(true);
+    expect(DRAINER_RE.test('StrikeLabs Waitlist Register Submit Details Connect New Wallet Done')).toBe(false);
+    expect(DRAINER_RE.test('City Protocol Wall Street Survival: Connect EVM Wallet, Start funds simulation, Earn Points')).toBe(false);
+    expect(DRAINER_RE.test('The airdrop is live! Claim your allocation before Friday.')).toBe(false);
   });
 });
 
@@ -2720,6 +2870,88 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     await queryFeed(db, new Set(), { risk: 'include' });
     const normalQueries = queries.slice(beforeNormal);
     expect(normalQueries.some(q => /\bp\.text\b/i.test(q))).toBe(false);
+  });
+
+  test('M-16c/M-24/M-25c: queryFeed strips CJK/Cyrillic, ignores disabled sources, dedupes handles, preserves earliest URLs, and requires https for known', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:enabled_a', 'telegram', 'enabled_a', 'en', 0.8, 1),
+                ('telegram:enabled_b', 'telegram', 'enabled_b', 'id', 0.7, 1),
+                ('telegram:disabled_c', 'telegram', 'disabled_c', 'en', 0.9, 0)`,
+      )
+      .run();
+
+    // Cluster with Cyrillic/CJK in legacy columns + disabled-source post + repeated posts from enabled_a + 20 newer social posts + plain http known link.
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_feed_hygiene', 'Nova \u0442\u0435\u0441\u0442 \uFFE5', NULL, 'novaprotocol.xyz', '["Base","\u0411\u0430\u0437\u0430"]', '["testnet"]', 'Nova \u0442\u0435\u0441\u0442 testnet live', 'rule', 'ok', '[]', 0.9, 3, ?1, ?2, 1),
+                ('c_http_known', 'HttpKnown', NULL, 'httpknown.xyz', '[]', '["quest"]', 'HttpKnown quest live', 'rule', 'warn', '["Insecure transport (plain http): http://httpknown.xyz/claim"]', 0.8, 1, ?3, ?3, 1)`,
+      )
+      .bind(now - 100_000, now + 50_000, now - 5_000)
+      .run();
+
+    // Disabled source has the oldest and newest timestamps; enabled posts are strictly between tMin and tMax.
+    const tDisabledOld = now - 100_000;
+    const tDisabledNew = now + 50_000;
+    const tEnabledFirst = now - 50_000;
+    const tEnabledLast = now - 1_000;
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_dis_old', 'telegram:disabled_c', 'https://t.me/disabled_c/1', ?1, 'old', '[]', 'c_feed_hygiene', ?1),
+                ('p_dis_new', 'telegram:disabled_c', 'https://t.me/disabled_c/2', ?2, 'new', '[]', 'c_feed_hygiene', ?2),
+                ('p_en_first', 'telegram:enabled_a', 'https://t.me/enabled_a/1', ?3, 'first', '["https://novaprotocol.xyz/claim"]', 'c_feed_hygiene', ?3),
+                ('p_en_b', 'telegram:enabled_b', 'https://t.me/enabled_b/1', ?4, 'second', '["https://x.com/nova/status/100"]', 'c_feed_hygiene', ?4),
+                ('p_http', 'telegram:enabled_a', 'https://t.me/enabled_a/999', ?5, 'http known', '["http://httpknown.xyz/claim"]', 'c_http_known', ?5)`,
+      )
+      .bind(tDisabledOld, tDisabledNew, tEnabledFirst, now - 25_000, now - 5_000)
+      .run();
+
+    // Insert 20 newer reposts from enabled_a each carrying 2 distinct X URLs (40 URLs > MAX_CLUSTER_URLS=32).
+    for (let i = 0; i < 20; i++) {
+      const ts = tEnabledLast - (19 - i) * 100;
+      await db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:enabled_a', ?2, ?3, 'repost', ?4, 'c_feed_hygiene', ?3)`,
+        )
+        .bind(
+          `p_en_spam_${i}`,
+          `https://t.me/enabled_a/${100 + i}`,
+          ts,
+          JSON.stringify([
+            `https://x.com/u${i}a/status/${2000 + i}`,
+            `https://x.com/u${i}b/status/${3000 + i}`,
+          ]),
+        )
+        .run();
+    }
+
+    const feed = await queryFeed(db, new Set(['novaprotocol.xyz', 'httpknown.xyz']), { risk: 'include' });
+    const hygiene = feed.items.find(i => i.id === 'c_feed_hygiene');
+    expect(hygiene).toBeDefined();
+    // M-16c: Cyrillic & extended CJK stripped from project, chains, and legacy summary.
+    expect(hygiene!.project).toBe('Nova');
+    expect(hygiene!.chains).toEqual(['Base']);
+    expect(hygiene!.summary).not.toMatch(/[\u0400-\u04FF\uFFE5]/);
+    // M-24a: disabled source excluded from sourceCount, firstSeen, lastSeen.
+    expect(hygiene!.sourceCount).toBe(2);
+    expect(hygiene!.firstSeen).toBe(tEnabledFirst);
+    expect(hygiene!.lastSeen).toBe(tEnabledLast);
+    // M-24b: sources[] deduplicated by (platform, handle), keeping newest post per handle.
+    expect(hygiene!.sources.map(s => s.handle)).toEqual(['enabled_a', 'enabled_b']);
+    expect(hygiene!.sources[0].postUrl).toBe('https://t.me/enabled_a/119');
+    // M-24c: earliest post's project URL survives behind 40 newer X URLs.
+    expect(hygiene!.links.some(l => l.url === 'https://novaprotocol.xyz/claim' && l.known === true)).toBe(true);
+
+    // M-25c: plain http:// link must NOT be marked known: true even if domain is in known_domains.
+    const httpItem = feed.items.find(i => i.id === 'c_http_known');
+    expect(httpItem).toBeDefined();
+    expect(httpItem!.links).toEqual([{ url: 'http://httpknown.xyz/claim', known: false }]);
   });
 });
 

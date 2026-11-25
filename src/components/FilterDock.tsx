@@ -198,10 +198,9 @@ export function FilterDock({ filters, types, fit, searchRef }: Props) {
 
           <button
             type="button"
-            className="dock-toggle-btn airdrop-more-btn"
+            className={`dock-toggle-btn airdrop-more-btn${showMoreFilters || filters.activeAdvancedCount > 0 ? ' is-active' : ''}`}
             aria-expanded={showMoreFilters}
             aria-controls="more-filters"
-            aria-pressed={showMoreFilters || filters.activeAdvancedCount > 0}
             onClick={() => setShowMoreFilters(v => !v)}
           >
             <SlidersHorizontalIcon size={14} />

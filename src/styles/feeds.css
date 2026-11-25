@@ -175,7 +175,8 @@
   line-height: 1;
 }
 
-.dock-toggle-btn[aria-pressed='true'] .dock-count-pill {
+.dock-toggle-btn[aria-pressed='true'] .dock-count-pill,
+.dock-toggle-btn.is-active .dock-count-pill {
   background: color-mix(in srgb, var(--color-on-accent) 22%, transparent);
   color: var(--color-on-accent);
 }

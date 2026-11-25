@@ -1,6 +1,6 @@
 import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../../../shared/types';
-import { fmtUsd } from '../lib/format';
-import { USER_AGENT, FETCH_TIMEOUT_MS } from '../lib/format';
+import { FETCH_TIMEOUT_MS, fmtUsd, USER_AGENT } from '../lib/format';
+import { parseSafeHttpUrl, safeHttpUrl } from '../lib/url';
 import {
   mapFitKey,
   stripOrTranslateCjk,
@@ -74,23 +74,13 @@ const TASK_TYPE: Record<string, string> = {
   hold: 'staking',
 };
 
-const BARE_DOMAIN_URL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)+\.[a-z]{2,}(?:[/?#].*)?$/i;
-const SIMPLE_BARE_DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,}(?:[/?#].*)?$/i;
-
 /**
  * Normalizes upstream task links: upgrades scheme-less links like
  * `t.me/DoodlesUP_bot` to `https://t.me/DoodlesUP_bot` while rejecting
- * non-http(s) schemes (`javascript:`, `data:`).
+ * non-http(s) schemes (`javascript:`, `data:`), whitespace, and userinfo.
  */
 export function normalizeExternalUrl(raw?: string | null): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  if (BARE_DOMAIN_URL_RE.test(trimmed) || SIMPLE_BARE_DOMAIN_RE.test(trimmed)) {
-    return `https://${trimmed}`;
-  }
-  return null;
+  return safeHttpUrl(raw, { allowBareDomain: true });
 }
 
 function normalizeGrade(tier?: string): Grade {
@@ -120,13 +110,17 @@ function ago(ts: number, nowMs: number): string {
 
 function formatIsoDate(ts: number): string {
   if (!Number.isFinite(ts) || ts <= 0) return 'TBA';
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return 'TBA';
+  return d.toISOString().slice(0, 10);
 }
 
 function sanitizeLogo(url?: string | null): string {
-  if (!url) return '';
-  if (url.includes('surf.computer')) return '';
-  return url;
+  const parsed = parseSafeHttpUrl(url);
+  if (!parsed) return '';
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'surf.computer' || host.endsWith('.surf.computer')) return '';
+  return parsed.toString();
 }
 
 function extractChains(p: UpstreamProject): string[] {
@@ -154,15 +148,26 @@ function extractRiskLabel(tags?: UpstreamTag[]): string | undefined {
 
 function mapTasks(tasks?: UpstreamTask[]): CardTask[] | undefined {
   if (!Array.isArray(tasks) || tasks.length === 0) return undefined;
-  return tasks.map(t => ({
-    title: stripOrTranslateCjk(t.title || 'Task') || 'Task',
-    type: normalizeTaskType(t.type),
-    status: stripOrTranslateCjk(t.status || 'OPEN') || 'OPEN',
-    cost: safeNum(t.cost, 0),
-    timeMinutes: typeof t.time_minutes === 'number' && t.time_minutes > 0 ? t.time_minutes : null,
-    url: normalizeExternalUrl(t.external_link),
-    isExclusive: Boolean(t.is_exclusive),
-  }));
+  const seen = new Set<string>();
+  const out: CardTask[] = [];
+  for (const t of tasks) {
+    const title = stripOrTranslateCjk(t.title || 'Task') || 'Task';
+    const type = normalizeTaskType(t.type);
+    const url = normalizeExternalUrl(t.external_link);
+    const key = `${title.toLowerCase()}\0${type.toLowerCase()}\0${url ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      title,
+      type,
+      status: stripOrTranslateCjk(t.status || 'OPEN') || 'OPEN',
+      cost: safeNum(t.cost, 0),
+      timeMinutes: typeof t.time_minutes === 'number' && t.time_minutes > 0 ? t.time_minutes : null,
+      url,
+      isExclusive: Boolean(t.is_exclusive),
+    });
+  }
+  return out;
 }
 
 function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
@@ -273,11 +278,29 @@ export function normalizeSurf(raw: unknown, nowMs = Date.now()): AirdropFeed {
 }
 
 export async function fetchSurfAirdrops(url = SURF_AIRDROPS_URL, nowMs = Date.now()): Promise<AirdropFeed> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`Surf HTTP ${res.status}`);
-  const raw = await res.json();
-  return normalizeSurf(raw, nowMs);
+  const maxAttempts = 2;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      if (attempt + 1 >= maxAttempts) throw err;
+      continue;
+    }
+
+    if (!res.ok) {
+      await res.body?.cancel();
+      if (res.status >= 500 && attempt + 1 < maxAttempts) continue;
+      throw new Error(`Surf HTTP ${res.status}`);
+    }
+
+    const raw = await res.json();
+    return normalizeSurf(raw, nowMs);
+  }
+
+  throw new Error('Surf fetch exhausted retries');
 }

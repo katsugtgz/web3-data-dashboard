@@ -37,6 +37,8 @@ describe('deriveDashboardHeaderState', () => {
     expect(res).toEqual({
       totalCount: 42,
       headerFetchedAt: NOW - 30_000,
+      headerFailed: false,
+      headerIsLiveApi: false,
       headerStale: false,
       isMarketTab: false,
     });
@@ -56,6 +58,8 @@ describe('deriveDashboardHeaderState', () => {
     expect(res).toEqual({
       totalCount: 373,
       headerFetchedAt: NOW - STALE_AGE_MS - 1_000,
+      headerFailed: false,
+      headerIsLiveApi: false,
       headerStale: true,
       isMarketTab: false,
     });
@@ -81,6 +85,8 @@ describe('deriveDashboardHeaderState', () => {
     expect(res).toEqual({
       totalCount: 1,
       headerFetchedAt: NOW - 120_000,
+      headerFailed: false,
+      headerIsLiveApi: false,
       headerStale: false,
       isMarketTab: true,
     });
@@ -127,8 +133,94 @@ describe('deriveDashboardHeaderState', () => {
     expect(res).toEqual({
       totalCount: 0,
       headerFetchedAt: NOW - 5_000,
+      headerFailed: false,
+      headerIsLiveApi: false,
       headerStale: false,
       isMarketTab: true,
+    });
+  });
+
+  test('derives headerFailed and headerIsLiveApi (live && !failed) across Drops, Airdrops, and Market tabs', () => {
+    const cryptoSection = makeSection({
+      id: 'crypto',
+      rows: [
+        { cells: ['BTC', '$100k'] },
+        { cells: ['ETH', '$4k'] },
+        { cells: ['SOL', '$200'] },
+      ],
+      fetchedAt: NOW - 10_000,
+    });
+    const base = {
+      tab: 'crypto',
+      dropsCount: 40,
+      dropsGeneratedAt: NOW - 20_000,
+      dropsFailed: false,
+      dropsIsLiveApi: true,
+      cardsCount: 120,
+      airdropsFetchedAt: NOW - 30_000,
+      airdropsFailed: false,
+      airdropsIsLiveApi: false,
+      marketSections: [cryptoSection],
+      marketsGeneratedAt: NOW - 5_000,
+      marketsFailed: true,
+      marketsIsLiveApi: true,
+      now: NOW,
+    };
+
+    expect(deriveDashboardHeaderState(base)).toEqual({
+      totalCount: 3,
+      headerFetchedAt: NOW - 10_000,
+      headerFailed: true,
+      headerIsLiveApi: false,
+      headerStale: false,
+      isMarketTab: true,
+    });
+
+    expect(deriveDashboardHeaderState({ ...base, marketsFailed: false })).toEqual({
+      totalCount: 3,
+      headerFetchedAt: NOW - 10_000,
+      headerFailed: false,
+      headerIsLiveApi: true,
+      headerStale: false,
+      isMarketTab: true,
+    });
+
+    expect(deriveDashboardHeaderState({ ...base, tab: 'drops' })).toEqual({
+      totalCount: 40,
+      headerFetchedAt: NOW - 20_000,
+      headerFailed: false,
+      headerIsLiveApi: true,
+      headerStale: false,
+      isMarketTab: false,
+    });
+
+    expect(deriveDashboardHeaderState({ ...base, tab: 'drops', dropsFailed: true })).toEqual({
+      totalCount: 40,
+      headerFetchedAt: NOW - 20_000,
+      headerFailed: true,
+      headerIsLiveApi: false,
+      headerStale: false,
+      isMarketTab: false,
+    });
+
+    expect(deriveDashboardHeaderState({ ...base, tab: 'airdrops' })).toEqual({
+      totalCount: 120,
+      headerFetchedAt: NOW - 30_000,
+      headerFailed: false,
+      headerIsLiveApi: false,
+      headerStale: false,
+      isMarketTab: false,
+    });
+
+    expect(
+      deriveDashboardHeaderState({ ...base, tab: 'airdrops', airdropsIsLiveApi: true, airdropsFailed: true }),
+    ).toEqual({
+      totalCount: 120,
+      headerFetchedAt: NOW - 30_000,
+      headerFailed: true,
+      headerIsLiveApi: false,
+      headerStale: false,
+      isMarketTab: false,
     });
   });
 });

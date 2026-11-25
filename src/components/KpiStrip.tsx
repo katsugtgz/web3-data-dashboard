@@ -39,6 +39,7 @@ export function KpiStrip({
       <button
         type="button"
         className="kpi-card"
+        aria-pressed={!hasActiveFilter}
         title={hasActiveFilter ? 'Reset status and tier filters' : 'All actively tracked projects'}
         onClick={onSelectAll}
       >

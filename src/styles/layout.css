@@ -66,6 +66,7 @@ a:hover {
 }
 
 .sr,
+.sr-only,
 .sr-only-announcer {
   position: absolute;
   width: 1px;

@@ -17,7 +17,7 @@ export function useMarkets(): MarketsState {
   const [markets, setMarkets] = useState<MarketsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const [hasLiveApi, setHasLiveApi] = useState(false);
+  const [isLiveApi, setIsLiveApi] = useState(false);
 
   const [poll] = useState(createPollLifecycle);
   const etagRef = useRef<string | null>(null);
@@ -31,27 +31,27 @@ export function useMarkets(): MarketsState {
     getJson<MarketsResponse>('/markets.json', etagRef.current, signal)
       .then(res => {
         if (signal.aborted) return;
-        poll.settle();
         if (res.status === 200) {
           if (res.source === 'snapshot' && hasLiveRef.current) {
             // Transient outage: keep the live prices the user sees and flag the
             // refresh failure instead of silently swapping in a stale snapshot.
+            poll.settle(false);
             setFailed(true);
             if (mode !== 'background') setLoading(false);
             return;
           }
-          const isApi = res.source === 'api';
-          hasLiveRef.current = isApi;
-          setHasLiveApi(isApi);
+          hasLiveRef.current = res.source === 'api';
           etagRef.current = res.etag;
           setMarkets(res.body);
+          setIsLiveApi(res.source === 'api');
         }
+        poll.settle(true);
         setFailed(false);
         if (mode !== 'background') setLoading(false);
       })
       .catch(() => {
         if (signal.aborted) return;
-        poll.settle();
+        poll.settle(false);
         setFailed(true);
         if (mode !== 'background') setLoading(false);
       });
@@ -66,5 +66,5 @@ export function useMarkets(): MarketsState {
 
   const refresh = useCallback(() => fetchNow('manual'), [fetchNow]);
 
-  return { markets, loading, failed, isLiveApi: hasLiveApi && !failed, refresh };
+  return { markets, loading, failed, isLiveApi: isLiveApi && !failed, refresh };
 }

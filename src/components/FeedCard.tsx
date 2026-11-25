@@ -10,7 +10,7 @@ import {
   type DisplayRiskNote,
   type FormattedSummary,
 } from '../lib/feedDisplay';
-import { formatRelativeTime } from '../lib/format';
+import { formatRelativeTime, isHttpUrl } from '../lib/format';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -141,18 +141,27 @@ function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectT
 function FeedSourceRefs({ sources }: { sources: FeedItem['sources'] }) {
   return (
     <ul className="source-refs" aria-label="Source posts">
-      {sources.map(src => (
-        <li key={src.postUrl}>
-          <a href={src.postUrl} target="_blank" rel="noopener noreferrer">
-            <span>
-              @{src.handle} ({src.platform})
-            </span>
-            <span className="sr"> post (opens in a new tab)</span>
-            <ExternalLinkIcon size={11} />
-          </a>
-          <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
-        </li>
-      ))}
+      {sources.map(src => {
+        const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
+        return (
+          <li key={src.postUrl}>
+            {safePostUrl ? (
+              <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
+                <span>
+                  @{src.handle} ({src.platform})
+                </span>
+                <span className="sr"> post (opens in a new tab)</span>
+                <ExternalLinkIcon size={11} />
+              </a>
+            ) : (
+              <span>
+                @{src.handle} ({src.platform})
+              </span>
+            )}
+            <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
