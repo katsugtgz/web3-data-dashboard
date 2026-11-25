@@ -35,7 +35,12 @@ import {
   type AiBindingLike,
 } from './normalize/summarize';
 import { loadKnownDomains, seedKnownDomains } from './safety';
-import { buildCuratedAirdropFeed, type CuratedSourceOutcome } from './sources/curated';
+import {
+  backfillLegacyAirdropSources,
+  buildCuratedAirdropFeed,
+  filterAirdropFeedByDisabledSources,
+  type CuratedSourceOutcome,
+} from './sources/curated';
 import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
 import { computeFeedBackoff, pollFeedBatch } from './sources/feeds';
 import {
@@ -179,7 +184,8 @@ function parseSnapshotJson<T>(row: SnapshotRow | null): T | null {
 
 async function loadCachedSurf(db: D1Database): Promise<AirdropFeed | null> {
   try {
-    return parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
+    const feed = parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
+    return feed ? backfillLegacyAirdropSources(feed) : null;
   } catch (err) {
     console.error('cron-error:loadCachedSurf', err);
     return null;
@@ -193,7 +199,8 @@ async function loadCachedAirdrops(db: D1Database): Promise<{ feed: AirdropFeed |
   } catch (err) {
     console.error('cron-error:loadCachedAirdrops', err);
   }
-  const feed = parseSnapshotJson<AirdropFeed>(row);
+  const parsed = parseSnapshotJson<AirdropFeed>(row);
+  const feed = parsed ? backfillLegacyAirdropSources(parsed) : null;
   return { feed, fetchedAt: feed && row ? row.fetched_at : 0 };
 }
 
@@ -434,6 +441,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   let airdropsLoaded = false;
   let airdropsFetchedAt = 0;
   let airdropsHasBody = false;
+  let airdropsFiltered = false;
 
   await Promise.all([
     (async () => {
@@ -528,10 +536,32 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
       } catch (err) {
         console.error('cron-error:airdrops', err);
         await markSnapshotError(env.DB, 'airdrops', err, nowMs);
-        inMemoryAirdrops = prevFeed;
+        let fallbackFeed = prevFeed;
+        if (prevFeed && sourceStates.disabledSourceIds.size > 0) {
+          const filtered = filterAirdropFeedByDisabledSources(prevFeed, sourceStates.disabledSourceIds);
+          if (filtered !== prevFeed) {
+            fallbackFeed = filtered;
+            airdropsFiltered = true;
+            try {
+              const body = JSON.stringify(filtered);
+              const etag = await bodyEtag(body);
+              await env.DB.prepare(
+                `UPDATE snapshots
+                 SET body = ?2, etag = ?3
+                 WHERE key = ?1 AND fetched_at = ?4 AND fetched_at <= ?5`,
+              )
+                .bind('airdrops', body, etag, prevLoaded.fetchedAt, nowMs)
+                .run();
+              feedLogoIndexCache.delete(env.DB);
+            } catch (updateErr) {
+              console.error('cron-error:airdrops-filter-persist', updateErr);
+            }
+          }
+        }
+        inMemoryAirdrops = fallbackFeed;
         airdropsLoaded = true;
-        airdropsHasBody = Boolean(prevFeed);
-        airdropsFetchedAt = prevFeed ? prevLoaded.fetchedAt : 0;
+        airdropsHasBody = Boolean(fallbackFeed);
+        airdropsFetchedAt = fallbackFeed ? prevLoaded.fetchedAt : 0;
       }
     })(),
     runIsolated(env.DB, 'markets:crypto', nowMs, () => fetchCryptoSection(nowMs, urls)),
@@ -577,7 +607,7 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   const feedBatch = parseNonNegativeInt(env.FEED_BATCH_SIZE, 3);
 
   let surf: AirdropFeed | null = inMemoryAirdrops;
-  if (latestDomainSourceTs > lastSeededAt) {
+  if (latestDomainSourceTs > lastSeededAt || airdropsFiltered) {
     const [loadedSurf, loadedDefi] = await Promise.all([
       !airdropsLoaded && airdropsHasBody ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: surf, fetchedAt: airdropsFetchedAt }),
       defiValidTs > 0 ? loadCachedDefi(env.DB) : Promise.resolve({ defi: null, fetchedAt: 0 }),
@@ -585,13 +615,15 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
     surf = loadedSurf.feed;
     airdropsLoaded = true;
     await seedKnownDomains(env.DB, surf, loadedDefi.defi);
-    await env.DB.prepare(
-      `INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)
-       ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at
-       WHERE excluded.last_run_at > cron_state.last_run_at`,
-    )
-      .bind(latestDomainSourceTs)
-      .run();
+    if (latestDomainSourceTs > lastSeededAt) {
+      await env.DB.prepare(
+        `INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)
+         ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at
+         WHERE excluded.last_run_at > cron_state.last_run_at`,
+      )
+        .bind(latestDomainSourceTs)
+        .run();
+    }
   } else if (!airdropsLoaded && airdropsHasBody && (xBatch > 0 || feedBatch > 0)) {
     surf = (await loadCachedAirdrops(env.DB)).feed;
     airdropsLoaded = true;

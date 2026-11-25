@@ -155,6 +155,36 @@ describe('surf normalizer + i18n', () => {
     ]);
   });
 
+  test('mapTasks preserves tasks with same title/type/url when status, cost, timeMinutes, or isExclusive differs', () => {
+    const feed = normalizeSurf(
+      {
+        active: [
+          {
+            project_name: 'MultiStateProj',
+            tasks: [
+              { title: 'Bridge ETH', type: 'bridge', status: 'CLOSED', cost: 0, time_minutes: 5, is_exclusive: false, external_link: 'https://app.example.com/bridge' },
+              { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, time_minutes: 5, is_exclusive: false, external_link: 'https://app.example.com/bridge' },
+              { title: 'bridge eth', type: 'BRIDGE', status: 'open', cost: 0, time_minutes: 5, is_exclusive: false, external_link: 'https://app.example.com/bridge' },
+              { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 25, time_minutes: 5, is_exclusive: false, external_link: 'https://app.example.com/bridge' },
+              { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, time_minutes: 15, is_exclusive: false, external_link: 'https://app.example.com/bridge' },
+              { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, time_minutes: 5, is_exclusive: true, external_link: 'https://app.example.com/bridge' },
+            ],
+          },
+        ],
+        tge: [],
+      },
+      1_700_000_000_000,
+    );
+
+    expect(feed.cards[0].tasks).toEqual([
+      { title: 'Bridge ETH', type: 'bridge', status: 'CLOSED', cost: 0, timeMinutes: 5, url: 'https://app.example.com/bridge', isExclusive: false },
+      { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://app.example.com/bridge', isExclusive: false },
+      { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 25, timeMinutes: 5, url: 'https://app.example.com/bridge', isExclusive: false },
+      { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, timeMinutes: 15, url: 'https://app.example.com/bridge', isExclusive: false },
+      { title: 'Bridge ETH', type: 'bridge', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://app.example.com/bridge', isExclusive: true },
+    ]);
+  });
+
   test('fetchSurfAirdrops cancels non-ok response bodies and retries once on 5xx or abort/network failure', async () => {
     const prevFetch = globalThis.fetch;
     const validPayload = JSON.stringify({ active: [{ project_name: 'Alpha' }], tge: [] });

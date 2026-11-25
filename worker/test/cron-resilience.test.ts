@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import type { Tge } from '../../shared/types';
 import { createTestD1 } from './helpers';
 import { evaluateSafety } from '../src/safety';
 import { DRAINER_RE, URL_SHORTENERS } from '../src/safety/index';
 import { markSnapshotError, upsertSnapshot, readSnapshot } from '../src/lib/db';
-import worker, { ensureSourcesSynced, postProcessIngest, type Env } from '../src/index';
+import worker, { bodyEtag, ensureSourcesSynced, postProcessIngest, type Env } from '../src/index';
 import type { IngestPostResult } from '../src/normalize/cluster';
 
 function createSqliteD1(): D1Database {
@@ -1149,6 +1150,287 @@ describe('ensureSourcesSynced and scheduled cron resilience', () => {
     expect(names).toContain('DeferredPendleCard');
     expect(names).toContain('FailedMerklCard');
     expect(names).not.toContain('DisabledSheetCard');
+  });
+
+  test('*/5 cron backfills legacy unlabeled Surf snapshot entries so they survive a Surf outage', async () => {
+    const { db } = createTestD1();
+    const t0 = NOW;
+    await ensureSourcesSynced(db);
+
+    await upsertSnapshot(
+      db,
+      'airdrops',
+      {
+        cards: [
+          {
+            r: 1,
+            n: 'LegacySurfProto',
+            id: 'surf-legacy',
+            t: null,
+            g: 'S',
+            b: ['live'],
+            x: null,
+            img: '',
+            f: '—',
+            tk: '1/1',
+            h: 20,
+            u: 'today',
+            fit: ['zero'],
+            best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+            sc: 92,
+            sub: [9, 9, null],
+            url: 'https://legacysurfproto.xyz/',
+            // Intentionally omitted `source` (pre-multi-source legacy snapshot)
+          },
+        ],
+        tge: [{ n: 'LegacySurfTge', t: 'LST', s: 'Claimable', d: '2026-11-28' }],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: t0 - 31 * 60_000,
+      },
+      t0 - 31 * 60_000,
+    );
+
+    const pendlePayload = [
+      {
+        name: 'sUSDe',
+        address: '0x1234',
+        protocol: 'Ethena',
+        chainId: 1,
+        expiry: '2027-06-01T00:00:00Z',
+        categoryIds: ['points'],
+        details: { liquidity: 20_000_000, impliedApy: 0.12 },
+      },
+    ];
+
+    await withStubbedFetch(
+      url => {
+        if (url === 'https://pendle.test/markets') {
+          return new Response(JSON.stringify(pendlePayload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('offline', { status: 503 });
+      },
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          {
+            DB: db,
+            SURF_AIRDROPS_URL: 'https://surf.test/airdrops',
+            PENDLE_POINTS_URL: 'https://pendle.test/markets',
+            X_BATCH_SIZE: '0',
+            FEED_BATCH_SIZE: '0',
+          },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    const snap = await readSnapshot(db, 'airdrops');
+    expect(snap?.ok).toBe(1);
+    const saved = JSON.parse(snap!.body) as {
+      cards: { n: string; source?: string }[];
+      tge: Tge[];
+    };
+    const legacy = saved.cards.find(c => c.n === 'LegacySurfProto');
+    expect(legacy).toBeDefined();
+    expect(legacy?.source).toBe('Surf');
+    expect(saved.cards.some(c => c.n === 'Ethena')).toBe(true);
+    expect(saved.tge).toEqual([{ n: 'LegacySurfTge', t: 'LST', s: 'Claimable', d: '2026-11-28', source: 'Surf' }]);
+  });
+
+  test('*/5 cron filters disabled sources from prevFeed on total live failure without flipping ok=1 or fetched_at', async () => {
+    const { db, queries } = createTestD1();
+    const t0 = NOW;
+    const tPrev = t0 - 31 * 60_000;
+    await ensureSourcesSynced(db);
+
+    await db
+      .prepare(
+        `UPDATE sources SET enabled = 0
+         WHERE id IN ('sheet:asso7878_sheet', 'feed:merkl_opportunities', 'feed:airdropalert_calendar')`,
+      )
+      .run();
+
+    const initialFeed = {
+      cards: [
+        {
+          r: 1,
+          n: 'SurfKeep',
+          id: 'surf:keep',
+          t: null,
+          g: 'S',
+          b: ['live'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '2/2',
+          h: 20,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Surf task', ty: 'testnet', c: 'Free', m: '5m' },
+          taskTypes: ['testnet', 'social'],
+          tasks: [
+            { title: 'Surf task', type: 'testnet', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://surf-keep.xyz/' },
+            { title: 'Sheet bonus', type: 'social', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://surf-keep.xyz/', source: 'ASSO7878' },
+          ],
+          sc: 92,
+          sub: [9, 9, null],
+          url: 'https://surf-keep.xyz/',
+          source: 'Surf',
+        },
+        {
+          r: 2,
+          n: 'DisabledAsso',
+          id: 'asso7878:disabled',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+          sc: 85,
+          sub: [8, 8, null],
+          url: 'https://disabled-asso.xyz/',
+          source: 'ASSO7878',
+        },
+        {
+          r: 3,
+          n: 'DisabledMerkl',
+          id: 'merkl:disabled',
+          t: 'MRK',
+          g: 'A',
+          b: ['live', 'token'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['small'],
+          best: { n: 'LP', ty: 'liquidity', c: '$100', m: '5m' },
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://disabled-merkl.xyz/',
+          source: 'Merkl',
+        },
+        {
+          r: 4,
+          n: 'SurvivingPendle',
+          id: 'pendle:surviving',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          x: null,
+          img: '',
+          f: '—',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['small'],
+          best: { n: 'YT', ty: 'staking', c: '$100', m: '5m' },
+          sc: 75,
+          sub: [7, 7, null],
+          url: 'https://app.pendle.finance/trade/markets/0x1',
+          source: 'Pendle',
+        },
+      ],
+      tge: [
+        { n: 'SurfTge', t: 'STG', s: 'Claimable', d: '2026-11-25', source: 'Surf' },
+        { n: 'AssoTge', t: 'ATG', s: 'Token live', d: '2026-11-20', source: 'ASSO7878' },
+        { n: 'AlertTge', t: 'CTG', s: 'Upcoming', d: '2026-11-29', source: 'AirdropAlert' },
+      ],
+      counts: { active: 4, preToken: 3 },
+      fetchedAt: tPrev,
+    };
+
+    const oldEtag = await upsertSnapshot(db, 'airdrops', initialFeed, tPrev);
+    // Pretend known_domains was previously seeded at tPrev with both SurfKeep and DisabledMerkl.
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('surf-keep.xyz', 'SurfKeep', 'surf'),
+                ('disabled-merkl.xyz', 'DisabledMerkl', 'curated')`,
+      )
+      .run();
+    await db
+      .prepare(`INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)`)
+      .bind(tPrev)
+      .run();
+
+    // All live fetches fail -> buildCuratedAirdropFeed throws, fallback filters prevFeed!
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '0', FEED_BATCH_SIZE: '0' },
+          makeExecCtx(),
+        );
+      },
+    );
+
+    const snap = await readSnapshot(db, 'airdrops');
+    expect(snap).not.toBeNull();
+    expect(snap!.ok).toBe(0);
+    expect(snap!.error).toMatch(/All curated airdrop sources failed/i);
+    expect(snap!.fetched_at).toBe(tPrev);
+    expect(snap!.etag).not.toBe(oldEtag);
+    expect(snap!.etag).toBe(await bodyEtag(snap!.body));
+
+    const saved = JSON.parse(snap!.body) as {
+      cards: { r: number; n: string; tk: string; tasks?: { title: string }[]; taskTypes?: string[] }[];
+      tge: Tge[];
+      counts: { active: number; preToken: number };
+      fetchedAt: number;
+    };
+    expect(saved.cards.map(c => ({ r: c.r, n: c.n }))).toEqual([
+      { r: 1, n: 'SurfKeep' },
+      { r: 2, n: 'SurvivingPendle' },
+    ]);
+    expect(saved.cards[0].tasks?.map(t => t.title)).toEqual(['Surf task']);
+    expect(saved.cards[0].tk).toBe('1/1');
+    expect(saved.cards[0].taskTypes).toEqual(['testnet']);
+    expect(saved.tge).toEqual([{ n: 'SurfTge', t: 'STG', s: 'Claimable', d: '2026-11-25', source: 'Surf' }]);
+    expect(saved.counts).toEqual({ active: 2, preToken: 2 });
+    expect(saved.fetchedAt).toBe(tPrev);
+
+    // known_domains seeding used the filtered feed and pruned the disabled Merkl domain.
+    const merklDom = await db
+      .prepare(`SELECT domain FROM known_domains WHERE domain = 'disabled-merkl.xyz'`)
+      .first<{ domain: string }>();
+    expect(merklDom).toBeNull();
+    const surfDom = await db
+      .prepare(`SELECT domain FROM known_domains WHERE domain = 'surf-keep.xyz'`)
+      .first<{ domain: string }>();
+    expect(surfDom?.domain).toBe('surf-keep.xyz');
+
+    // Second all-failing tick: prevFeed already has no disabled-source content -> does not rewrite snapshots body!
+    const beforeSecondTick = queries.length;
+    await withStubbedFetch(
+      () => new Response('offline', { status: 503 }),
+      async () => {
+        await worker.scheduled(
+          { cron: '*/5 * * * *', scheduledTime: t0 + 5 * 60_000, noRetry() {} } as ScheduledController,
+          { DB: db, X_BATCH_SIZE: '0', FEED_BATCH_SIZE: '0' },
+          makeExecCtx(),
+        );
+      },
+    );
+    const secondTickBodyUpdates = queries
+      .slice(beforeSecondTick)
+      .filter(q => /UPDATE\s+snapshots\s+SET\s+body/i.test(q));
+    expect(secondTickBodyUpdates).toEqual([]);
+    const snap2 = await readSnapshot(db, 'airdrops');
+    expect(snap2!.ok).toBe(0);
+    expect(snap2!.fetched_at).toBe(tPrev);
+    expect(snap2!.etag).toBe(snap!.etag);
   });
 
   test('*/5 cron uses fresh cached airdrops:asso7878 and airdrops:arndxt snapshots without live sheet fetch, updates sheet health, and falls back when stale', async () => {

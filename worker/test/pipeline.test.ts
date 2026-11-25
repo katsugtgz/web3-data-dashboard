@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { AirdropFeed, Grade, MarketSection, RiskLevel } from '../../shared/types';
 import { createTestD1 } from './helpers';
 import { buildSurfIndex, computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
+import { extractWrapperSubdomainHint, isCuratedAggregatorDomain } from '../src/normalize/domains';
 import { HAN_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
 import { cleanUrl, extractUrls, getRegistrableDomain, parseDropPost } from '../src/normalize/parse';
 import { computeScore, decayClusterScores } from '../src/normalize/score';
@@ -10,6 +11,7 @@ import {
   evaluateSafety,
   findLookalikeDomain,
   isPunycodeOrMixedScript,
+  isUntrustedSheetSource,
   levenshtein,
   loadKnownDomains,
   seedKnownDomains,
@@ -1795,5 +1797,264 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(refreshedRow?.risk_level).toBe('risk');
     expect(refreshedRow!.score).toBeCloseTo(expectedRiskScore, 3);
     expect(refreshedRow!.score).toBeGreaterThan(decayedRow!.score);
+  });
+
+  test('normalizes trailing DNS root dots and rejects malformed double-dot hosts', () => {
+    expect(getRegistrableDomain('https://app.pendle.finance./trade')).toBe('pendle.finance');
+    expect(getRegistrableDomain('https://pendle.finance./')).toBe('pendle.finance');
+    expect(getRegistrableDomain('https://app.example.co.uk./x')).toBe('example.co.uk');
+    expect(getRegistrableDomain('https://app.pendle.finance../trade')).toBeUndefined();
+
+    expect(isCuratedAggregatorDomain('app.pendle.finance.', { n: 'Ethena' })).toBe(true);
+    expect(isCuratedAggregatorDomain('pendle.finance.', { n: 'Pendle' })).toBe(false);
+    expect(isCuratedAggregatorDomain('app.pendle.finance..', { n: 'Ethena' })).toBe(false);
+    expect(isCuratedAggregatorDomain('app..pendle.finance', { n: 'Ethena' })).toBe(false);
+    expect(isCuratedAggregatorDomain('.pendle.finance', { n: 'Ethena' })).toBe(false);
+    expect(isCuratedAggregatorDomain('.', { n: 'Ethena' })).toBe(false);
+
+    expect(extractWrapperSubdomainHint('https://topnod.onelink.me./orvm/events')).toBe('topnod');
+    expect(extractWrapperSubdomainHint('https://www.topnod.onelink.me./orvm/events')).toBe('topnod');
+    expect(extractWrapperSubdomainHint('https://onelink.me./orvm/events')).toBeUndefined();
+  });
+
+  test('isUntrustedSheetSource and buildSurfIndex exclude editable sheets before ticker/domain indexing', () => {
+    expect(isUntrustedSheetSource('ASSO7878')).toBe(true);
+    expect(isUntrustedSheetSource(' asso7878 ')).toBe(true);
+    expect(isUntrustedSheetSource('arndxt')).toBe(true);
+    expect(isUntrustedSheetSource('Arndxt')).toBe(true);
+    expect(isUntrustedSheetSource('Surf')).toBe(false);
+    expect(isUntrustedSheetSource('Pendle')).toBe(false);
+    expect(isUntrustedSheetSource(undefined)).toBe(false);
+
+    const makeCard = (overrides: Record<string, unknown>) => ({
+      r: 1,
+      n: 'Proto',
+      t: null,
+      g: 'A' as Grade,
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 70,
+      sub: [7, 7, null],
+      url: null,
+      ...overrides,
+    });
+
+    const feed = {
+      cards: [
+        makeCard({ n: 'SurfGood', t: 'SGOOD', source: 'Surf', url: 'https://surfgood.xyz/' }),
+        makeCard({ n: 'LegacySurf', t: 'LEGS', url: 'https://legacysurf.xyz/' }),
+        makeCard({ n: 'Pendle', t: 'PENDLE', source: 'Pendle', url: 'https://pendle.finance/' }),
+        makeCard({ n: 'AssoSpoof', t: 'SGOOD', source: 'ASSO7878', url: 'https://assospoof.io/' }),
+        makeCard({ n: 'AssoOnly', t: 'ASSO', source: 'ASSO7878', url: 'https://assoonly.io/' }),
+        makeCard({ n: 'ArndxtOnly', t: 'ARND', source: 'arndxt', url: 'https://arndxtonly.io/' }),
+      ],
+      tge: [],
+      counts: { active: 6, preToken: 6 },
+      fetchedAt: 1000,
+    } as unknown as AirdropFeed;
+
+    const idx = buildSurfIndex(feed);
+    expect(idx.byDomain.get('surfgood.xyz')?.name).toBe('SurfGood');
+    expect(idx.byTicker.get('SGOOD')?.name).toBe('SurfGood');
+    expect(idx.byDomain.get('legacysurf.xyz')?.name).toBe('LegacySurf');
+    expect(idx.byTicker.get('LEGS')?.name).toBe('LegacySurf');
+    expect(idx.byDomain.get('pendle.finance')?.name).toBe('Pendle');
+    expect(idx.byTicker.get('PENDLE')?.name).toBe('Pendle');
+
+    expect(idx.byDomain.has('assospoof.io')).toBe(false);
+    expect(idx.byDomain.has('assoonly.io')).toBe(false);
+    expect(idx.byTicker.has('ASSO')).toBe(false);
+    expect(idx.byDomain.has('arndxtonly.io')).toBe(false);
+    expect(idx.byTicker.has('ARND')).toBe(false);
+  });
+
+  test('seedKnownDomains reconciles and prunes invalid legacy rows across all non-platform origins even when feeds are null', async () => {
+    const defiSection: MarketSection = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: [{ cells: ['Arbitrum'], href: 'https://arbitrum.io/' }],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: 1000,
+      stale: false,
+    };
+
+    // Case (a) + (b): surfFeed is null -> invalid legacy surf aggregator/punycode rows are pruned,
+    // while valid surf & defi rows are retained.
+    const { db: db1 } = createTestD1();
+    await db1
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('pendle.finance', 'ThirdParty Campaign', 'surf'),
+                ('app.pendle.finance.', 'TrailingDot Campaign', 'surf'),
+                ('xn--arbitrm-91a.io', 'PunySpoof', 'surf'),
+                ('legit-surf.io', 'LegitSurf', 'surf'),
+                ('arbitrum.io', 'Arbitrum', 'defi')`,
+      )
+      .run();
+
+    await seedKnownDomains(db1, null, defiSection);
+    const loaded1 = await loadKnownDomains(db1, 1000);
+    expect(loaded1.projectDomains.has('pendle.finance')).toBe(false);
+    expect(loaded1.projectDomains.has('app.pendle.finance.')).toBe(false);
+    expect(loaded1.projectDomains.has('xn--arbitrm-91a.io')).toBe(false);
+    expect(loaded1.projectDomains.get('legit-surf.io')).toBe('LegitSurf');
+    expect(loaded1.projectDomains.get('arbitrum.io')).toBe('Arbitrum');
+
+    // Case (b) with defiSection null -> invalid legacy defi aggregator & mixed-script rows are pruned,
+    // while valid defi row ('arbitrum.io', 'Arbitrum', 'defi') is retained.
+    const { db: db2 } = createTestD1();
+    await db2
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('merkl.xyz', 'ThirdParty Merkl', 'defi'),
+                (?1, 'MixedSpoof', 'defi'),
+                ('arbitrum.io', 'Arbitrum', 'defi'),
+                ('legit-surf.io', 'LegitSurf', 'surf')`,
+      )
+      .bind('\u0430rbitrum.io')
+      .run();
+
+    await seedKnownDomains(db2, null, null);
+    const loaded2 = await loadKnownDomains(db2, 2000);
+    expect(loaded2.projectDomains.has('merkl.xyz')).toBe(false);
+    expect(loaded2.projectDomains.has('\u0430rbitrum.io')).toBe(false);
+    expect(loaded2.projectDomains.get('arbitrum.io')).toBe('Arbitrum');
+    expect(loaded2.projectDomains.get('legit-surf.io')).toBe('LegitSurf');
+
+    // Case (c): legitimate Pendle own rows across curated and surf origins are retained.
+    for (const origin of ['curated', 'surf'] as const) {
+      const { db: dbSelf } = createTestD1();
+      await dbSelf
+        .prepare(`INSERT INTO known_domains (domain, project, origin) VALUES ('pendle.finance', 'Pendle', ?1)`)
+        .bind(origin)
+        .run();
+
+      await seedKnownDomains(dbSelf, null, defiSection);
+      const row = await dbSelf
+        .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'pendle.finance'`)
+        .first<{ domain: string; project: string; origin: string }>();
+      expect(row).toEqual({ domain: 'pendle.finance', project: 'Pendle', origin });
+    }
+  });
+
+  test('reconciliation score write does not overwrite a concurrent writer risk-escalated score', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_200_000_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1),
+                ('telegram:ch2', 'telegram', 'ch2', 'en', 0.8, 1)`,
+      )
+      .run();
+
+    const known = new Map([['novaprotocol.xyz', 'Nova Protocol']]);
+    const surfIndex = { byDomain: new Map(), byTicker: new Map() };
+
+    const seeded = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:100',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/100',
+        postedAt: now - 3600_000,
+        text: 'Nova Protocol testnet live https://novaprotocol.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+    const cid = seeded.clusterId;
+
+    // Force the reconciliation path (source_count < COUNT(DISTINCT source_id)) to run when ch2 lands,
+    // and simulate a concurrent risk escalation + penalized score write right before the final reconciled score UPDATE.
+    const penalizedScore = computeScore({
+      trustMax: 0.8,
+      sourceCount: 2,
+      lastSeen: now - 1800_000,
+      nowMs: now,
+      surfTier: null,
+      riskLevel: 'risk',
+    });
+    let injectedStaleSourceCount = false;
+    let escalatedBeforeScoreWrite = false;
+    const racingDb = {
+      ...db,
+      prepare(sql: string) {
+        const stmt = db.prepare(sql);
+        if (/SET\s+source_count\s*=\s*\(SELECT\s+COUNT\(DISTINCT\s+source_id\)/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              return {
+                async run() {
+                  if (!injectedStaleSourceCount) {
+                    injectedStaleSourceCount = true;
+                    await db.prepare('UPDATE clusters SET source_count = 1 WHERE id = ?1').bind(cid).run();
+                  }
+                  return stmt.bind(...args).run();
+                },
+              };
+            },
+          };
+        }
+        if (/^\s*UPDATE\s+clusters\s+SET\s+score\s*=\s*\?2\s+WHERE\s+id\s*=\s*\?1/i.test(sql)) {
+          return {
+            bind(...args: unknown[]) {
+              return {
+                async run() {
+                  if (!escalatedBeforeScoreWrite) {
+                    escalatedBeforeScoreWrite = true;
+                    await db
+                      .prepare(`UPDATE clusters SET risk_level = 'risk', score = ?2 WHERE id = ?1`)
+                      .bind(cid, penalizedScore)
+                      .run();
+                  }
+                  return stmt.bind(...args).run();
+                },
+              };
+            },
+          };
+        }
+        return stmt;
+      },
+    } as unknown as D1Database;
+
+    await ingestPostIntoCluster(
+      racingDb,
+      {
+        postId: 'telegram:ch2:101',
+        sourceId: 'telegram:ch2',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch2/101',
+        postedAt: now - 1800_000,
+        text: 'Nova Protocol quest live https://novaprotocol.xyz',
+      },
+      { knownDomains: known },
+      surfIndex,
+      known,
+      new Set<string>(),
+      now,
+    );
+
+    expect(escalatedBeforeScoreWrite).toBe(true);
+    const row = await db
+      .prepare('SELECT risk_level, score FROM clusters WHERE id = ?1')
+      .bind(cid)
+      .first<{ risk_level: string; score: number }>();
+    expect(row?.risk_level).toBe('risk');
+    expect(row?.score).toBeCloseTo(penalizedScore, 6);
   });
 });

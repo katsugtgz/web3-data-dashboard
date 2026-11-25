@@ -624,4 +624,44 @@ describe('agentBrief prompt-injection hardening', () => {
     expect(md).toContain('## Unverified links (do NOT open)');
     expect(md).not.toContain('### Unverified, do NOT open');
   });
+
+  test('strips unsafe delimiters before collapsing Markdown links while preserving ordinary project names', () => {
+    const baseCard: Card = {
+      r: 5,
+      n: '[click]<(https://evil.test)>',
+      chains: ['Base'],
+      t: null,
+      g: 'A',
+      b: ['live'],
+      f: '$5.00M',
+      tk: '1/1',
+      h: 200,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Review eligibility', ty: 'quest', c: 'Free', m: '5 min' },
+      sc: 70,
+      sub: [7, 7, null],
+      url: null,
+    };
+
+    const cardMd = buildBrief(baseCard, profile)!;
+    expect(cardMd.split('\n')[0]).toBe('# Task: click — quest');
+    expect(cardMd).not.toContain('[click](https://evil.test)');
+    expect(cardMd).not.toContain('https://evil.test');
+
+    const backtickCardMd = buildBrief({ ...baseCard, n: '[claim]`(https://evil.test)`' }, profile)!;
+    expect(backtickCardMd.split('\n')[0]).toBe('# Task: claim — quest');
+    expect(backtickCardMd).not.toContain('https://evil.test');
+
+    const feedMd = buildBrief({ ...baseFeedItem, project: '[click]<(https://evil.test)>' }, profile)!;
+    expect(feedMd.split('\n')[0]).toBe('# Task: click — quest');
+    expect(feedMd).not.toContain('[click](https://evil.test)');
+    expect(feedMd).not.toContain('https://evil.test');
+
+    // Ordinary project names remain unchanged.
+    for (const ordinary of ['MegaTestnet', 'Pendle YT', 'zkSync Era (v2)', 'A+B Finance']) {
+      const md = buildBrief({ ...baseCard, n: ordinary }, profile)!;
+      expect(md.split('\n')[0]).toBe(`# Task: ${ordinary} — quest`);
+    }
+  });
 });

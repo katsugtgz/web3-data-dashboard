@@ -2,6 +2,7 @@ import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../
 import { FETCH_TIMEOUT_MS, USER_AGENT, fmtUsd } from '../lib/format';
 import { cleanUrl, isPlatformDomain } from '../normalize/domains';
 import {
+  type AssoBannerKind,
   type AssoCategoryInfo,
   classifyAssoBanner,
   classifyAssoCategory,
@@ -144,6 +145,66 @@ function slugify(name: string): string {
   }
   if (out.endsWith('-')) out = out.slice(0, -1);
   return out || 'project';
+}
+
+function fnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function computeSheetBaseId(prefix: 'asso7878' | 'arndxt', name: string): string {
+  const nameKey = name.trim().toLowerCase();
+  const slug = slugify(name);
+  return nameKey === slug ? `${prefix}:${slug}` : `${prefix}:${slug}-${fnv1a32Hex(nameKey)}`;
+}
+
+function sheetCardDisambiguator(card: Card): string {
+  const taskSig = (card.tasks ?? [])
+    .map(t => `${t.title.trim().toLowerCase()}\u0000${t.type.trim().toLowerCase()}\u0000${(t.url ?? '').trim().toLowerCase()}`)
+    .join('\u001f');
+  return [
+    card.n.trim().toLowerCase(),
+    (card.url ?? '').trim().toLowerCase(),
+    taskSig,
+    card.best.n.trim().toLowerCase(),
+    (card.chain ?? '').trim().toLowerCase(),
+    String(card.raiseNum ?? 0),
+  ].join('\u001e');
+}
+
+/**
+ * Assigns deterministic, CSV row-order-independent IDs to sheet cards.
+ * Canonical lowercase-slug names keep `<prefix>:<slug>`; non-canonical names get
+ * `<prefix>:<slug>-<hash(nameKey)>`; identical-nameKey rows within the same sheet
+ * are disambiguated deterministically from stable row fields rather than row order.
+ */
+function assignDeterministicSheetCardIds(prefix: 'asso7878' | 'arndxt', cards: Card[]): void {
+  const baseIds = cards.map(card => computeSheetBaseId(prefix, card.n));
+  const baseCounts = new Map<string, number>();
+  for (const baseId of baseIds) {
+    baseCounts.set(baseId, (baseCounts.get(baseId) ?? 0) + 1);
+  }
+
+  const seenIds = new Set<string>();
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    const baseId = baseIds[i];
+    const candidate =
+      (baseCounts.get(baseId) ?? 0) > 1
+        ? `${baseId}-${fnv1a32Hex(sheetCardDisambiguator(card))}`
+        : baseId;
+    let cardId = candidate;
+    let suffix = 2;
+    while (seenIds.has(cardId)) {
+      cardId = `${candidate}-${suffix++}`;
+    }
+    seenIds.add(cardId);
+    card.id = cardId;
+  }
 }
 
 function gradeFromScore(sc: number): Grade {
@@ -450,6 +511,34 @@ function inferChainFromLabel(label: string): string | undefined {
   return m ? CHAIN_CANONICAL.get(m[1].toLowerCase()) : undefined;
 }
 
+function isAssoBannerRow(row: readonly string[]): boolean {
+  for (let i = 4; i < row.length; i++) {
+    if (row[i]?.trim()) return false;
+  }
+  let nonEmptyLead = 0;
+  const leadLimit = Math.min(4, row.length);
+  for (let i = 0; i < leadLimit; i++) {
+    if (row[i]?.trim()) {
+      nonEmptyLead++;
+      if (nonEmptyLead > 1) return false;
+    }
+  }
+  return nonEmptyLead === 1;
+}
+
+function detectAssoBanner(row: readonly string[]): AssoBannerKind | null {
+  if (!isAssoBannerRow(row)) return null;
+  const leadLimit = Math.min(4, row.length);
+  for (let i = 0; i < leadLimit; i++) {
+    const cell = row[i];
+    if (cell && cell.length >= 3) {
+      const kind = classifyAssoBanner(cell);
+      if (kind) return kind;
+    }
+  }
+  return null;
+}
+
 /**
  * Parses ASSO7878's multi-layout Google Sheet CSV into 100% English curated
  * cards and post-TGE entries (skipping CEX promos, bankrupt, and abandoned rows).
@@ -458,7 +547,6 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
   const rows = parseCsv(csv);
   const cards: Card[] = [];
   const tge: Tge[] = [];
-  const seenCardIds = new Set<string>();
   const seenTgeKeys = new Set<string>();
 
   type Section = 'pre_header' | 'active' | 'tge' | 'skip_bankrupt' | 'skip_abandoned';
@@ -483,16 +571,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
       continue;
     }
 
-    const raw0 = row[0];
-    const raw1 = row[1];
-    const raw2 = row[2];
-    const raw3 = row[3];
-    const banner =
-      (raw0 && raw0.length >= 3 && classifyAssoBanner(raw0)) ||
-      (raw1 && raw1.length >= 3 && classifyAssoBanner(raw1)) ||
-      (raw2 && raw2.length >= 3 && classifyAssoBanner(raw2)) ||
-      (raw3 && raw3.length >= 3 && classifyAssoBanner(raw3)) ||
-      null;
+    const banner = detectAssoBanner(row);
     if (banner) {
       section = banner;
       currentCatInfo = null;
@@ -500,8 +579,8 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     }
 
     if (section === 'skip_bankrupt' || section === 'skip_abandoned') continue;
-    const col0 = raw0 ? raw0.trim() : '';
-    const col2 = raw2 ? raw2.trim() : '';
+    const col0 = row[0] ? row[0].trim() : '';
+    const col2 = row[2] ? row[2].trim() : '';
     if (!col0 && !col2) continue;
     if (isAssoHeaderRow(row)) continue;
 
@@ -523,8 +602,9 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     const isTgeRow = isPostTge || potential.isTokenLive || participation.isTge;
 
     const status = isEcosystemLayout ? translateAssoStatus(row[21]) : translateAssoStatus(row[18]);
-    // Fast-skip ended/dropped/rug active rows before URL parsing and metadata translation.
-    if (!isTgeRow && (status.isEnded || isAssoDroppedOrRug(row[13], row[23]))) continue;
+    // Fast-skip dropped/rug/withdrawal-blocked rows (including Post-TGE) and ended active rows before URL parsing.
+    if (isAssoDroppedOrRug(row[13], row[23])) continue;
+    if (!isTgeRow && status.isEnded) continue;
 
     // Route Post-TGE section and explicitly launched rows into tge[], skipping active-only translators.
     if (isTgeRow) {
@@ -577,14 +657,6 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
       stars * 12 + potential.scoreBonus + attention * 2 + raiseBonus + (cost.isZero ? 4 : 0);
     const sc = Math.max(15, Math.min(95, rawScore || 45));
     const grade = gradeFromScore(sc);
-
-    const baseId = `asso7878:${slugify(name)}`;
-    let cardId = baseId;
-    let suffix = 2;
-    while (seenCardIds.has(cardId)) {
-      cardId = `${baseId}-${suffix++}`;
-    }
-    seenCardIds.add(cardId);
 
     const badges: Badge[] = [];
     if (potential.badge) badges.push(potential.badge);
@@ -656,7 +728,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     cards.push({
       r: cards.length + 1,
       n: name,
-      id: cardId,
+      id: '',
       chain: inferredChain,
       chains: inferredChain ? [inferredChain] : undefined,
       t: sheetTicker,
@@ -688,6 +760,8 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     });
   }
 
+  assignDeterministicSheetCardIds('asso7878', cards);
+
   return {
     cards,
     tge,
@@ -708,6 +782,23 @@ const ARNDXT_MINT_RE = /\b(?:mint|nft|badge|sbt)\b/i;
 const ARNDXT_SOCIAL_RE = /\b(?:social|discord|twitter|follow|yap|post)\b/i;
 const ARNDXT_BOUNTY_RE = /\b(?:quest|galxe|zealy|layer3|campaign)\b/i;
 const ARNDXT_ZERO_RE = /\b(?:free|testnet|faucet|waitlist|zero[\s-]?cost|no[\s-]?cost)\b/i;
+const ARNDXT_ZERO_NEGATED_RE =
+  /\b(?:not|no|isn['\u2019]?t|aren['\u2019]?t|non|never)(?:[\s-]+(?:a|really|truly|actually|completely|entirely))?[\s-]+(?:free|zero[\s-]?cost|no[\s-]?cost)\b/i;
+const ARNDXT_PAID_ACTION_RE =
+  /\b(?:stake|staking|restake|restaking|deposit|deposits|lp|liquidity|vault|vaults|borrow|borrowing|lend|lending|perp|perps|trade|trading|volume|swap|swaps|buy|buying|pay|paid|capital|collateral|fees?)\b/i;
+
+export function inferArndxtZeroCost(tasksRaw: string, reasoningRaw: string): boolean {
+  if (ARNDXT_ZERO_NEGATED_RE.test(tasksRaw) || ARNDXT_ZERO_NEGATED_RE.test(reasoningRaw)) {
+    return false;
+  }
+  if (ARNDXT_ZERO_RE.test(tasksRaw)) {
+    return true;
+  }
+  if (ARNDXT_PAID_ACTION_RE.test(tasksRaw)) {
+    return false;
+  }
+  return ARNDXT_ZERO_RE.test(reasoningRaw);
+}
 
 const ARNDXT_PAST_TGE_EXACT_RE = /^(?:launched|live|tge\s*live|done|completed)$/i;
 const ARNDXT_PAST_TGE_PHRASE_RE =
@@ -782,7 +873,6 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
   const rows = parseCsv(csv);
   const cards: Card[] = [];
   const tge: Tge[] = [];
-  const seenIds = new Set<string>();
 
   let headerIdx = -1;
   const colIndex: Record<string, number> = {};
@@ -860,17 +950,9 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
       continue;
     }
 
-    const baseId = `arndxt:${slugify(name)}`;
-    let cardId = baseId;
-    let suffix = 2;
-    while (seenIds.has(cardId)) {
-      cardId = `${baseId}-${suffix++}`;
-    }
-    seenIds.add(cardId);
-
     const combinedText = `${tasksRaw} ${reasoningRaw}`;
     const cardType = inferArndxtTaskType(combinedText);
-    const isZeroCost = ARNDXT_ZERO_RE.test(combinedText);
+    const isZeroCost = inferArndxtZeroCost(tasksRaw, reasoningRaw);
 
     // Note: arndxt's "Farming risk" column rates competition/dilution, NOT scam
     // or drainer risk, so it must NOT emit the 'risk' badge (which disables Agent Brief).
@@ -891,7 +973,7 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
     cards.push({
       r: cards.length + 1,
       n: name,
-      id: cardId,
+      id: '',
       chain: inferredChain,
       chains: inferredChain ? [inferredChain] : undefined,
       t: sheetTicker,
@@ -933,6 +1015,8 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
       source: 'arndxt',
     });
   }
+
+  assignDeterministicSheetCardIds('arndxt', cards);
 
   return {
     cards,

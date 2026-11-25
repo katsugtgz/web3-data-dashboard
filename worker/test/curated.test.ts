@@ -3,8 +3,10 @@ import type { AirdropFeed, Card } from '../../shared/types';
 import { FORBIDDEN_CJK_RE } from './helpers';
 import { collectKnownDomainEntries } from '../src/safety';
 import {
+  backfillLegacyAirdropSources,
   buildCuratedAirdropFeed,
   extractDefiLlamaTokenlessAirdrops,
+  filterAirdropFeedByDisabledSources,
   mergeCuratedAirdropFeeds,
 } from '../src/sources/curated';
 
@@ -432,6 +434,61 @@ describe('curated multi-source airdrop aggregator', () => {
     expect(feed.cards[1].b).not.toContain('live');
   });
 
+  test('DefiLlama extractor skips malformed rows and non-string fields cleanly without throwing', () => {
+    const raw: unknown[] = [
+      null,
+      undefined,
+      42,
+      'not-an-object',
+      true,
+      ['array-row'],
+      { name: 123, symbol: '-', category: 'Dexes', tvl: 20_000_000 },
+      { name: '   ', symbol: '-', category: 'Dexes', tvl: 20_000_000 },
+      { name: 'BadCategoryType', symbol: '-', category: 99, tvl: 20_000_000 },
+      { name: 'BadCategoryObj', symbol: '-', category: { label: 'Dexes' }, tvl: 20_000_000 },
+      { name: 'InfiniteTvl', symbol: '-', category: 'Dexes', tvl: Number.POSITIVE_INFINITY },
+      { name: 'NaNTvl', symbol: '-', category: 'Dexes', tvl: Number.NaN },
+      { name: 'ExcludedCex', symbol: '-', category: 'CEX', tvl: 50_000_000 },
+      {
+        name: 'CleanProto',
+        slug: 404,
+        symbol: '-',
+        category: null,
+        chains: ['Arbitrum', 123, null, {}, 'Base'],
+        chain: 777,
+        tvl: 25_000_000,
+        listedAt: 'bad-timestamp',
+        url: { href: 'https://bad-url.xyz' },
+      },
+      {
+        name: 'FallbackChainProto',
+        slug: 'fallback-chain',
+        symbol: '-',
+        category: 'Lending',
+        chains: [null, 42],
+        chain: 'Optimism',
+        tvl: 12_000_000,
+        url: 'https://fallbackchain.xyz',
+      },
+    ];
+
+    const feed = extractDefiLlamaTokenlessAirdrops(raw, NOW);
+    expect(feed.cards.map(c => c.n)).toEqual(['CleanProto', 'FallbackChainProto']);
+
+    const clean = feed.cards[0];
+    expect(clean.id).toBe('defillama:cleanproto');
+    expect(clean.chains).toEqual(['Arbitrum', 'Base']);
+    expect(clean.chain).toBe('Arbitrum');
+    expect(clean.url).toBeNull();
+    expect(clean.b).toEqual(['early']);
+
+    const fallback = feed.cards[1];
+    expect(fallback.id).toBe('defillama:fallback-chain');
+    expect(fallback.chains).toEqual(['Optimism']);
+    expect(fallback.chain).toBe('Optimism');
+    expect(fallback.url).toBe('https://fallbackchain.xyz/');
+  });
+
   test('never elevates foreign editable-sheet URLs onto non-sheet primary cards or known_domains during merge', () => {
     const surfFeed: AirdropFeed = {
       cards: [
@@ -507,6 +564,122 @@ describe('curated multi-source airdrop aggregator', () => {
     expect(known.some(k => k.domain === 'official.xyz' && k.origin === 'surf')).toBe(true);
     expect(known.some(k => k.domain === 'sheet-injected.xyz')).toBe(false);
     expect(known.some(k => k.domain === 'foreign-sheet.xyz')).toBe(false);
+  });
+
+  test('does not register rejected secondary sheet domains in byDomain, while indexing accepted merged domains', () => {
+    const surfFeed: AirdropFeed = {
+      cards: [
+        makeCard({
+          n: 'NoUrlProto',
+          id: 'surf-nourl',
+          source: 'Surf',
+          url: null,
+          tasks: [],
+          tk: '0/0',
+          sc: 90,
+        }),
+        makeCard({
+          n: 'TrustedEmpty',
+          id: 'surf-empty',
+          source: 'Surf',
+          url: null,
+          tasks: [],
+          tk: '0/0',
+          sc: 85,
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+
+    const assoFeed: AirdropFeed = {
+      cards: [
+        // Matches NoUrlProto by name, but its foreign domain is rejected on merge -> must NOT pollute byDomain!
+        makeCard({
+          n: 'NoUrlProto',
+          id: 'asso7878:nourlproto',
+          source: 'ASSO7878',
+          url: 'https://victim-proto.xyz/claim',
+          tasks: [
+            {
+              title: 'Foreign sheet task',
+              type: 'bounty',
+              status: 'OPEN',
+              cost: 0,
+              timeMinutes: null,
+              url: 'https://victim-proto.xyz/claim',
+            },
+          ],
+        }),
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW,
+    };
+
+    const defiLlamaFeed: AirdropFeed = {
+      cards: [
+        // Legitimate protocol owning victim-proto.xyz must remain its own distinct card.
+        makeCard({
+          n: 'VictimProto',
+          id: 'defillama:victimproto',
+          source: 'DefiLlama',
+          url: 'https://victim-proto.xyz/',
+          sc: 75,
+        }),
+        // Trusted DefiLlama enriches TrustedEmpty with an accepted project domain + accepted task domain.
+        makeCard({
+          n: 'TrustedEmpty',
+          id: 'defillama:trustedempty',
+          source: 'DefiLlama',
+          url: 'https://trusted-empty.xyz/',
+          tasks: [
+            {
+              title: 'App task',
+              type: 'liquidity',
+              status: 'OPEN',
+              cost: 10,
+              timeMinutes: null,
+              url: 'https://portal.trusted-task.xyz/earn',
+            },
+          ],
+          sc: 70,
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+
+    const laterFeed: AirdropFeed = {
+      cards: [
+        // Different display name, shares accepted merged task domain -> should merge into TrustedEmpty via byDomain.
+        makeCard({
+          n: 'TrustedEmpty V2',
+          id: 'merkl:trustedempty-v2',
+          source: 'Merkl',
+          url: 'https://trusted-task.xyz/campaign',
+          f: '$15.00M',
+          raiseNum: 15_000_000,
+          sc: 60,
+        }),
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW,
+    };
+
+    const merged = mergeCuratedAirdropFeeds([surfFeed, assoFeed, defiLlamaFeed, laterFeed], NOW);
+    expect(merged.cards.map(c => c.n)).toEqual(['NoUrlProto', 'TrustedEmpty', 'VictimProto']);
+
+    const victim = merged.cards.find(c => c.n === 'VictimProto')!;
+    expect(victim.source).toBe('DefiLlama');
+    expect(victim.url).toBe('https://victim-proto.xyz/');
+
+    const trusted = merged.cards.find(c => c.n === 'TrustedEmpty')!;
+    expect(trusted.url).toBe('https://trusted-empty.xyz/');
+    expect(trusted.raiseNum).toBe(15_000_000);
   });
 
   test('supports cachedAsso7878Feed and cachedArndxtFeed without calling live sheet fetchers or bypassing total live failure', async () => {
@@ -660,6 +833,134 @@ describe('curated multi-source airdrop aggregator', () => {
     expect(restoredSurf.tasks?.map(t => t.title)).toEqual(['Surf official task']);
     expect(restoredSurf.tk).toBe('1/1');
     expect(restoredSurf.taskTypes).toEqual(['testnet']);
+  });
+
+  test('backfillLegacyAirdropSources stamps Surf on unlabeled cards and TGE while preserving labeled sources', () => {
+    const legacyFeed: AirdropFeed = {
+      cards: [
+        makeCard({ n: 'LegacySurfNoSource', id: 'surf-legacy-1', url: 'https://legacysurf.xyz' }),
+        makeCard({ n: 'LegacySurfBlankSource', id: 'surf-legacy-2', source: '   ', url: 'https://legacysurf2.xyz' }),
+        makeCard({ n: 'LabeledSheet', id: 'asso7878:labeled', source: 'ASSO7878', url: 'https://labeledsheet.xyz' }),
+      ],
+      tge: [
+        { n: 'LegacyTge', t: 'LTG', s: 'Claimable', d: '2026-11-25' },
+        { n: 'BlankSourceTge', t: 'BST', s: 'Claimable', d: '2026-11-26', source: '' },
+        { n: 'CalendarTge', t: 'CTG', s: 'Upcoming', d: '2026-11-27', source: 'AirdropAlert' },
+      ],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: NOW - 60_000,
+    };
+
+    const backfilled = backfillLegacyAirdropSources(legacyFeed);
+    expect(backfilled.cards.map(c => c.source)).toEqual(['Surf', 'Surf', 'ASSO7878']);
+    expect(backfilled.tge.map(t => t.source)).toEqual(['Surf', 'Surf', 'AirdropAlert']);
+    // Original input is not mutated
+    expect(legacyFeed.cards[0].source).toBeUndefined();
+    expect(legacyFeed.tge[0].source).toBeUndefined();
+  });
+
+  test('slicePrevFeedForSource defensively preserves unlabeled legacy Surf cards and TGE when Surf fails', async () => {
+    const legacyPrevFeed: AirdropFeed = {
+      cards: [
+        makeCard({ n: 'LegacySurfCard', id: 'surf-legacy', url: 'https://legacysurf.xyz', sc: 88 }),
+        makeCard({ n: 'OtherSourceCard', id: 'merkl:other', source: 'Merkl', url: 'https://othermerkl.xyz', sc: 70 }),
+      ],
+      tge: [
+        { n: 'LegacySurfTge', t: 'LST', s: 'Claimable', d: '2026-11-25' },
+      ],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW - 60_000,
+    };
+
+    const res = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed: legacyPrevFeed,
+      fetchers: {
+        surf: async () => {
+          throw new Error('surf outage');
+        },
+        asso7878: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+        arndxt: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+        pendle: async () => ({
+          cards: [makeCard({ n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0x1', sc: 80 })],
+          tge: [],
+          counts: { active: 1, preToken: 1 },
+          fetchedAt: NOW,
+        }),
+        merkl: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+        airdropalert: async () => ({ cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }),
+      },
+    });
+
+    const restoredCard = res.feed.cards.find(c => c.n === 'LegacySurfCard');
+    expect(restoredCard).toBeDefined();
+    expect(restoredCard?.source).toBe('Surf');
+    expect(res.feed.cards.some(c => c.n === 'OtherSourceCard')).toBe(false);
+    expect(res.feed.tge).toEqual([{ n: 'LegacySurfTge', t: 'LST', s: 'Claimable', d: '2026-11-25', source: 'Surf' }]);
+  });
+
+  test('filterAirdropFeedByDisabledSources maps canonical IDs and raw names, strips merged tasks, renumbers ranks, and recomputes counts', () => {
+    const feed: AirdropFeed = {
+      cards: [
+        makeCard({
+          r: 1,
+          n: 'SurfWithMergedTasks',
+          id: 'surf-1',
+          source: 'Surf',
+          b: ['live'],
+          taskTypes: ['testnet', 'social', 'staking'],
+          tasks: [
+            { title: 'Surf task', type: 'testnet', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://surf1.xyz' },
+            { title: 'Asso task', type: 'social', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://surf1.xyz', source: 'ASSO7878' },
+            { title: 'Pendle task', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://surf1.xyz', source: 'Pendle' },
+          ],
+          tk: '3/3',
+          sc: 95,
+        }),
+        makeCard({ r: 2, n: 'AssoCard', id: 'asso7878:a', source: 'ASSO7878', b: ['live'], sc: 90 }),
+        makeCard({ r: 3, n: 'ArndxtCard', id: 'arndxt:a', source: 'arndxt', b: ['live'], sc: 88 }),
+        makeCard({ r: 4, n: 'PendleCard', id: 'pendle:p', source: 'Pendle', b: ['live'], sc: 85 }),
+        makeCard({ r: 5, n: 'MerklCard', id: 'merkl:m', source: 'Merkl', b: ['live'], sc: 82 }),
+        makeCard({ r: 6, n: 'AlertCard', id: 'airdropalert:c', source: 'AirdropAlert', b: ['live'], sc: 80 }),
+        makeCard({ r: 7, n: 'DefiLlamaLaunched', id: 'defillama:dl', source: 'DefiLlama', b: ['live', 'token'], sc: 75 }),
+        makeCard({ r: 8, n: 'RawNameDrop', id: 'custom:raw', source: 'CustomFeed', b: ['live'], sc: 70 }),
+      ],
+      tge: [
+        { n: 'SurfTge', t: 'STG', s: 'Claimable', d: '2026-11-25', source: 'Surf' },
+        { n: 'AssoTge', t: 'ATG', s: 'Token live', d: '2026-11-20', source: 'ASSO7878' },
+        { n: 'ArndxtTge', t: 'XTG', s: 'Token live', d: '2026-11-19', source: 'arndxt' },
+        { n: 'AlertTge', t: 'CTG', s: 'Upcoming', d: '2026-11-29', source: 'AirdropAlert' },
+      ],
+      counts: { active: 8, preToken: 7 },
+      fetchedAt: NOW - 120_000,
+    };
+
+    // No disabled sources or non-matching IDs returns the exact same reference
+    expect(filterAirdropFeedByDisabledSources(feed, new Set())).toBe(feed);
+    expect(filterAirdropFeedByDisabledSources(feed, new Set(['feed:nonexistent']))).toBe(feed);
+
+    const filtered = filterAirdropFeedByDisabledSources(
+      feed,
+      new Set([
+        'sheet:asso7878_sheet',
+        'SHEET:ARNDXT_SHEET',
+        'feed:pendle_points',
+        'feed:merkl_opportunities',
+        'feed:airdropalert_calendar',
+        'customfeed',
+      ]),
+    );
+
+    expect(filtered.cards.map(c => ({ r: c.r, n: c.n }))).toEqual([
+      { r: 1, n: 'SurfWithMergedTasks' },
+      { r: 2, n: 'DefiLlamaLaunched' },
+    ]);
+    expect(filtered.cards[0].tasks?.map(t => t.title)).toEqual(['Surf task']);
+    expect(filtered.cards[0].tk).toBe('1/1');
+    expect(filtered.cards[0].taskTypes).toEqual(['testnet']);
+    expect(filtered.tge).toEqual([{ n: 'SurfTge', t: 'STG', s: 'Claimable', d: '2026-11-25', source: 'Surf' }]);
+    expect(filtered.counts).toEqual({ active: 2, preToken: 1 });
+    expect(filtered.fetchedAt).toBe(NOW - 120_000);
   });
 
   test('resolves curated source URLs from the source registry while keeping explicit URL overrides higher priority', async () => {

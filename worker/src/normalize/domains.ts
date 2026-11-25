@@ -21,6 +21,26 @@ export const SOCIAL_PLATFORM_DOMAINS = new Set<string>([
   'bsky.app',
 ]);
 
+/**
+ * Shared PaaS / static hosting domains where each subdomain is an independent
+ * untrusted tenant. Included in PLATFORM_DOMAINS so they can never be trusted
+ * as a project's canonical identity, while safety checks still run lookalike
+ * detection against their tenant hostnames (e.g. `arbitrum.attacker.pages.dev`).
+ */
+export const SHARED_HOSTING_DOMAINS = new Set<string>([
+  'vercel.app',
+  'netlify.app',
+  'github.io',
+  'pages.dev',
+  'workers.dev',
+  'web.app',
+  'firebaseapp.com',
+  'onrender.com',
+  'fly.dev',
+  'railway.app',
+  'herokuapp.com',
+]);
+
 /** General hosting, forms, link-in-bio, event, and mobile deep-link wrappers. */
 export const CONTENT_HOST_DOMAINS = new Set<string>([
   'medium.com',
@@ -53,18 +73,7 @@ export const CONTENT_HOST_DOMAINS = new Set<string>([
   'tokopedia.com',
   'bitget.cloud',
   'thedefinvestor.com',
-  // Shared PaaS / static hosting domains (never a project's trusted registrable domain)
-  'vercel.app',
-  'netlify.app',
-  'github.io',
-  'pages.dev',
-  'workers.dev',
-  'web.app',
-  'firebaseapp.com',
-  'onrender.com',
-  'fly.dev',
-  'railway.app',
-  'herokuapp.com',
+  ...SHARED_HOSTING_DOMAINS,
 ]);
 
 /** Quest / bounty / allowlist / claim platforms shared across many projects. */
@@ -344,10 +353,20 @@ export function isRawIpHost(host: string): boolean {
   return false;
 }
 
-function registrableFromHost(hostRaw: string): string | undefined {
+function normalizeDnsHost(hostRaw: string): string | undefined {
   if (!hostRaw) return undefined;
-  let host = hostRaw.toLowerCase();
+  let host = hostRaw.trim().toLowerCase();
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  if (!host || host.startsWith('.') || host.endsWith('.') || host.includes('..')) {
+    return undefined;
+  }
   if (host.startsWith('www.')) host = host.slice(4);
+  return host || undefined;
+}
+
+function registrableFromHost(hostRaw: string): string | undefined {
+  const host = normalizeDnsHost(hostRaw);
+  if (!host) return undefined;
   const lastDot = host.lastIndexOf('.');
   if (lastDot <= 0) return undefined;
   const c0 = host.charCodeAt(0);
@@ -424,6 +443,10 @@ export function isPlatformDomain(domain: string): boolean {
   return matchesDomainSet(domain, PLATFORM_DOMAINS);
 }
 
+export function isSharedHostingDomain(domain: string): boolean {
+  return matchesDomainSet(domain, SHARED_HOSTING_DOMAINS);
+}
+
 export function isNewsDomain(domain: string): boolean {
   return matchesDomainSet(domain, NEWS_MEDIA_DOMAINS);
 }
@@ -455,7 +478,7 @@ export function isCuratedAggregatorDomain(
   domain: string,
   card: { n: string; source?: string },
 ): boolean {
-  const reg = registrableFromHost(domain.trim().replace(/\.+$/, ''));
+  const reg = registrableFromHost(domain);
   if (!reg || !CURATED_AGGREGATOR_DOMAINS.has(reg)) return false;
   const normName = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '');
   if (CURATED_AGGREGATOR_SELF_NAMES[reg]?.has(normName)) return false;
@@ -468,9 +491,11 @@ export function isCuratedAggregatorDomain(
  */
 export function extractWrapperSubdomainHint(rawUrl: string): string | undefined {
   try {
-    const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '');
+    const host = normalizeDnsHost(new URL(rawUrl).hostname);
+    if (!host) return undefined;
     const reg = registrableFromHost(host);
     if (!reg || !SUBDOMAIN_PROJECT_WRAPPERS.has(reg)) return undefined;
+    if (host.length <= reg.length + 1 || !host.endsWith(`.${reg}`)) return undefined;
     const prefix = host.slice(0, host.length - reg.length - 1);
     if (!prefix || prefix.includes('.')) return undefined;
     if (/^(?:app|go|www|link|links|docs|m|web)$/.test(prefix)) return undefined;

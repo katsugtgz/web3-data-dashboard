@@ -74,6 +74,11 @@ describe('Workers AI summary normalization & budget guard', () => {
     expect(
       unsafeContentRe('Deploy Vault.sol with ethers.js, index.ts, bot.py, lib.rs, config.json, and README.md'),
     ).toBe(false);
+    // Explicit scheme:// URLs must be rejected independently of dev file-suffix exceptions.
+    expect(unsafeContentRe('Read updates at ftp://claim.md/rewards.')).toBe(true);
+    expect(unsafeContentRe('Connect via ws://ethers.js/rpc')).toBe(true);
+    expect(unsafeContentRe('Download http://Vault.sol/bin')).toBe(true);
+    expect(unsafeContentRe('Fetch ipfs://README.md')).toBe(true);
   });
 
   test('M-15: parseAndValidateAiJson rejects drainer/scam/wallet-confirm phrases and strictly filters chains', () => {
@@ -807,6 +812,111 @@ describe('Workers AI summary normalization & budget guard', () => {
       summary_source: 'ai',
       ai_attempts: 0,
       ai_retry_after: 0,
+    });
+  });
+
+  test('calculates lease expiry from acquisition clock rather than stale caller nowMs and guards final summary write on lease match', async () => {
+    const { db, sqlite } = createTestD1();
+    seedCluster(sqlite, 'c_stale_clock', 'rule');
+    seedCluster(sqlite, 'c_reclaimed', 'rule');
+
+    const tStart = 1_795_240_000_000;
+    const tAcquire = tStart + 120_000; // polling took 2 minutes before lease acquisition
+
+    // 1. Lease expiry uses acquisition clock (tAcquire + 120_000), NOT stale tStart + 120_000,
+    //    so an overlapping caller at tAcquire is blocked while AI is still running.
+    let observedLeaseWhileInFlight = 0;
+    let secondCallerBlocked = false;
+    const probeAi: AiBindingLike = {
+      async run() {
+        const row = sqlite
+          .query('SELECT ai_retry_after FROM clusters WHERE id = ?1')
+          .get('c_stale_clock') as { ai_retry_after: number };
+        observedLeaseWhileInFlight = row.ai_retry_after;
+        const concurrent = await summarizeClusterWithAi(
+          {
+            async run() {
+              throw new Error('overlapping caller should not run AI');
+            },
+          },
+          db,
+          {
+            clusterId: 'c_stale_clock',
+            project: 'KiteAI',
+            rawTexts: ['post'],
+            isNewCluster: true,
+            isNonLatinSource: false,
+            riskLevel: 'ok',
+            nowMs: tAcquire,
+            clock: () => tAcquire,
+          },
+        );
+        secondCallerBlocked = concurrent === null;
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI testnet quests on Base.',
+            taskTypes: ['quest'],
+            chains: ['Base'],
+          }),
+        };
+      },
+    };
+
+    const res = await summarizeClusterWithAi(probeAi, db, {
+      clusterId: 'c_stale_clock',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: tStart,
+      clock: () => tAcquire,
+    });
+    expect(res).not.toBeNull();
+    expect(observedLeaseWhileInFlight).toBe(tAcquire + 120_000);
+    expect(secondCallerBlocked).toBe(true);
+
+    // 2. If another caller reclaims the cluster and writes a newer summary while the first
+    //    AI call is still in flight, the stale first call's final UPDATE must match 0 rows,
+    //    leave the newer summary intact, and return null.
+    const staleWinnerAi: AiBindingLike = {
+      async run() {
+        // Simulate lease expiration + reclaim + completion by a newer caller while this call runs.
+        sqlite
+          .query(
+            `UPDATE clusters
+             SET summary = 'Newer reclaimed summary.', summary_source = 'ai', ai_attempts = 0, ai_retry_after = 0
+             WHERE id = 'c_reclaimed'`,
+          )
+          .run();
+        return {
+          response: JSON.stringify({
+            summary: 'Stale summary from expired lease.',
+            taskTypes: ['testnet'],
+            chains: ['Arbitrum'],
+          }),
+        };
+      },
+    };
+
+    const staleRes = await summarizeClusterWithAi(staleWinnerAi, db, {
+      clusterId: 'c_reclaimed',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+      nowMs: tStart,
+      clock: () => tStart,
+    });
+    expect(staleRes).toBeNull();
+    const afterReclaim = sqlite
+      .query('SELECT summary, summary_source, chains FROM clusters WHERE id = ?1')
+      .get('c_reclaimed') as { summary: string; summary_source: string; chains: string };
+    expect(afterReclaim).toEqual({
+      summary: 'Newer reclaimed summary.',
+      summary_source: 'ai',
+      chains: '[]',
     });
   });
 });

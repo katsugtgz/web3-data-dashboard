@@ -67,9 +67,9 @@ function sanitizeBriefText(input: string): string {
   const cleaned = stripInvisibles(input)
     .replace(NON_ENGLISH_SCRIPT_RE, '')
     .replace(/[\r\n\t]+/g, ' ')
-    .replace(CONTROL_CHAR_RE, '');
+    .replace(CONTROL_CHAR_RE, '')
+    .replace(UNSAFE_MD_CHARS_RE, '');
   return collapseMarkdownLinks(cleaned)
-    .replace(UNSAFE_MD_CHARS_RE, '')
     .replace(/\s+/g, ' ')
     .trim();
 }

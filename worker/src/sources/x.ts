@@ -247,23 +247,55 @@ export function parseXRssTimeline(
   const mirrorHostsLower = new Set<string>();
   const mirrorRegs = new Set<string>();
   for (const h of rawMirrorHosts) {
-    const lower = h.trim().toLowerCase();
+    const lower = h.trim().toLowerCase().replace(/\.+$/, '');
     if (!lower) continue;
     mirrorHostsLower.add(lower);
     const reg = getRegistrableDomain(`https://${lower}`);
     if (reg) mirrorRegs.add(reg);
   }
 
+  const isMirrorHost = (hostRaw: string): boolean => {
+    if (mirrorHostsLower.size === 0) return false;
+    const host = hostRaw.trim().toLowerCase().replace(/\.+$/, '');
+    if (!host) return false;
+    if (mirrorHostsLower.has(host)) return true;
+    const reg = getRegistrableDomain(`https://${host}`);
+    return Boolean(reg && mirrorRegs.has(reg));
+  };
+
   const isMirrorUrl = (u: string): boolean => {
     if (mirrorHostsLower.size === 0) return false;
     try {
-      const host = new URL(u).hostname.toLowerCase();
-      if (mirrorHostsLower.has(host)) return true;
-      const reg = getRegistrableDomain(u);
-      return Boolean(reg && mirrorRegs.has(reg));
+      return isMirrorHost(new URL(u).hostname);
     } catch {
       return true;
     }
+  };
+
+  const stripMirrorTokens = (input: string): string => {
+    if (!input || mirrorHostsLower.size === 0) return input;
+    const stripped = input.replace(
+      /https?:\/\/[^\s<>"'`]+|(?<![:/@.\w=-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:\/[^\s<>"'`]*|\?[^\s<>"'`]*)/gi,
+      token => {
+        const candidate = token.replace(/[),.;!?\]}>]+$/g, '');
+        if (!candidate) return token;
+        const withScheme = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+        try {
+          const host = new URL(withScheme).hostname;
+          if (isMirrorHost(host)) {
+            return token.slice(candidate.length);
+          }
+        } catch {
+          // Leave unparseable token intact so non-mirror text is never stripped
+        }
+        return token;
+      },
+    );
+    return stripped
+      .replace(/[ \t]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
   };
 
   for (const block of items) {
@@ -318,12 +350,20 @@ export function parseXRssTimeline(
       .replace(/ *\n */g, '\n')
       .replace(/\n{2,}/g, '\n')
       .trim();
-    const text = (plainDesc || rawTitle).trim();
+    const rawIpSourceText = (plainDesc || rawTitle).trim();
+    const rawIpUrls = extractSuspiciousRawIpUrls(rawIpSourceText, rawIpHrefs);
+
+    const cleanedDesc = stripMirrorTokens(plainDesc);
+    const cleanedTitle = stripMirrorTokens(rawTitle);
+    const text = (cleanedDesc || cleanedTitle).trim();
     if (!text) continue;
 
+    const allRawIpUrls =
+      !cleanedDesc && plainDesc
+        ? [...new Set([...rawIpUrls, ...extractSuspiciousRawIpUrls(rawTitle)])]
+        : rawIpUrls;
     const cleanUrls = extractUrls(text, hrefs).filter(u => !isMirrorUrl(u));
-    const rawIpUrls = extractSuspiciousRawIpUrls(text, rawIpHrefs);
-    const urls = [...cleanUrls, ...rawIpUrls];
+    const urls = [...cleanUrls, ...allRawIpUrls];
 
     out.push({
       idStr,
@@ -345,6 +385,7 @@ export async function fetchXTimelineBestEffort(
   const rssMirrorBase = typeof rssMirrorBaseOrNowMs === 'string' ? rssMirrorBaseOrNowMs : undefined;
   const nowMs =
     typeof rssMirrorBaseOrNowMs === 'number' ? rssMirrorBaseOrNowMs : (nowMsArg ?? Date.now());
+  const cutoffMs = nowMs - FOURTEEN_DAYS_MS;
   const mirror = parseSafeMirrorBase(rssMirrorBase);
   if (mirror) {
     try {
@@ -387,7 +428,7 @@ export async function fetchXTimelineBestEffort(
           }
         }
         const parsed = parseXRssTimeline(body, handle, mirrorHosts, nowMs);
-        if (parsed.length > 0) return parsed;
+        if (parsed.some(p => p.postedAt >= cutoffMs)) return parsed;
       } else if (res) {
         await res.body?.cancel();
       }

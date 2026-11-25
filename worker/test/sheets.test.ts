@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { FORBIDDEN_CJK_RE } from './helpers';
-import { parseArndxtSheet, parseAsso7878Sheet, parseCsv } from '../src/sources/sheets';
+import { inferArndxtZeroCost, parseArndxtSheet, parseAsso7878Sheet, parseCsv } from '../src/sources/sheets';
 
 function makeAssoRow(overrides: Record<number, string> = {}): string {
   const cols = Array.from({ length: 28 }, () => '');
@@ -507,5 +507,257 @@ describe('arndxt 2026 English Google Sheet parser', () => {
     expect(byArndxt.get('ProtoAlpha (DEX)')?.t).toBeNull();
     expect(arndxtFeed.tge[0].n).toBe('Jupiter');
     expect(arndxtFeed.tge[0].t).toBe('JUP');
+  });
+});
+
+describe('ASSO7878 section divider banner detection (PRRT_kwDOV0YtbM67w6DL)', () => {
+  test('treats project rows containing banner keywords with metadata as normal active cards without switching section to tge', () => {
+    const header = makeAssoRow({
+      0: '分类',
+      2: '项目名称',
+      3: '融资$',
+      13: '参与情况',
+      14: '交互方式',
+      16: '教程',
+      18: '项目状态',
+      21: '链接',
+    });
+    const csv = [
+      header,
+      // Real project row whose name contains '已经发币' with category + raise + participation + tutorial + URL
+      makeAssoRow({
+        0: '交易类',
+        2: 'Alpha 已经发币',
+        3: '1000万',
+        13: '在参与',
+        14: '交易',
+        16: 'https://alpha.xyz/guide',
+        18: '持续',
+        21: 'https://alpha.xyz',
+      }),
+      // Carried-forward category (empty col 0) whose col 2 mentions '已经发币' but has metadata in cols 13/14/16
+      makeAssoRow({
+        0: '',
+        2: 'Beta 已经发币',
+        13: '在参与',
+        14: '任务',
+        16: 'https://beta.xyz/app',
+        18: '持续',
+      }),
+      // Subsequent active project must remain in active cards[] (section must NOT have switched to 'tge')
+      makeAssoRow({
+        0: '',
+        2: 'GammaActive',
+        3: '500万',
+        13: '在参与',
+        14: '交互',
+        18: '早期',
+        21: 'https://gamma.xyz',
+      }),
+      // Genuine divider banner in col 3 (only 1 non-empty cell in cols 0..3, cols 4+ all empty)
+      makeAssoRow({ 3: '下面这些项目已经发币（The project that has been TGE）' }),
+      makeAssoRow({
+        0: '交易类',
+        2: 'RealLaunched',
+        17: 'https://reallaunched.xyz/claim',
+        18: '持续',
+      }),
+    ].join('\n');
+
+    const feed = parseAsso7878Sheet(csv, Date.parse('2026-11-24T00:00:00Z'));
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+    expect(feed.cards.map(c => c.n)).toEqual(['Alpha', 'Beta', 'GammaActive']);
+    expect(feed.tge.map(t => t.n)).toEqual(['RealLaunched']);
+  });
+});
+
+describe('ASSO7878 dropped/rug filtering before TGE rail (PRRT_kwDOV0YtbM67w6DQ)', () => {
+  test('excludes withdrawal-blocked, rug, and dropped post-TGE rows while retaining legitimate ended TGE rows', () => {
+    const header = makeAssoRow({
+      0: '分类',
+      2: '项目名称',
+      8: '空投潜力',
+      13: '参与情况',
+      17: '奖励对象',
+      18: '项目状态',
+      23: '发币TGE',
+    });
+    const csv = [
+      header,
+      // Active-section row marked TGE live via col 8 but withdrawal-blocked in col 23 -> must be excluded
+      makeAssoRow({
+        0: '交易类',
+        2: 'InlineBlockedTge',
+        8: '已发币',
+        13: '在参与',
+        17: 'https://inlineblocked.xyz/claim',
+        18: '持续',
+        23: '项目方不让提币',
+      }),
+      // Post-TGE section banner
+      makeAssoRow({ 0: '下面这些项目已经发币（The project that has been TGE）' }),
+      // Post-TGE row with withdrawal-blocked marker in col 23 -> must be excluded
+      makeAssoRow({
+        0: '交易类',
+        2: 'PostTgeBlocked',
+        8: '已发币',
+        13: '已经发币',
+        17: 'https://posttgeblocked.xyz/claim',
+        18: '持续',
+        23: '项目方不让提币',
+      }),
+      // Post-TGE row with rug marker in col 23 -> must be excluded
+      makeAssoRow({
+        0: '交易类',
+        2: 'PostTgeRug23',
+        13: '已经发币',
+        17: 'https://posttgerug.xyz/claim',
+        18: '持续',
+        23: '项目跑路',
+      }),
+      // Post-TGE row with dropped marker in col 13 -> must be excluded
+      makeAssoRow({
+        0: '交易类',
+        2: 'PostTgeDropped',
+        13: '放弃',
+        17: 'https://posttgedropped.xyz/claim',
+        18: '持续',
+      }),
+      // Legitimate ended post-TGE row -> must remain included
+      makeAssoRow({
+        0: '交易类',
+        2: 'LegitEndedTge',
+        8: '已发币',
+        13: '已经发币',
+        17: 'https://legitended.xyz/claim',
+        18: '结束',
+        23: '已发币',
+      }),
+    ].join('\n');
+
+    const feed = parseAsso7878Sheet(csv, Date.parse('2026-11-24T00:00:00Z'));
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+    expect(feed.cards).toEqual([]);
+    expect(feed.tge.map(t => t.n)).toEqual(['LegitEndedTge']);
+    expect(feed.tge[0].s).toBe('Ended');
+  });
+});
+
+describe('arndxt zero-cost inference (PRRT_kwDOV0YtbM67w6De)', () => {
+  test('inferArndxtZeroCost respects negations and prevents reasoningRaw from overriding paid/deposit tasks', () => {
+    expect(inferArndxtZeroCost('Stake ETH', 'This is not free')).toBe(false);
+    expect(inferArndxtZeroCost('Stake ETH', 'Free points bonus')).toBe(false);
+    expect(inferArndxtZeroCost('Testnet faucet', 'Early')).toBe(true);
+    expect(inferArndxtZeroCost('Join waitlist', 'Zero cost')).toBe(true);
+    expect(inferArndxtZeroCost('Join waitlist', 'Not free')).toBe(false);
+
+    // Additional negation & deposit/capital boundary cases
+    expect(inferArndxtZeroCost('Deposit USDC into vault', 'Zero-cost bonus points')).toBe(false);
+    expect(inferArndxtZeroCost('Provide LP liquidity', 'Free multiplier')).toBe(false);
+    expect(inferArndxtZeroCost('Follow on X and complete quests', 'No-cost social farm')).toBe(true);
+    expect(inferArndxtZeroCost('Follow on X', "Isn't free due to paid pass")).toBe(false);
+    expect(inferArndxtZeroCost('Follow on X', 'Non-free participation')).toBe(false);
+    expect(inferArndxtZeroCost('Never free mint pass', 'Free')).toBe(false);
+  });
+
+  test('parseArndxtSheet applies inferArndxtZeroCost to badges, fit, and task cost', () => {
+    const csv = [
+      'Project,Website,TGE (approx),TGE reasoning (brief),Airdrop tasks,Airdrop score (1-5)',
+      'StakeNotFree,https://snf.xyz,Q4 2026,This is not free,Stake ETH,4',
+      'StakeFreeBonus,https://sfb.xyz,Q4 2026,Free points bonus,Stake ETH,4',
+      'WaitlistNotFree,https://wnf.xyz,Q4 2026,Not free,Join waitlist,3',
+      'FaucetEarly,https://fe.xyz,Q4 2026,Early,Testnet faucet,3',
+      'WaitlistZero,https://wz.xyz,Q4 2026,Zero cost,Join waitlist,3',
+    ].join('\n');
+
+    const feed = parseArndxtSheet(csv, Date.parse('2026-11-24T00:00:00Z'));
+    const byName = new Map(feed.cards.map(c => [c.n, c]));
+
+    expect(byName.get('StakeNotFree')?.b).not.toContain('zero');
+    expect(byName.get('StakeNotFree')?.best.c).not.toBe('Free');
+    expect(byName.get('StakeFreeBonus')?.b).not.toContain('zero');
+    expect(byName.get('StakeFreeBonus')?.best.c).not.toBe('Free');
+    expect(byName.get('WaitlistNotFree')?.b).not.toContain('zero');
+    expect(byName.get('WaitlistNotFree')?.best.c).not.toBe('Free');
+
+    expect(byName.get('FaucetEarly')?.b).toContain('zero');
+    expect(byName.get('FaucetEarly')?.best.c).toBe('Free');
+    expect(byName.get('WaitlistZero')?.b).toContain('zero');
+    expect(byName.get('WaitlistZero')?.best.c).toBe('Free');
+  });
+});
+
+describe('Deterministic row-order-independent sheet card IDs (PRRT_kwDOV0YtbM67w6DY)', () => {
+  test('ASSO7878 keeps canonical bare-slug IDs and assigns row-order-independent hashed IDs for collisions and duplicate names', () => {
+    const header = makeAssoRow({ 0: '分类', 2: '项目名称', 14: '交互方式', 21: '链接' });
+    const projectRows = [
+      makeAssoRow({ 0: '交易类', 2: 'hypernova-protocol', 14: '交易', 21: 'https://hypernova.xyz' }),
+      makeAssoRow({ 0: '交易类', 2: 'Acme-Labs', 14: '交易', 21: 'https://acme-dash.xyz' }),
+      makeAssoRow({ 0: '交易类', 2: 'Acme Labs', 14: '任务', 21: 'https://acme-space.xyz' }),
+      makeAssoRow({ 0: '交易类', 2: 'A+B', 14: '交易', 21: 'https://aplus.xyz' }),
+      makeAssoRow({ 0: '交易类', 2: 'A/B', 14: '任务', 21: 'https://aslash.xyz' }),
+      makeAssoRow({ 0: '交易类', 2: 'DupProto', 14: '质押', 21: 'https://dup.xyz/one' }),
+      makeAssoRow({ 0: '交易类', 2: 'DupProto', 14: '交易', 21: 'https://dup.xyz/two' }),
+    ];
+
+    const now = Date.parse('2026-11-24T00:00:00Z');
+    const forward = parseAsso7878Sheet([header, ...projectRows].join('\n'), now);
+    const reversed = parseAsso7878Sheet([header, ...projectRows.slice().reverse()].join('\n'), now);
+
+    const idByUrl = (cards: typeof forward.cards) => new Map(cards.map(c => [c.url, c.id]));
+    const fwdMap = idByUrl(forward.cards);
+    const revMap = idByUrl(reversed.cards);
+
+    // Canonical lowercase-slug names keep bare-slug IDs
+    expect(fwdMap.get('https://hypernova.xyz/')).toBe('asso7878:hypernova-protocol');
+    expect(fwdMap.get('https://acme-dash.xyz/')).toBe('asso7878:acme-labs');
+
+    // Non-canonical punctuated/spaced names get deterministic 8-hex hash suffix
+    expect(fwdMap.get('https://acme-space.xyz/')).toMatch(/^asso7878:acme-labs-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aplus.xyz/')).toMatch(/^asso7878:a-b-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aslash.xyz/')).toMatch(/^asso7878:a-b-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aplus.xyz/')).not.toBe(fwdMap.get('https://aslash.xyz/'));
+
+    // Identical nameKey rows disambiguated by stable row fields, NOT row order
+    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^asso7878:dupproto-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^asso7878:dupproto-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/one')).not.toBe(fwdMap.get('https://dup.xyz/two'));
+
+    // Every single card keeps its exact ID when CSV row order is reversed
+    expect(revMap).toEqual(fwdMap);
+    expect(new Set(forward.cards.map(c => c.id)).size).toBe(forward.cards.length);
+  });
+
+  test('arndxt keeps canonical bare-slug IDs and assigns row-order-independent hashed IDs for collisions and duplicate names', () => {
+    const header = 'Project,Website,TGE (approx),TGE reasoning (brief),Airdrop tasks,Airdrop score (1-5)';
+    const projectRows = [
+      'hypernova-protocol,https://hypernova.xyz,Q4 2026,Early,Trade perps,4',
+      'Acme-Labs,https://acme-dash.xyz,Q4 2026,Early,Trade perps,4',
+      'Acme Labs,https://acme-space.xyz,Q4 2026,Early,Testnet faucet,4',
+      'A+B,https://aplus.xyz,Q4 2026,Early,Stake ETH,3',
+      'A/B,https://aslash.xyz,Q4 2026,Early,Testnet faucet,3',
+      'DupProto,https://dup.xyz/one,Q4 2026,Early,Stake ETH,4',
+      'DupProto,https://dup.xyz/two,Q4 2026,Early,Trade perps,4',
+    ];
+
+    const now = Date.parse('2026-11-24T00:00:00Z');
+    const forward = parseArndxtSheet([header, ...projectRows].join('\n'), now);
+    const reversed = parseArndxtSheet([header, ...projectRows.slice().reverse()].join('\n'), now);
+
+    const idByUrl = (cards: typeof forward.cards) => new Map(cards.map(c => [c.url, c.id]));
+    const fwdMap = idByUrl(forward.cards);
+    const revMap = idByUrl(reversed.cards);
+
+    expect(fwdMap.get('https://hypernova.xyz/')).toBe('arndxt:hypernova-protocol');
+    expect(fwdMap.get('https://acme-dash.xyz/')).toBe('arndxt:acme-labs');
+    expect(fwdMap.get('https://acme-space.xyz/')).toMatch(/^arndxt:acme-labs-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aplus.xyz/')).toMatch(/^arndxt:a-b-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aslash.xyz/')).toMatch(/^arndxt:a-b-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://aplus.xyz/')).not.toBe(fwdMap.get('https://aslash.xyz/'));
+    expect(fwdMap.get('https://dup.xyz/one')).toMatch(/^arndxt:dupproto-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/two')).toMatch(/^arndxt:dupproto-[0-9a-f]{8}$/);
+    expect(fwdMap.get('https://dup.xyz/one')).not.toBe(fwdMap.get('https://dup.xyz/two'));
+    expect(revMap).toEqual(fwdMap);
+    expect(new Set(forward.cards.map(c => c.id)).size).toBe(forward.cards.length);
   });
 });
