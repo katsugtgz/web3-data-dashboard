@@ -29,6 +29,7 @@ export const MERKL_OPPORTUNITIES_URL =
 
 export interface ParsedFeedPost {
   id: string;
+  legacyId?: string;
   postUrl: string;
   postedAt: number;
   text: string;
@@ -250,6 +251,16 @@ function fnv1a64Hex(input: string): string {
   return hash.toString(16).padStart(16, '0');
 }
 
+function legacyNormalizePostId(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/[^A-Za-z0-9._:-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!cleaned) return '';
+  return cleaned.length > 80 ? cleaned.slice(-80) : cleaned;
+}
+
 function normalizePostId(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
@@ -264,6 +275,13 @@ function normalizePostId(raw: string): string {
   return `${prefix}~${fnv1a64Hex(trimmed)}`;
 }
 
+function normalizePostIdPair(raw: string): { id: string; legacyId?: string } {
+  const id = normalizePostId(raw);
+  if (!id) return { id: '' };
+  const legacy = legacyNormalizePostId(raw);
+  return legacy && legacy !== id ? { id, legacyId: legacy } : { id };
+}
+
 function slugify(raw: string): string {
   return (
     raw
@@ -273,16 +291,34 @@ function slugify(raw: string): string {
   );
 }
 
-function buildStableCardId(prefix: string, identityKey: string, seenCardIds: Set<string>): string {
-  const slug = slugify(identityKey);
-  let cardId =
-    identityKey === slug ? `${prefix}:${slug}` : `${prefix}:${slug}-${fnv1a32Hex(identityKey)}`;
-  if (seenCardIds.has(cardId)) {
-    // Defensive fallback only if an impossible 32-bit hash collision occurs
-    cardId = `${prefix}:${slug}-${fnv1a64Hex(identityKey)}`;
+/**
+ * Assigns deterministic, rank-order-independent card IDs. Canonical slug keys keep
+ * `<prefix>:<slug>`; non-canonical keys use `<prefix>:<slug>~<hash>` (`~` cannot appear
+ * in `slugify` output, so hashed IDs never collide with canonical IDs), and any rare
+ * 32-bit hash collision upgrades all colliding keys to 64-bit regardless of sort order.
+ */
+function buildStableCardIdMap(prefix: string, identityKeys: readonly string[]): Map<string, string> {
+  const primary = new Map<string, string>();
+  const counts = new Map<string, number>();
+  for (const identityKey of identityKeys) {
+    if (primary.has(identityKey)) continue;
+    const slug = slugify(identityKey);
+    const cardId =
+      identityKey === slug ? `${prefix}:${slug}` : `${prefix}:${slug}~${fnv1a32Hex(identityKey)}`;
+    primary.set(identityKey, cardId);
+    counts.set(cardId, (counts.get(cardId) ?? 0) + 1);
   }
-  seenCardIds.add(cardId);
-  return cardId;
+
+  const resolved = new Map<string, string>();
+  for (const [identityKey, cardId] of primary) {
+    if ((counts.get(cardId) ?? 0) > 1) {
+      const slug = slugify(identityKey);
+      resolved.set(identityKey, `${prefix}:${slug}~${fnv1a64Hex(identityKey)}`);
+    } else {
+      resolved.set(identityKey, cardId);
+    }
+  }
+  return resolved;
 }
 
 /**
@@ -319,7 +355,7 @@ export function parseRssOrAtomXml(xml: string, baseUrl?: string): ParsedFeedPost
     const postUrl = cleanUrl(decodeFeedHtmlEntities(rawLink));
     if (!postUrl) continue;
 
-    const id = normalizePostId(decodeFeedHtmlEntities(rawGuid) || postUrl);
+    const { id, legacyId } = normalizePostIdPair(decodeFeedHtmlEntities(rawGuid) || postUrl);
     if (!id || seen.has(id)) continue;
     seen.add(id);
 
@@ -341,6 +377,7 @@ export function parseRssOrAtomXml(xml: string, baseUrl?: string): ParsedFeedPost
 
     posts.push({
       id,
+      ...(legacyId ? { legacyId } : {}),
       postUrl,
       postedAt,
       text,
@@ -388,13 +425,13 @@ export function parseWpCalendarToFeedPosts(raw: unknown): ParsedFeedPost[] {
     const text = [title, bodyText].filter(Boolean).join('\n').trim();
     if (!text) continue;
 
-    const id = normalizePostId(String(item.id ?? item.slug ?? postUrl));
+    const { id, legacyId } = normalizePostIdPair(String(item.id ?? item.slug ?? postUrl));
     if (!id) continue;
 
     const hrefs = extractHrefsFromHtml(bodyHtml, true);
     const urls = [...extractUrls(text, [...hrefs, postUrl]), ...extractSuspiciousRawIpUrls(text, hrefs)];
 
-    out.push({ id, postUrl, postedAt, text, urls });
+    out.push({ id, ...(legacyId ? { legacyId } : {}), postUrl, postedAt, text, urls });
   }
   return out;
 }
@@ -488,11 +525,12 @@ export function parseSubstackArchive(raw: unknown): ParsedFeedPost[] {
     const text = [title, subtitle].filter(Boolean).join(' — ').trim();
     if (!text || !SUBSTACK_DROP_RE.test(text)) continue;
 
-    const id = normalizePostId(String(post.id ?? post.slug ?? postUrl));
+    const { id, legacyId } = normalizePostIdPair(String(post.id ?? post.slug ?? postUrl));
     if (!id) continue;
 
     out.push({
       id,
+      ...(legacyId ? { legacyId } : {}),
       postUrl,
       postedAt,
       text,
@@ -539,7 +577,7 @@ export function parseGalxeCampaigns(raw: unknown, nowMs = Date.now()): ParsedFee
       if (!Number.isFinite(endSec) || endSec * 1000 < nowMs) continue;
     }
 
-    const id = normalizePostId(c.id);
+    const { id, legacyId } = normalizePostIdPair(c.id);
     if (!id) continue;
 
     const cleanAlias = stripOrTranslateCjk(c.space.alias ?? '');
@@ -555,6 +593,7 @@ export function parseGalxeCampaigns(raw: unknown, nowMs = Date.now()): ParsedFee
 
     out.push({
       id,
+      ...(legacyId ? { legacyId } : {}),
       postUrl,
       postedAt,
       text,
@@ -657,11 +696,14 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
     });
   }
 
-  const seenCardIds = new Set<string>();
-  const cards: Card[] = [...grouped.values()]
+  const topGroups = [...grouped.values()]
     .sort((a, b) => b.liquidity - a.liquidity || a.name.localeCompare(b.name))
-    .slice(0, 40)
-    .map((g, idx) => {
+    .slice(0, 40);
+  const cardIdByKey = buildStableCardIdMap(
+    'pendle',
+    topGroups.map(g => g.key),
+  );
+  const cards: Card[] = topGroups.map((g, idx) => {
       g.markets.sort((a, b) => b.liq - a.liq || a.task.title.localeCompare(b.task.title));
       const topMarkets = g.markets.slice(0, 5);
       const tasks = topMarkets.map(m => m.task);
@@ -673,7 +715,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
       if (g.isNew) badges.push('early');
       const best = tasks[0];
 
-      const cardId = buildStableCardId('pendle', g.key, seenCardIds);
+      const cardId = cardIdByKey.get(g.key)!;
 
       return {
         r: idx + 1,
@@ -814,18 +856,21 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
     }
   }
 
-  const seenCardIds = new Set<string>();
-  const cards: Card[] = [...grouped.values()]
+  const topGroups = [...grouped.values()]
     .sort((a, b) => b.tvl - a.tvl || a.name.localeCompare(b.name))
-    .slice(0, 25)
-    .map((g, idx) => {
+    .slice(0, 25);
+  const cardIdByKey = buildStableCardIdMap(
+    'merkl',
+    topGroups.map(g => (g.rawProtoId ? g.rawProtoId.toLowerCase() : g.key)),
+  );
+  const cards: Card[] = topGroups.map((g, idx) => {
       const chains = [...g.chains];
       const grade = gradeFromLiquidity(g.tvl);
       const sc = grade === 'S' ? 82 : grade === 'A' ? 72 : grade === 'B' ? 58 : 46;
       const best = g.tasks[0];
 
       const identityKey = g.rawProtoId ? g.rawProtoId.toLowerCase() : g.key;
-      const cardId = buildStableCardId('merkl', identityKey, seenCardIds);
+      const cardId = cardIdByKey.get(identityKey)!;
 
       return {
         r: idx + 1,
@@ -1049,21 +1094,34 @@ async function pollSingleFeedSource(
       seenResponseKeys.add(fullKey);
       recentPosts.push(p);
     }
-    const existingIds = new Set<string>();
-    for (let i = 0; i < recentPosts.length; i += D1_EXISTING_CHECK_CHUNK) {
-      const chunk = recentPosts.slice(i, i + D1_EXISTING_CHECK_CHUNK);
-      const candidatePostIds = chunk.map(p => `feed:${src.handle}:${p.id}`);
-      const placeholders = candidatePostIds.map((_, idx) => `?${idx + 1}`).join(', ');
+    const lookupIdSet = new Set<string>();
+    for (const p of recentPosts) {
+      lookupIdSet.add(`feed:${src.handle}:${p.id}`);
+      if (p.legacyId) {
+        lookupIdSet.add(`feed:${src.handle}:${p.legacyId}`);
+      }
+    }
+    const candidateLookupIds = [...lookupIdSet];
+    const existingPostUrlById = new Map<string, string>();
+    for (let i = 0; i < candidateLookupIds.length; i += D1_EXISTING_CHECK_CHUNK) {
+      const chunk = candidateLookupIds.slice(i, i + D1_EXISTING_CHECK_CHUNK);
+      const placeholders = chunk.map((_, idx) => `?${idx + 1}`).join(', ');
       const existingRes = await db
-        .prepare(`SELECT id FROM posts WHERE id IN (${placeholders})`)
-        .bind(...candidatePostIds)
-        .all<{ id: string }>();
+        .prepare(`SELECT id, post_url FROM posts WHERE id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<{ id: string; post_url: string }>();
       for (const row of existingRes.results ?? []) {
-        existingIds.add(row.id);
+        existingPostUrlById.set(row.id, row.post_url);
       }
     }
 
-    const freshPosts = recentPosts.filter(p => !existingIds.has(`feed:${src.handle}:${p.id}`));
+    const freshPosts = recentPosts.filter(p => {
+      if (existingPostUrlById.has(`feed:${src.handle}:${p.id}`)) return false;
+      if (p.legacyId && existingPostUrlById.get(`feed:${src.handle}:${p.legacyId}`) === p.postUrl) {
+        return false;
+      }
+      return true;
+    });
 
     const sourceParseCtx: ParseContext = {
       ...parseCtx,

@@ -3078,6 +3078,46 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       ['c_a', 100],
     ]);
   });
+
+  test('queryFeed bounds enabled_clusters CTE by c.last_seen >= ?1 using index before correlated posts lookup', async () => {
+    const { db, queries, explain } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:en1', 'telegram', 'en1', 'en', 0.8, 1),
+                ('telegram:dis1', 'telegram', 'dis1', 'en', 0.8, 0)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c_old', 'OldProto', '[]', '["testnet"]', 'Old testnet', 'rule', 'ok', '[]', 0.9, 1, 50, 50, 1),
+                ('c_recent', 'RecentProto', '[]', '["testnet"]', 'Recent testnet', 'rule', 'ok', '[]', 0.8, 1, 200, 200, 1),
+                ('c_dis_only', 'DisabledNew', '[]', '["testnet"]', 'Disabled new', 'rule', 'ok', '[]', 0.85, 2, 100, 300, 1)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_old', 'telegram:en1', 'https://t.me/en1/1', 50, 'Old testnet', '[]', 'c_old', 50),
+                ('p_recent', 'telegram:en1', 'https://t.me/en1/2', 200, 'Recent testnet', '[]', 'c_recent', 200),
+                ('p_dis_old', 'telegram:en1', 'https://t.me/en1/3', 100, 'Enabled old', '[]', 'c_dis_only', 100),
+                ('p_dis_new', 'telegram:dis1', 'https://t.me/dis1/1', 300, 'Disabled new', '[]', 'c_dis_only', 300)`,
+      )
+      .run();
+
+    const before = queries.length;
+    const feed = await queryFeed(db, new Set(), { since: 150, sort: 'new', risk: 'include' });
+    expect(feed.items.map(i => i.id)).toEqual(['c_recent']);
+
+    const cteSql = queries.slice(before).find(q => /WITH\s+enabled_clusters\s+AS\s+MATERIALIZED/i.test(q));
+    expect(cteSql).toBeDefined();
+    expect(cteSql!).toMatch(/FROM\s+clusters\s+c[\s\S]*WHERE[\s\S]*c\.last_seen\s*>=\s*\?1/i);
+
+    const plan = explain(cteSql!, [150, 200]);
+    const planText = plan.map(p => p.detail).join('\n');
+    expect(planText).toMatch(/SEARCH\s+c\s+USING\s+INDEX\s+clusters_feed_new\s*\(last_seen>\?\)/i);
+  });
 });
 
 describe('Surf airdrops external URL normalization', () => {

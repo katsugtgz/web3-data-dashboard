@@ -1358,7 +1358,11 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       title: 'DeFi',
       blurb: 'DeFi',
       cols: ['Project'],
-      rows: [{ cells: ['Arbitrum'], href: 'https://arbitrum.io/' }],
+      rows: [
+        { cells: ['Arbitrum'], href: 'https://arbitrum.io/' },
+        { cells: ['ThirdParty Merkl Vault'], href: 'https://app.merkl.xyz/opportunities/99' },
+        { cells: ['ThirdParty Pendle Pool'], href: 'https://app.pendle.finance/trade/markets/0x99' },
+      ],
       source: 'DefiLlama',
       sourceUrl: 'https://defillama.com',
       fetchedAt: 1000,
@@ -1881,7 +1885,12 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       title: 'DeFi',
       blurb: 'DeFi',
       cols: ['Project'],
-      rows: [{ cells: ['Arbitrum'], href: 'https://arbitrum.io/' }],
+      rows: [
+        { cells: ['Arbitrum'], href: 'https://arbitrum.io/' },
+        { cells: ['ThirdParty Merkl Vault'], href: 'https://app.merkl.xyz/opportunities/99' },
+        { cells: ['ThirdParty Pendle Pool'], href: 'https://app.pendle.finance/trade/markets/0x99' },
+        { cells: ['Merkl'], href: 'https://merkl.xyz/' },
+      ],
       source: 'DefiLlama',
       sourceUrl: 'https://defillama.com',
       fetchedAt: 1000,
@@ -1909,6 +1918,8 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(loaded1.projectDomains.has('xn--arbitrm-91a.io')).toBe(false);
     expect(loaded1.projectDomains.get('legit-surf.io')).toBe('LegitSurf');
     expect(loaded1.projectDomains.get('arbitrum.io')).toBe('Arbitrum');
+    // Self-owned Merkl DeFi row is kept while third-party Merkl/Pendle DeFi rows are filtered out
+    expect(loaded1.projectDomains.get('merkl.xyz')).toBe('Merkl');
 
     // Case (b) with defiSection null -> invalid legacy defi aggregator & mixed-script rows are pruned,
     // while valid defi row ('arbitrum.io', 'Arbitrum', 'defi') is retained.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Card, CardTask } from '../../shared/types';
 import { parseCost, parseMinutes } from '../lib/format';
 
@@ -8,7 +8,7 @@ const LEGACY_SHEET_ID_RE = /^(asso7878|arndxt|pendle|merkl):([a-z0-9]+(?:-[a-z0-
 const HASHED_SHEET_SUFFIX_RE = /^[0-9a-f]{8}(?:[0-9a-f]{8})?(?:-[0-9a-f]{8}|-\d+)*$/;
 const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
 
-function slugifyCardName(name: string): string {
+function slugifyCardName(name: string, emptyFallback = 'project'): string {
   let out = '';
   let prevDash = true;
   for (let i = 0; i < name.length; i++) {
@@ -23,7 +23,7 @@ function slugifyCardName(name: string): string {
     }
   }
   if (out.endsWith('-')) out = out.slice(0, -1);
-  return out || 'project';
+  return out || emptyFallback;
 }
 
 function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -40,21 +40,38 @@ export interface LegacySheetIdMigration {
   changed: boolean;
 }
 
+export interface PersistedWatchlistSet {
+  values: Set<string>;
+  version: number;
+}
+
+interface LegacyCandidate {
+  id: string;
+  prefix: string;
+  nameSlug: string;
+}
+
+function isHashedLegacyVariant(candidateId: string, legacyId: string): boolean {
+  if (candidateId.length <= legacyId.length + 1) return false;
+  if (!candidateId.startsWith(legacyId)) return false;
+  const sep = candidateId[legacyId.length];
+  if (sep !== '-' && sep !== '~') return false;
+  return HASHED_SHEET_SUFFIX_RE.test(candidateId.slice(legacyId.length + 1));
+}
+
 function resolveLegacySheetId(
   legacyId: string,
   exactIds: ReadonlySet<string>,
-  hashedCards: readonly { id: string; prefix: string; isCanonicalForName: boolean }[],
+  candidates: readonly LegacyCandidate[],
 ): string {
   const match = LEGACY_SHEET_ID_RE.exec(legacyId);
   if (!match || exactIds.has(legacyId)) return legacyId;
   const prefix = match[1];
-  const candidatePrefix = `${legacyId}-`;
+  const legacySlug = match[2];
   let matchedId: string | null = null;
-  for (const entry of hashedCards) {
-    if (entry.prefix !== prefix || entry.isCanonicalForName) continue;
-    if (!entry.id.startsWith(candidatePrefix)) continue;
-    const suffix = entry.id.slice(candidatePrefix.length);
-    if (!HASHED_SHEET_SUFFIX_RE.test(suffix)) continue;
+  for (const entry of candidates) {
+    if (entry.prefix !== prefix || entry.nameSlug !== legacySlug) continue;
+    if (prefix !== 'merkl' && !isHashedLegacyVariant(entry.id, legacyId)) continue;
     if (matchedId !== null && matchedId !== entry.id) return legacyId;
     matchedId = entry.id;
   }
@@ -64,8 +81,8 @@ function resolveLegacySheetId(
 /**
  * Migrates legacy bare-slug sheet/feed IDs (`asso7878:<slug>`, `arndxt:<slug>`,
  * `pendle:<slug>`, `merkl:<slug>`) in saved projects and JSON-encoded task keys
- * to `<prefix>:<slug>-<hash>` when no live card has exact primary ID `<prefix>:<slug>`
- * and exactly one live card matches `<prefix>:<slug>-<hash>`.
+ * to their current card IDs when no live card has exact primary ID `<prefix>:<slug>`
+ * and exactly one live card's name-derived slug matches `<slug>`.
  */
 export function migrateLegacySheetIds(
   saved: ReadonlySet<string>,
@@ -77,7 +94,7 @@ export function migrateLegacySheetIds(
   }
 
   const exactIds = new Set<string>();
-  const hashedCards: { id: string; prefix: string; isCanonicalForName: boolean }[] = [];
+  const candidates: LegacyCandidate[] = [];
   for (const card of cards) {
     const id = card.id;
     if (!id) continue;
@@ -86,10 +103,11 @@ export function migrateLegacySheetIds(
     if (colonIdx <= 0) continue;
     const prefix = id.slice(0, colonIdx);
     if (prefix !== 'asso7878' && prefix !== 'arndxt' && prefix !== 'pendle' && prefix !== 'merkl') continue;
-    hashedCards.push({
+    const emptyFallback = prefix === 'pendle' || prefix === 'merkl' ? 'item' : 'project';
+    candidates.push({
       id,
       prefix,
-      isCanonicalForName: id === `${prefix}:${slugifyCardName(card.n)}`,
+      nameSlug: slugifyCardName(card.n, emptyFallback),
     });
   }
 
@@ -97,7 +115,7 @@ export function migrateLegacySheetIds(
   const resolve = (projectKey: string): string => {
     const cached = resolvedCache.get(projectKey);
     if (cached !== undefined) return cached;
-    const next = resolveLegacySheetId(projectKey, exactIds, hashedCards);
+    const next = resolveLegacySheetId(projectKey, exactIds, candidates);
     resolvedCache.set(projectKey, next);
     return next;
   };
@@ -136,6 +154,21 @@ export function migrateLegacySheetIds(
   }
 
   return { saved: nextSaved, doneTasks: nextDoneTasks, changed };
+}
+
+export function commitWatchlistSetMigration(
+  prev: PersistedWatchlistSet,
+  cards: readonly Pick<Card, 'id' | 'n'>[],
+  kind: 'saved' | 'tasks',
+): PersistedWatchlistSet {
+  if (cards.length === 0 || prev.values.size === 0) return prev;
+  const res =
+    kind === 'saved'
+      ? migrateLegacySheetIds(prev.values, EMPTY_STRING_SET, cards)
+      : migrateLegacySheetIds(EMPTY_STRING_SET, prev.values, cards);
+  const nextValues = kind === 'saved' ? res.saved : res.doneTasks;
+  if (!res.changed || setsEqual(prev.values, nextValues)) return prev;
+  return { values: nextValues, version: prev.version + 1 };
 }
 
 /**
@@ -246,106 +279,93 @@ export function getCardTasks(card: Card): CardTask[] {
 }
 
 export function useWatchlist(cards?: readonly Pick<Card, 'id' | 'n'>[]) {
-  const [savedState, setSaved] = useState<Set<string>>(() => readSet(SAVED_KEY));
-  const [doneTasksState, setDoneTasks] = useState<Set<string>>(() => readSet(TASKS_KEY));
-  // Monotonic mutation counters ensure cross-tab storage events never cancel
-  // pending local persistence before the effect commits.
-  const savedMutationRef = useRef(0);
-  const persistedSavedRef = useRef(0);
-  const tasksMutationRef = useRef(0);
-  const persistedTasksRef = useRef(0);
+  const [savedState, setSavedState] = useState<PersistedWatchlistSet>(() => {
+    const initial: PersistedWatchlistSet = { values: readSet(SAVED_KEY), version: 0 };
+    return cards?.length ? commitWatchlistSetMigration(initial, cards, 'saved') : initial;
+  });
+  const [doneTasksState, setDoneTasksState] = useState<PersistedWatchlistSet>(() => {
+    const initial: PersistedWatchlistSet = { values: readSet(TASKS_KEY), version: 0 };
+    return cards?.length ? commitWatchlistSetMigration(initial, cards, 'tasks') : initial;
+  });
+  // Monotonic persisted version counters ensure cross-tab storage events never
+  // clobber pending local mutations or migrations before the effect commits.
+  const persistedSavedVersionRef = useRef(0);
+  const persistedTasksVersionRef = useRef(0);
   const cardsRef = useRef(cards);
-  const lastPersistedSavedMigrationRef = useRef<string | null>(null);
-  const lastPersistedTasksMigrationRef = useRef<string | null>(null);
 
   useEffect(() => {
     cardsRef.current = cards;
   }, [cards]);
 
-  const migrated = useMemo(() => {
-    if (!cards || cards.length === 0) return null;
-    const res = migrateLegacySheetIds(savedState, doneTasksState, cards);
-    return res.changed ? res : null;
-  }, [savedState, doneTasksState, cards]);
-
-  const savedMigrated = migrated !== null && !setsEqual(savedState, migrated.saved);
-  const tasksMigrated = migrated !== null && !setsEqual(doneTasksState, migrated.doneTasks);
-  const saved = savedMigrated ? migrated.saved : savedState;
-  const doneTasks = tasksMigrated ? migrated.doneTasks : doneTasksState;
+  useEffect(() => {
+    if (savedState.version > persistedSavedVersionRef.current) {
+      persistedSavedVersionRef.current = savedState.version;
+      writeSet(SAVED_KEY, savedState.values);
+    }
+  }, [savedState]);
 
   useEffect(() => {
-    if (savedMutationRef.current !== persistedSavedRef.current) {
-      persistedSavedRef.current = savedMutationRef.current;
-      lastPersistedSavedMigrationRef.current = null;
-      writeSet(SAVED_KEY, saved);
-      return;
+    if (doneTasksState.version > persistedTasksVersionRef.current) {
+      persistedTasksVersionRef.current = doneTasksState.version;
+      writeSet(TASKS_KEY, doneTasksState.values);
     }
-    if (savedMigrated) {
-      const sig = JSON.stringify([...saved]);
-      if (lastPersistedSavedMigrationRef.current !== sig) {
-        lastPersistedSavedMigrationRef.current = sig;
-        writeSet(SAVED_KEY, saved);
-      }
-    }
-  }, [saved, savedMigrated]);
-
-  useEffect(() => {
-    if (tasksMutationRef.current !== persistedTasksRef.current) {
-      persistedTasksRef.current = tasksMutationRef.current;
-      lastPersistedTasksMigrationRef.current = null;
-      writeSet(TASKS_KEY, doneTasks);
-      return;
-    }
-    if (tasksMigrated) {
-      const sig = JSON.stringify([...doneTasks]);
-      if (lastPersistedTasksMigrationRef.current !== sig) {
-        lastPersistedTasksMigrationRef.current = sig;
-        writeSet(TASKS_KEY, doneTasks);
-      }
-    }
-  }, [doneTasks, tasksMigrated]);
+  }, [doneTasksState]);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
+      const liveCards = cardsRef.current;
       if (e.key === null || e.key === SAVED_KEY) {
-        if (savedMutationRef.current === persistedSavedRef.current) {
-          lastPersistedSavedMigrationRef.current = null;
-          setSaved(readSet(SAVED_KEY));
-        }
+        setSavedState(prev => {
+          if (prev.version > persistedSavedVersionRef.current) return prev;
+          const incoming: PersistedWatchlistSet = { values: readSet(SAVED_KEY), version: prev.version };
+          return liveCards?.length ? commitWatchlistSetMigration(incoming, liveCards, 'saved') : incoming;
+        });
       }
       if (e.key === null || e.key === TASKS_KEY) {
-        if (tasksMutationRef.current === persistedTasksRef.current) {
-          lastPersistedTasksMigrationRef.current = null;
-          setDoneTasks(readSet(TASKS_KEY));
-        }
+        setDoneTasksState(prev => {
+          if (prev.version > persistedTasksVersionRef.current) return prev;
+          const incoming: PersistedWatchlistSet = { values: readSet(TASKS_KEY), version: prev.version };
+          return liveCards?.length ? commitWatchlistSetMigration(incoming, liveCards, 'tasks') : incoming;
+        });
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
+  const reconcileCards = useCallback((nextCards: readonly Pick<Card, 'id' | 'n'>[]) => {
+    cardsRef.current = nextCards;
+    if (nextCards.length === 0) return;
+    setSavedState(prev => commitWatchlistSetMigration(prev, nextCards, 'saved'));
+    setDoneTasksState(prev => commitWatchlistSetMigration(prev, nextCards, 'tasks'));
+  }, []);
+
   const toggleSaved = useCallback((projectKey: string, legacyKey?: string) => {
-    savedMutationRef.current += 1;
-    setSaved(prev => {
+    setSavedState(prev => {
       const liveCards = cardsRef.current;
-      const base = liveCards?.length ? migrateLegacySheetIds(prev, EMPTY_STRING_SET, liveCards).saved : prev;
-      return toggleStorageEntry(base, projectKey, legacyKey);
+      const base = liveCards?.length ? commitWatchlistSetMigration(prev, liveCards, 'saved').values : prev.values;
+      return { values: toggleStorageEntry(base, projectKey, legacyKey), version: prev.version + 1 };
     });
   }, []);
 
   const toggleTaskDone = useCallback((taskKey: string, legacyKey?: string) => {
-    tasksMutationRef.current += 1;
-    setDoneTasks(prev => {
+    setDoneTasksState(prev => {
       const liveCards = cardsRef.current;
-      const base = liveCards?.length ? migrateLegacySheetIds(EMPTY_STRING_SET, prev, liveCards).doneTasks : prev;
-      return toggleStorageEntry(base, taskKey, legacyKey);
+      const base = liveCards?.length ? commitWatchlistSetMigration(prev, liveCards, 'tasks').values : prev.values;
+      return { values: toggleStorageEntry(base, taskKey, legacyKey), version: prev.version + 1 };
     });
   }, []);
 
   const clearSaved = useCallback(() => {
-    savedMutationRef.current += 1;
-    setSaved(new Set());
+    setSavedState(prev => ({ values: new Set(), version: prev.version + 1 }));
   }, []);
 
-  return { saved, doneTasks, toggleSaved, toggleTaskDone, clearSaved };
+  return {
+    saved: savedState.values,
+    doneTasks: doneTasksState.values,
+    toggleSaved,
+    toggleTaskDone,
+    clearSaved,
+    reconcileCards,
+  };
 }

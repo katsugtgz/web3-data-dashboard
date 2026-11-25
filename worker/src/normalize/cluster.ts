@@ -1122,7 +1122,8 @@ export async function queryFeed(
                   ) AS last_seen,
                   c.is_drop
            FROM clusters c
-           WHERE COALESCE(c.is_drop, 1) = 1
+           WHERE c.last_seen >= ?1
+             AND COALESCE(c.is_drop, 1) = 1
              ${riskClause}
          )
          SELECT id, project, ticker, domain, chains, task_types, summary, summary_source,

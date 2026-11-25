@@ -163,11 +163,11 @@ function computeSheetBaseId(prefix: 'asso7878' | 'arndxt', name: string): string
 
 function sheetCardDisambiguator(card: Card): string {
   const taskSig = (card.tasks ?? [])
-    .map(t => `${t.title.trim().toLowerCase()}\u0000${t.type.trim().toLowerCase()}\u0000${(t.url ?? '').trim().toLowerCase()}`)
+    .map(t => `${t.title.trim().toLowerCase()}\u0000${t.type.trim().toLowerCase()}\u0000${(t.url ?? '').trim()}`)
     .join('\u001f');
   return [
     card.n.trim().toLowerCase(),
-    (card.url ?? '').trim().toLowerCase(),
+    (card.url ?? '').trim(),
     taskSig,
     card.best.n.trim().toLowerCase(),
     (card.chain ?? '').trim().toLowerCase(),

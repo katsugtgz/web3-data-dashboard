@@ -41,7 +41,13 @@ export default function App() {
     refresh: refreshMarkets,
   } = useMarkets();
   const { sources, loading: sourcesLoading, isLiveApi: sourcesIsLiveApi, failed: sourcesFailed, refresh: refreshSources } = useSourcesHealth();
-  const { saved, doneTasks, toggleSaved, toggleTaskDone } = useWatchlist(cards);
+  const {
+    saved,
+    doneTasks,
+    toggleSaved,
+    toggleTaskDone,
+    reconcileCards: reconcileWatchlistCards,
+  } = useWatchlist(cards);
   const { profile, hasConfigured, saveProfile } = useAgentProfile();
   const theme = useTheme();
 
@@ -57,11 +63,19 @@ export default function App() {
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
 
   const tgeItems = airdrops.feed?.tge ?? [];
-  const { detail, handleSelectDetail, handleCloseDetail, reconcileCards } = useDetailSelection(cards, clearCopyStatus);
+  const {
+    detail,
+    handleSelectDetail,
+    handleCloseDetail,
+    reconcileCards: reconcileDetailCards,
+  } = useDetailSelection(cards, clearCopyStatus);
 
   useEffect(() => {
-    reconcileCardsRef.current = reconcileCards;
-  }, [reconcileCards]);
+    reconcileCardsRef.current = (nextCards: readonly Card[]) => {
+      reconcileDetailCards(nextCards);
+      reconcileWatchlistCards(nextCards);
+    };
+  }, [reconcileDetailCards, reconcileWatchlistCards]);
 
   const dropsSearchRef = useRef<HTMLInputElement>(null);
   const airdropSearchRef = useRef<HTMLInputElement>(null);
