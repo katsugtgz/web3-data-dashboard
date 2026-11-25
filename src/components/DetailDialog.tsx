@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
 import { buildBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
+import { orderDetailTasks, type OrderedDetailTask } from '../lib/detailTasks';
 import { normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import {
@@ -10,9 +11,21 @@ import {
   getCardTaskKeyPairs,
   getCardTasks,
   isTaskKeyDone,
+  type TaskKeyPair,
 } from '../hooks/useWatchlist';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
+import {
+  CopyIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  EyeIcon,
+  EyeOffIcon,
+  LockIcon,
+  ShieldAlertIcon,
+  StarIcon,
+  XIcon,
+} from './Icons';
 import { Avatar, BadgeChip } from './ProjectCard';
 
 function resolveCardChains(card: Card): string[] {
@@ -20,116 +33,324 @@ function resolveCardChains(card: Card): string[] {
   return card.chain ? [card.chain] : [];
 }
 
-function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, string>): [string, string | number][] {
+interface DetailSpecRow {
+  label: string;
+  value: string | number;
+  mono?: boolean;
+}
+
+function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, string>): DetailSpecRow[] {
   const flags = card.b
     .map(k => (k === 'risk' && card.riskLabel ? card.riskLabel : BADGE_LABEL[k]))
     .join(', ');
   const tickerLabel = card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'No ticker yet';
   const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
   return [
-    ['Rank', `#${card.r}`],
-    ['Ticker', tickerLabel],
-    ['Chains', chains.length ? chains.join(', ') : 'Not specified'],
-    ['Funding', card.f],
-    ['Tasks (Open / Total)', card.tk],
-    ['Heat (X Score)', safeHeat.toLocaleString('en-US')],
-    ['Updated', card.u === 'today' ? 'Today' : card.u],
-    ['Best for', card.fit.map(f => fit[f]).join(', ') || '—'],
-    ...(card.x ? [['Code', card.x] as [string, string]] : []),
-    ['Status flags', flags || '—'],
+    { label: 'Rank', value: `#${card.r}`, mono: true },
+    { label: 'Ticker', value: tickerLabel, mono: Boolean(card.t) },
+    { label: 'Chains', value: chains.length ? chains.join(', ') : 'Not specified' },
+    { label: 'Funding', value: card.f, mono: true },
+    { label: 'Tasks (Open / Total)', value: card.tk, mono: true },
+    { label: 'Heat (X Score)', value: safeHeat.toLocaleString('en-US'), mono: true },
+    { label: 'Updated', value: card.u === 'today' ? 'Today' : card.u },
+    { label: 'Best for', value: card.fit.map(f => fit[f]).join(', ') || '—' },
+    ...(card.x ? [{ label: 'Code', value: card.x, mono: true }] : []),
+    { label: 'Status flags', value: flags || '—' },
   ];
 }
 
 function DetailScores({ card }: { card: Card }) {
   const safeHeat = Number.isFinite(card.h) && card.h >= 0 ? card.h : 0;
-  const heatWidth =
-    card.sub[2] != null && Number.isFinite(card.sub[2])
-      ? Math.min(100, Math.max(0, card.sub[2] * 10))
-      : Math.min(100, Math.round(Math.log10(safeHeat + 1) * 22));
-  const heatText =
-    card.sub[2] != null && Number.isFinite(card.sub[2]) ? `${card.sub[2]}/10` : orDash(safeHeat.toLocaleString('en-US'));
+  const hasHeatSubScore = card.sub[2] != null && Number.isFinite(card.sub[2]);
+  const heatPercent = hasHeatSubScore
+    ? Math.min(100, Math.max(0, (card.sub[2] ?? 0) * 10))
+    : Math.min(100, Math.max(0, Math.round((safeHeat / 10000) * 100)));
 
   return (
     <div className="dlg-scores">
       <div className="dlg-score-main">
         <span className="dlg-score-lbl">Potential score</span>
-        <strong className="mono">{card.sc}</strong>
-        <span className="dlg-score-sub">/ 100</span>
+        <div className="dlg-score-readout">
+          <strong className="mono">{card.sc}</strong>
+          <span className="dlg-score-sub mono">/ 100</span>
+        </div>
       </div>
       <div className="dlg-subbars">
         <div className="subbar-row">
           <span>Launch</span>
           <div className="scorebar">
-            <span style={{ width: `${Math.min(100, card.sub[0] * 10)}%` }} />
+            <span className="fill-S" style={{ width: `${Math.min(100, Math.max(0, card.sub[0] * 10))}%` }} />
           </div>
           <b className="mono">{card.sub[0]}/10</b>
         </div>
         <div className="subbar-row">
           <span>Value</span>
           <div className="scorebar">
-            <span style={{ width: `${Math.min(100, card.sub[1] * 10)}%` }} />
+            <span className="fill-A" style={{ width: `${Math.min(100, Math.max(0, card.sub[1] * 10))}%` }} />
           </div>
           <b className="mono">{card.sub[1]}/10</b>
         </div>
-        <div className="subbar-row">
-          <span>Heat</span>
-          <div className="scorebar">
-            <span style={{ width: `${heatWidth}%` }} />
+        {hasHeatSubScore ? (
+          <div className="subbar-row">
+            <span>Heat</span>
+            <div className="scorebar">
+              <span className="fill-B" style={{ width: `${heatPercent}%` }} />
+            </div>
+            <b className="mono">{card.sub[2]}/10</b>
           </div>
-          <b className="mono">{heatText}</b>
-        </div>
+        ) : (
+          <div className="subbar-heat-block">
+            <div className="subbar-heat-head">
+              <span className="subbar-heat-title">Heat</span>
+              <span className="subbar-heat-caption">Community heat · 10k max</span>
+              <b className="mono subbar-heat-val">{orDash(safeHeat.toLocaleString('en-US'))}</b>
+            </div>
+            <div className="scorebar">
+              <span className="fill-heat" style={{ width: `${heatPercent}%` }} />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+interface BriefActionsProps {
+  card: Card;
+  profile: AgentProfile;
+  slug: string;
+  showBrief: boolean;
+  onToggleBrief: () => void;
+  onCopyBrief: (card: Card) => void;
+}
+
+function DetailBriefActions({ card, profile, slug, showBrief, onToggleBrief, onCopyBrief }: BriefActionsProps) {
+  if (card.b.includes('risk')) {
+    return (
+      <div className="dlg-risk-callout">
+        <ShieldAlertIcon size={15} className="dlg-risk-icon" />
+        <p className="note risk-blocked">Brief unavailable for RISK items.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dlg-brief-bar">
+      <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
+        <CopyIcon size={14} />
+        <span>Copy agent brief</span>
+      </button>
+      <button
+        type="button"
+        className="chip"
+        aria-expanded={showBrief}
+        onClick={onToggleBrief}
+      >
+        {showBrief ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
+        <span>{showBrief ? 'Hide preview' : 'Preview brief'}</span>
+      </button>
+      <button
+        type="button"
+        className="chip"
+        onClick={() => {
+          const md = buildBrief(card, profile);
+          if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
+        }}
+      >
+        <DownloadIcon size={14} />
+        <span>Download .md</span>
+      </button>
+    </div>
+  );
+}
+
 interface TaskRowProps {
-  task: CardTask;
+  entry: OrderedDetailTask;
   storageKey: string;
   legacyKey: string | null;
   checked: boolean;
+  duplicateTitle: boolean;
   onToggle: (taskKey: string, legacyKey?: string) => void;
 }
 
-function TaskRow({ task: t, storageKey, legacyKey, checked, onToggle }: TaskRowProps) {
+function formatTaskCost(cost: number): string {
+  if (!Number.isFinite(cost) || cost < 0) return '—';
+  return cost > 0 ? `$${cost}` : 'Free';
+}
+
+function formatTaskTime(timeMinutes: number | null): string {
+  return typeof timeMinutes === 'number' && Number.isFinite(timeMinutes) && timeMinutes > 0
+    ? ` · ${timeMinutes} min`
+    : '';
+}
+
+function TaskMetaDetails({
+  task: t,
+  isClosed,
+  duplicateTitle,
+}: {
+  task: CardTask;
+  isClosed: boolean;
+  duplicateTitle: boolean;
+}) {
   const normStatus = t.status.trim().toUpperCase();
-  const isClosed = normStatus === 'CLOSED';
   const showStatus = normStatus === 'OPEN' || isClosed;
-  const costLabel = !Number.isFinite(t.cost) || t.cost < 0 ? '—' : t.cost > 0 ? `$${t.cost}` : 'Free';
-  const timeLabel =
-    typeof t.timeMinutes === 'number' && Number.isFinite(t.timeMinutes) && t.timeMinutes > 0
-      ? ` · ${t.timeMinutes} min`
-      : '';
+  const costLabel = formatTaskCost(t.cost);
+  const timeLabel = formatTaskTime(t.timeMinutes);
+  const displayTitle = duplicateTitle && t.type ? `${t.title} · ${t.type}` : t.title;
+
+  return (
+    <span className="task-meta">
+      <span className="task-title">{displayTitle}</span>
+      <span className="task-sub">
+        {showStatus && (
+          <span className={`task-status ${isClosed ? 'closed' : 'open'}`}>
+            <span className={`task-status-dot ${isClosed ? 'closed' : 'open'}`} aria-hidden="true" />
+            <span>{isClosed ? 'Closed' : 'Open'}</span>
+          </span>
+        )}
+        {t.type && <span className="typetip">{t.type}</span>}
+        {t.isExclusive && <span className="badge badge-early">Exclusive</span>}
+        <span className="task-cost-pill mono">
+          {costLabel}
+          {timeLabel}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function TaskRow({ entry, storageKey, legacyKey, checked, duplicateTitle, onToggle }: TaskRowProps) {
+  const { task: t, isClosed } = entry;
   const href = normalizeExternalUrl(t.url);
 
   return (
-    <li className={`task-item${checked ? ' is-done' : ''}${isClosed ? ' is-closed' : ''}`}>
-      <label className="task-check">
-        <input type="checkbox" checked={checked} onChange={() => onToggle(storageKey, legacyKey ?? undefined)} />
-        <span className="task-meta">
-          <span className="task-title">{t.title}</span>
-          <span className="task-sub">
-            {showStatus && (
-              <span className={`task-status ${isClosed ? 'closed' : 'open'}`}>
-                {isClosed ? 'Closed' : 'Open'}
-              </span>
-            )}
-            {t.type && <span className="typetip">{t.type}</span>}
-            <span className="mono">
-              {costLabel}
-              {timeLabel}
-            </span>
+    <li className={`task-item${checked && !isClosed ? ' is-done' : ''}${isClosed ? ' is-closed' : ''}`}>
+      {isClosed ? (
+        <div className="task-static-row">
+          <span className="task-closed-indicator" aria-hidden="true" title="Task closed">
+            <LockIcon size={13} />
           </span>
-        </span>
-      </label>
+          <TaskMetaDetails task={t} isClosed duplicateTitle={duplicateTitle} />
+        </div>
+      ) : (
+        <label className="task-check">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={() => onToggle(storageKey, legacyKey ?? undefined)}
+          />
+          <TaskMetaDetails task={t} isClosed={false} duplicateTitle={duplicateTitle} />
+        </label>
+      )}
       {href && (
         <a className="task-link" href={href} target="_blank" rel="noopener noreferrer">
-          Open
+          <span>View</span>
+          <ExternalLinkIcon size={12} />
           <span className="sr"> {t.title} (opens in a new tab)</span>
-          <span aria-hidden="true"> ↗</span>
         </a>
       )}
     </li>
+  );
+}
+
+interface TaskSectionProps {
+  taskList: CardTask[];
+  taskPairs: TaskKeyPair[];
+  doneTasks: Set<string>;
+  onToggleTask: (taskKey: string, legacyKey?: string) => void;
+}
+
+function DetailTaskSection({ taskList, taskPairs, doneTasks, onToggleTask }: TaskSectionProps) {
+  const ordered = orderDetailTasks(taskList);
+  const titleCounts = new Map<string, number>();
+  for (const t of taskList) {
+    const key = t.title.trim().toLowerCase();
+    titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+  }
+  const openItems = ordered.filter(item => !item.isClosed);
+  const closedItems = ordered.filter(item => item.isClosed);
+
+  const actionableCount = openItems.length;
+  const openCompletedCount = openItems.filter(item =>
+    isTaskKeyDone(doneTasks, taskPairs[item.originalIndex]),
+  ).length;
+  const completionPct = actionableCount > 0 ? Math.round((openCompletedCount / actionableCount) * 100) : 0;
+
+  return (
+    <section className="dlg-tasks" aria-label="Project tasks checklist">
+      <div className="dlg-section-head">
+        <div className="dlg-section-head-left">
+          <h3>Tasks</h3>
+          {actionableCount > 0 ? (
+            <span
+              className={`countchip mono${openCompletedCount === actionableCount ? ' is-complete' : ''}`}
+            >
+              {openCompletedCount} of {actionableCount} done
+            </span>
+          ) : (
+            <span className="countchip mono">All {closedItems.length} closed</span>
+          )}
+        </div>
+        <span className="note">Saved locally</span>
+      </div>
+
+      {actionableCount > 0 && (
+        <div
+          className="task-progress"
+          role="progressbar"
+          aria-valuenow={openCompletedCount}
+          aria-valuemin={0}
+          aria-valuemax={actionableCount}
+          aria-label="Completed open tasks"
+        >
+          <span className="task-progress-fill" style={{ width: `${completionPct}%` }} />
+        </div>
+      )}
+
+      {openItems.length > 0 && (
+        <ul className="task-list">
+          {openItems.map(entry => {
+            const pair = taskPairs[entry.originalIndex];
+            return (
+              <TaskRow
+                key={pair.primary}
+                entry={entry}
+                storageKey={pair.primary}
+                legacyKey={pair.legacy}
+                checked={isTaskKeyDone(doneTasks, pair)}
+                duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
+                onToggle={onToggleTask}
+              />
+            );
+          })}
+        </ul>
+      )}
+
+      {closedItems.length > 0 && (
+        <div className="task-closed-group">
+          <div className="task-closed-divider">
+            <span>Closed tasks ({closedItems.length})</span>
+          </div>
+          <ul className="task-list task-list-closed">
+            {closedItems.map(entry => {
+              const pair = taskPairs[entry.originalIndex];
+              return (
+                <TaskRow
+                  key={pair.primary}
+                  entry={entry}
+                  storageKey={pair.primary}
+                  legacyKey={pair.legacy}
+                  checked={isTaskKeyDone(doneTasks, pair)}
+                  duplicateTitle={(titleCounts.get(entry.task.title.trim().toLowerCase()) ?? 0) > 1}
+                  onToggle={onToggleTask}
+                />
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -169,102 +390,80 @@ function DetailDialogBody({
 
   return (
     <div className="dlg-inner">
-      <div className="dlg-head">
-        <div className="dlg-title-group">
-          <Avatar key={icon} name={card.n} src={icon} size={42} />
-          <div>
-            <h2 id="detail-title">{card.n}</h2>
-            <p className="ticker mono">
-              {card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
-            </p>
+      <div className="dlg-sticky-head">
+        <div className="dlg-head">
+          <div className="dlg-title-group">
+            <Avatar key={icon} name={card.n} src={icon} size={44} />
+            <div className="dlg-title-meta">
+              <h2 id="detail-title">{card.n}</h2>
+              <p className="ticker mono">
+                {card.t ? `$${card.t}` : card.b.includes('token') ? 'Token live' : 'Pre-token'} · Rank #{card.r} · Tier {card.g}
+              </p>
+            </div>
+          </div>
+          <div className="dlg-head-actions">
+            <button
+              type="button"
+              className="chip dlg-save-btn"
+              aria-pressed={saved}
+              onClick={() => onToggleSaved(cardStorageKey(card), cardLegacyStorageKey(card))}
+            >
+              <StarIcon size={14} fill={saved ? 'currentColor' : 'none'} />
+              <span>{saved ? 'Saved' : 'Save'}</span>
+            </button>
+            <button type="button" className="dlg-x" onClick={onDismiss} aria-label="Close details">
+              <XIcon size={16} />
+            </button>
           </div>
         </div>
-        <div className="dlg-head-actions">
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={saved}
-            onClick={() => onToggleSaved(cardStorageKey(card), cardLegacyStorageKey(card))}
-          >
-            <span aria-hidden="true">{saved ? '★' : '☆'}</span> Save
-          </button>
-          <button type="button" className="dlg-x" onClick={onDismiss} aria-label="Close details">
-            ×
-          </button>
-        </div>
+
+        {(card.b.length > 0 || card.x) && (
+          <div className="badges dlg-head-badges">
+            {card.b.map(k => (
+              <BadgeChip key={k} k={k} riskLabel={card.riskLabel} />
+            ))}
+            {card.x && <span className="codechip">{card.x}</span>}
+          </div>
+        )}
       </div>
 
-      {card.b.length > 0 && (
-        <div className="badges" style={{ marginBottom: 14 }}>
-          {card.b.map(k => (
-            <BadgeChip key={k} k={k} riskLabel={card.riskLabel} />
-          ))}
-        </div>
-      )}
+      <div className="dlg-scroll-body">
+        <CopyStatusBanner status={copyStatus} />
 
-      <CopyStatusBanner status={copyStatus} />
+        <DetailBriefActions
+          card={card}
+          profile={profile}
+          slug={slug}
+          showBrief={showBrief}
+          onToggleBrief={() => setShowBrief(v => !v)}
+          onCopyBrief={onCopyBrief}
+        />
 
-      {card.b.includes('risk') ? (
-        <p className="note risk-blocked">Brief unavailable for RISK items.</p>
-      ) : (
-        <div className="dlg-brief-bar">
-          <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
-            Copy agent brief
-          </button>
-          <button
-            type="button"
-            className="chip"
-            aria-expanded={showBrief}
-            onClick={() => setShowBrief(v => !v)}
-          >
-            {showBrief ? 'Hide preview' : 'Preview brief'}
-          </button>
-          <button
-            type="button"
-            className="chip"
-            onClick={() => {
-              const md = buildBrief(card, profile);
-              if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
-            }}
-          >
-            Download .md
-          </button>
-        </div>
-      )}
+        {showBrief && renderedBrief && <pre className="brief-preview mono">{renderedBrief}</pre>}
 
-      {showBrief && renderedBrief && (
-        <pre className="brief-preview mono">{renderedBrief}</pre>
-      )}
+        <DetailScores card={card} />
 
-      <DetailScores card={card} />
+        <DetailTaskSection
+          taskList={taskList}
+          taskPairs={taskPairs}
+          doneTasks={doneTasks}
+          onToggleTask={onToggleTask}
+        />
 
-      <section className="dlg-tasks" aria-label="Project tasks checklist">
-        <div className="dlg-section-head">
-          <h3>Tasks ({taskList.length})</h3>
-          <span className="note">Progress saves locally in your browser</span>
-        </div>
-        <ul className="task-list">
-          {taskList.map((t, i) => (
-            <TaskRow
-              key={taskPairs[i].primary}
-              task={t}
-              storageKey={taskPairs[i].primary}
-              legacyKey={taskPairs[i].legacy}
-              checked={isTaskKeyDone(doneTasks, taskPairs[i])}
-              onToggle={onToggleTask}
-            />
-          ))}
-        </ul>
-      </section>
-
-      <dl className="kv">
-        {rows.map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>{v}</dd>
+        <section className="dlg-specs" aria-label="Project specifications">
+          <div className="dlg-section-head">
+            <h3>Specifications</h3>
           </div>
-        ))}
-      </dl>
+          <dl className="kv">
+            {rows.map(row => (
+              <div key={row.label}>
+                <dt>{row.label}</dt>
+                <dd className={row.mono ? 'mono' : undefined}>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      </div>
     </div>
   );
 }

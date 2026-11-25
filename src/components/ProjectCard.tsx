@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import type { Badge, Card, FitKey } from '../../shared/types';
-import { normalizeExternalUrl } from '../lib/format';
-import { BADGE_LABEL } from '../lib/labels';
 import {
   cardLegacyStorageKey,
   cardStorageKey,
@@ -9,6 +7,18 @@ import {
   getCardTasks,
   isTaskKeyDone,
 } from '../hooks/useWatchlist';
+import { normalizeExternalUrl } from '../lib/format';
+import { BADGE_LABEL } from '../lib/labels';
+import {
+  CheckCircle2Icon,
+  ChevronRightIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  LockIcon,
+  StarIcon,
+} from './Icons';
+
+const MAX_CARD_CHIPS = 3;
 
 const BADGE_CLASS: Partial<Record<Badge, string>> = {
   live: 'badge badge-live',
@@ -17,6 +27,72 @@ const BADGE_CLASS: Partial<Record<Badge, string>> = {
   zero: 'badge badge-zero',
   risk: 'badge badge-risk',
 };
+
+type ProjectTag =
+  | { id: string; kind: 'badge'; badge: Badge; label: string }
+  | { id: string; kind: 'code'; label: string }
+  | { id: string; kind: 'done'; label: string }
+  | { id: string; kind: 'fit'; label: string };
+
+function normalizeTagKey(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/\s+path$/i, '')
+    .replace(/\s+/g, ' ');
+}
+
+function buildProjectTags(card: Card, fit: Record<FitKey, string>, doneCount: number, taskTotal: number): ProjectTag[] {
+  const seen = new Set<string>();
+  const tags: ProjectTag[] = [];
+
+  const pushUnique = (tag: ProjectTag) => {
+    const key = normalizeTagKey(tag.label);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    tags.push(tag);
+  };
+
+  // Prioritize risk & progress badges so critical cues are never hidden behind +N.
+  if (card.b.includes('risk')) {
+    pushUnique({
+      id: 'badge-risk',
+      kind: 'badge',
+      badge: 'risk',
+      label: card.riskLabel || BADGE_LABEL.risk,
+    });
+  }
+
+  if (doneCount > 0) {
+    pushUnique({
+      id: 'badge-done',
+      kind: 'done',
+      label: `${doneCount}/${taskTotal} done`,
+    });
+  }
+
+  for (const b of card.b) {
+    if (b === 'risk') continue;
+    pushUnique({
+      id: `badge-${b}`,
+      kind: 'badge',
+      badge: b,
+      label: BADGE_LABEL[b],
+    });
+  }
+
+  if (card.x) {
+    pushUnique({ id: `code-${card.x}`, kind: 'code', label: card.x });
+  }
+
+  for (const f of card.fit) {
+    const label = fit[f];
+    if (!label) continue;
+    pushUnique({ id: `fit-${f}`, kind: 'fit', label });
+  }
+
+  return tags;
+}
 
 export function BadgeChip({ k, riskLabel }: { k: Badge; riskLabel?: string }) {
   const text = k === 'risk' && riskLabel ? riskLabel : BADGE_LABEL[k];
@@ -89,8 +165,8 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
         </p>
       </div>
       <div className="card-actions">
-        <span className={`gradetip ${c.g}`} title={`Tier ${c.g}`}>
-          {c.g}
+        <span className={`gradetip tier-pill ${c.g}`} title={`Tier ${c.g}`}>
+          Tier {c.g}
         </span>
         <button
           type="button"
@@ -100,9 +176,7 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           title={saved ? 'Remove from watchlist' : 'Save to watchlist'}
           onClick={() => onToggleSaved(cardStorageKey(c), cardLegacyStorageKey(c))}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-          </svg>
+          <StarIcon size={14} fill={saved ? 'currentColor' : 'none'} />
         </button>
         <button
           type="button"
@@ -111,11 +185,52 @@ function CardHeader({ card: c, icon, chains, saved, onToggleSaved, onDetails }: 
           aria-label={`Details for ${c.n}`}
           title="Inspect project & tasks"
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          <ChevronRightIcon size={14} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function ProjectChipRow({ tags, riskLabel }: { tags: ProjectTag[]; riskLabel?: string }) {
+  if (tags.length === 0) return null;
+  const firstThreeLen = tags.slice(0, MAX_CARD_CHIPS).reduce((sum, tag) => sum + tag.label.length, 0);
+  const visibleCount = tags.length > 2 && firstThreeLen > 34 ? 2 : MAX_CARD_CHIPS;
+  const visible = tags.slice(0, visibleCount);
+  const overflow = tags.slice(visibleCount);
+
+  return (
+    <div className="badges chip-row">
+      {visible.map(tag => {
+        if (tag.kind === 'badge') {
+          return <BadgeChip key={tag.id} k={tag.badge} riskLabel={riskLabel} />;
+        }
+        if (tag.kind === 'code') {
+          return (
+            <span key={tag.id} className="codechip">
+              {tag.label}
+            </span>
+          );
+        }
+        if (tag.kind === 'done') {
+          return (
+            <span key={tag.id} className="badge badge-done" title="Completed tasks tracked locally">
+              <CheckCircle2Icon size={12} />
+              <span>{tag.label}</span>
+            </span>
+          );
+        }
+        return (
+          <span key={tag.id} className="typetip">
+            {tag.label}
+          </span>
+        );
+      })}
+      {overflow.length > 0 && (
+        <span className="typetip chip-overflow mono" title={overflow.map(t => t.label).join(' · ')}>
+          +{overflow.length}
+        </span>
+      )}
     </div>
   );
 }
@@ -126,7 +241,7 @@ function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Ca
   const href = normalizeExternalUrl(c.url);
 
   return (
-    <div className="best">
+    <div className="best task-preview">
       <div className="best-info">
         <span className="bl">Best task</span>
         <div className="best-title-row">
@@ -136,13 +251,13 @@ function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Ca
         <span className="subs mono">{cost}</span>
       </div>
       {href ? (
-        <a className="btn" href={href} target="_blank" rel="noopener noreferrer">
-          Do it
+        <a className="btn btn-sm btn-tonal" href={href} target="_blank" rel="noopener noreferrer">
+          <span>Open task</span>
           <span className="sr"> — {c.n} task (opens in a new tab)</span>
-          <span aria-hidden="true">↗</span>
+          <ExternalLinkIcon size={13} />
         </a>
       ) : (
-        <button type="button" className="btn btn-subtle" onClick={() => onDetails(c)}>
+        <button type="button" className="btn btn-sm btn-subtle" onClick={() => onDetails(c)}>
           Details
         </button>
       )}
@@ -152,7 +267,7 @@ function CardBestTask({ card: c, onDetails }: { card: Card; onDetails: (card: Ca
 
 function CardScore({ card: c }: { card: Card }) {
   return (
-    <div className="score">
+    <div className="score scorebar-wrap">
       <div className="scorebar" aria-hidden="true">
         <span className={`fill-${c.g}`} style={{ width: `${Math.min(100, Math.max(0, c.sc))}%` }} />
       </div>
@@ -160,16 +275,6 @@ function CardScore({ card: c }: { card: Card }) {
         {c.sc}
         <span className="score-max">/100</span>
       </b>
-      <span className="subs">
-        <span aria-hidden="true">
-          L {c.sub[0]} · V {c.sub[1]}
-          {c.sub[2] != null ? ` · H ${c.sub[2]}` : ''}
-        </span>
-        <span className="sr">
-          Sub-scores: launch {c.sub[0]} of 10, value {c.sub[1]} of 10
-          {c.sub[2] != null ? `, heat ${c.sub[2]} of 10` : ''}
-        </span>
-      </span>
     </div>
   );
 }
@@ -185,17 +290,19 @@ interface Props {
 }
 
 export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onDetails, onCopyBrief }: Props) {
-  const fitLabels = c.fit.map(f => fit[f]).filter(Boolean);
   const icon = c.img ?? '';
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
 
   const tasks = getCardTasks(c);
   const taskPairs = getCardTaskKeyPairs(c, tasks);
   const doneCount = taskPairs.filter(pair => isTaskKeyDone(doneTasks, pair)).length;
-  const showBadges = c.b.length > 0 || Boolean(c.x) || doneCount > 0;
+  const tags = buildProjectTags(c, fit, doneCount, tasks.length);
+  const isRisk = c.b.includes('risk');
+  const safeHeat = Number.isFinite(c.h) && c.h >= 0 ? c.h : 0;
+  const subTitle = `Launch potential ${c.sub[0]}/10, Airdrop value ${c.sub[1]}/10${c.sub[2] != null ? `, Heat ${c.sub[2]}/10` : ''}`;
 
   return (
-    <article className={`cardx${saved ? ' is-saved' : ''}`}>
+    <article className={`cardx project-card${saved ? ' is-saved' : ''}`}>
       <CardHeader
         card={c}
         icon={icon}
@@ -205,59 +312,58 @@ export function ProjectCard({ card: c, fit, saved, doneTasks, onToggleSaved, onD
         onDetails={onDetails}
       />
 
-      {showBadges && (
-        <div className="badges">
-          {c.b.map(k => (
-            <BadgeChip key={k} k={k} riskLabel={c.riskLabel} />
-          ))}
-          {c.x && <span className="codechip">{c.x}</span>}
-          {doneCount > 0 && (
-            <span className="badge badge-done" title="Completed tasks tracked locally">
-              ✓ {doneCount}/{tasks.length} done
-            </span>
-          )}
-        </div>
-      )}
+      <ProjectChipRow tags={tags} riskLabel={c.riskLabel} />
 
-      <div className="meta">
-        <div>
-          Funding
-          <b className="mono">{c.f}</b>
+      <div className="card-bottom project-bottom">
+        <div className="meta project-stats">
+          <div>
+            Funding
+            <b className="mono">{c.f}</b>
+          </div>
+          <div title={`${c.tk} open tasks`}>
+            Open tasks
+            <b className="mono">{c.tk}</b>
+          </div>
+          <div>
+            Heat
+            <b className="mono">{safeHeat.toLocaleString('en-US')}</b>
+          </div>
+          <div>
+            Updated
+            <b className="mono">{c.u === 'today' ? 'Today' : c.u}</b>
+          </div>
         </div>
-        <div>
-          Tasks
-          <b className="mono">{c.tk}</b>
-        </div>
-        <div>
-          Heat
-          <b className="mono">{c.h.toLocaleString('en-US')}</b>
-        </div>
-        <div>
-          Updated
-          <b>{c.u === 'today' ? 'Today' : c.u}</b>
-        </div>
-      </div>
 
-      {fitLabels.length > 0 && (
-        <div className="fit">
-          <span className="lbl">Best for</span>
-          {fitLabels.map(f => (
-            <span key={f} className="typetip">
-              {f}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="card-bottom">
         <CardBestTask card={c} onDetails={onDetails} />
-        <div className="card-bottom-row">
-          <CardScore card={c} />
-          {c.b.includes('risk') ? (
-            <span className="note risk-blocked">Not available for RISK items</span>
+
+        <CardScore card={c} />
+
+        <div className="card-bottom-row project-foot">
+          <span className="subs project-subscores" title={subTitle}>
+            <span aria-hidden="true">
+              Launch {c.sub[0]} · Value {c.sub[1]}
+              {c.sub[2] != null ? ` · Heat ${c.sub[2]}` : ''}
+            </span>
+            <span className="sr">
+              Sub-scores: launch {c.sub[0]} of 10, value {c.sub[1]} of 10
+              {c.sub[2] != null ? `, heat ${c.sub[2]} of 10` : ''}
+            </span>
+          </span>
+
+          {isRisk ? (
+            <span
+              className="status-pill risk-blocked-status"
+              aria-disabled="true"
+              title="Blocked: high risk / agent guardrail"
+              aria-label={`Copy agent brief blocked for ${c.n}: high risk`}
+            >
+              <LockIcon size={13} />
+              <span>Risk blocked</span>
+            </span>
           ) : (
-            <button type="button" className="chip" onClick={() => onCopyBrief(c)}>
-              Copy agent brief
+            <button type="button" className="chip project-copy-btn" onClick={() => onCopyBrief(c)}>
+              <CopyIcon size={13} />
+              <span>Copy agent brief</span>
               <span className="sr"> for {c.n}</span>
             </button>
           )}

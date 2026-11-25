@@ -1,57 +1,160 @@
-import { lazy, Suspense, type RefObject } from 'react';
+import { lazy, Suspense, type ComponentType, type RefObject } from 'react';
 import { TABS } from '../../shared/constants';
 import type { Card, FeedItem, MarketSection, MarketSector, Tge } from '../../shared/types';
 import type { AirdropFiltersState } from '../hooks/useAirdropFilters';
 import type { DropsFiltersState } from '../hooks/useDropsFilters';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { DropsPanel } from './DropsPanel';
+import {
+  CoinsIcon,
+  GitBranchIcon,
+  LayersIcon,
+  PercentIcon,
+  SparklesIcon,
+  TargetIcon,
+  TrendingUpIcon,
+  ZapIcon,
+  type IconProps,
+} from './Icons';
 
 const LazyAirdropPanel = lazy(() => import('./AirdropPanel').then(m => ({ default: m.AirdropPanel })));
 const LazyMarketPanel = lazy(() => import('./MarketPanel').then(m => ({ default: m.MarketPanel })));
 
-export function TabNav({
+const RADAR_IDS = new Set(['drops', 'airdrops']);
+const RADAR_TABS = TABS.filter(t => RADAR_IDS.has(t.id));
+const MARKET_TABS = TABS.filter(t => !RADAR_IDS.has(t.id));
+
+const TAB_ICON: Record<string, ComponentType<IconProps>> = {
+  drops: ZapIcon,
+  airdrops: SparklesIcon,
+  crypto: CoinsIcon,
+  defi: LayersIcon,
+  yields: PercentIcon,
+  predictions: TargetIcon,
+  trending: TrendingUpIcon,
+  github: GitBranchIcon,
+};
+
+interface SidebarNavProps {
+  tab: string;
+  counts: { drops: number; airdrops: number };
+  tabRefs: RefObject<Record<string, HTMLButtonElement | null>>;
+  tabbarRef: RefObject<HTMLElement | null>;
+  onSelectTab: (id: string) => void;
+  onTabKey: (e: React.KeyboardEvent) => void;
+}
+
+function SidebarTabButton({
+  id,
+  label,
+  selected,
+  count,
+  tabRefs,
+  onSelectTab,
+}: {
+  id: string;
+  label: string;
+  selected: boolean;
+  count?: number;
+  tabRefs: RefObject<Record<string, HTMLButtonElement | null>>;
+  onSelectTab: (id: string) => void;
+}) {
+  const Icon = TAB_ICON[id];
+  return (
+    <button
+      type="button"
+      id={`tab-${id}`}
+      role="tab"
+      className="tab"
+      aria-selected={selected}
+      aria-controls={`panel-${id}`}
+      tabIndex={selected ? 0 : -1}
+      ref={el => {
+        tabRefs.current[id] = el;
+      }}
+      onClick={() => onSelectTab(id)}
+    >
+      {Icon && <Icon size={16} className="tab-icon" />}
+      <span className="tab-label">{label}</span>
+      {count !== undefined && count > 0 && <span className="tab-count mono">{count}</span>}
+    </button>
+  );
+}
+
+export function AppSidebarNav({
   tab,
+  counts,
   tabRefs,
   tabbarRef,
   onSelectTab,
   onTabKey,
-}: {
-  tab: string;
-  tabRefs: RefObject<Record<string, HTMLButtonElement | null>>;
-  tabbarRef: RefObject<HTMLDivElement | null>;
-  onSelectTab: (id: string) => void;
-  onTabKey: (e: React.KeyboardEvent) => void;
-}) {
+}: SidebarNavProps) {
   return (
-    <div className="tabbar" ref={tabbarRef}>
-      <nav className="container" aria-label="Dashboard sections">
+    <aside className="app-sidebar tabbar" ref={tabbarRef}>
+      <div className="sidenav-brand">
+        <img
+          className="logo"
+          src={`${import.meta.env.BASE_URL}icon.svg`}
+          alt=""
+          width={34}
+          height={34}
+          decoding="async"
+        />
+        <div className="sidenav-brand-text">
+          <span className="sidenav-brand-name">Web3 Radar</span>
+          <span className="sidenav-brand-sub">Airdrop &amp; Market Intel</span>
+        </div>
+      </div>
+
+      <nav className="sidenav-nav" aria-label="Dashboard sections">
         <div
           role="tablist"
           aria-label="Dashboard sections"
           className="tabstrip"
           onKeyDown={onTabKey}
         >
-          {TABS.map(t => (
-            <button
+          <span className="nav-group-label" role="presentation" aria-hidden="true">
+            RADAR
+          </span>
+          {RADAR_TABS.map(t => (
+            <SidebarTabButton
               key={t.id}
-              type="button"
-              id={`tab-${t.id}`}
-              role="tab"
-              className="tab"
-              aria-selected={t.id === tab}
-              aria-controls={`panel-${t.id}`}
-              tabIndex={t.id === tab ? 0 : -1}
-              ref={el => {
-                tabRefs.current[t.id] = el;
-              }}
-              onClick={() => onSelectTab(t.id)}
-            >
-              {t.label}
-            </button>
+              id={t.id}
+              label={t.label}
+              selected={t.id === tab}
+              count={t.id === 'drops' ? counts.drops : counts.airdrops}
+              tabRefs={tabRefs}
+              onSelectTab={onSelectTab}
+            />
+          ))}
+
+          <span className="nav-group-label" role="presentation" aria-hidden="true">
+            MARKETS
+          </span>
+          {MARKET_TABS.map(t => (
+            <SidebarTabButton
+              key={t.id}
+              id={t.id}
+              label={t.label}
+              selected={t.id === tab}
+              tabRefs={tabRefs}
+              onSelectTab={onSelectTab}
+            />
           ))}
         </div>
       </nav>
-    </div>
+
+      <div className="sidenav-footer" aria-hidden="true">
+        <span className="sidenav-shortcut">
+          <kbd className="kbd-hint">/</kbd>
+          <span>Search</span>
+        </span>
+        <span className="sidenav-shortcut">
+          <kbd className="kbd-hint">↑↓</kbd>
+          <span>Tabs</span>
+        </span>
+      </div>
+    </aside>
   );
 }
 
@@ -90,6 +193,7 @@ interface MainContentProps {
   mountedMarkets: MarketSection[];
   marketsLoading: boolean;
   marketsFailed: boolean;
+  marketSearchRef?: RefObject<HTMLInputElement | null>;
   sectors?: MarketSector[];
 }
 
@@ -102,13 +206,14 @@ export function MainPanels({
   mountedMarkets,
   marketsLoading,
   marketsFailed,
+  marketSearchRef,
   sectors,
 }: MainContentProps) {
   const missingMarketSection =
     tab !== 'drops' && tab !== 'airdrops' && !mountedMarkets.some(s => s.id === tab);
 
   return (
-    <main id="main" ref={mainRef} className="container" tabIndex={-1}>
+    <main id="main" ref={mainRef} className="app-content" tabIndex={-1}>
       <div hidden={tab !== 'drops'}>
         <DropsPanel {...dropsProps} />
       </div>
@@ -145,6 +250,7 @@ export function MainPanels({
               <LazyMarketPanel
                 section={section}
                 sectors={section.id === 'crypto' ? sectors : undefined}
+                searchRef={section.id === tab ? marketSearchRef : undefined}
               />
             </Suspense>
           </ChunkErrorBoundary>
