@@ -339,7 +339,7 @@ describe('prepareFeedLinks', () => {
     expect(botCampaigns[3].label).toContain('?start=beta');
     expect(new Set(botCampaigns.map(l => l.label)).size).toBe(4);
     for (const l of botCampaigns) {
-      expect(l.label.length).toBeLessThanOrEqual(34);
+      expect(l.label.length).toBeLessThanOrEqual(48);
     }
 
     const channelPosts = prepareFeedLinks(
@@ -434,7 +434,7 @@ describe('prepareFeedLinks', () => {
     ]);
     expect(new Set(shortSlugs.map(l => l.label)).size).toBe(2);
     for (const l of shortSlugs) {
-      expect(l.label.length).toBeLessThanOrEqual(34);
+      expect(l.label.length).toBeLessThanOrEqual(48);
     }
 
     const sharedPrefixSlugs = prepareFeedLinks(
@@ -455,7 +455,7 @@ describe('prepareFeedLinks', () => {
     expect(sharedPrefixSlugs[1].label).toContain('42');
     expect(new Set(sharedPrefixSlugs.map(l => l.label)).size).toBe(2);
     for (const l of sharedPrefixSlugs) {
-      expect(l.label.length).toBeLessThanOrEqual(34);
+      expect(l.label.length).toBeLessThanOrEqual(48);
     }
   });
 
@@ -480,7 +480,7 @@ describe('prepareFeedLinks', () => {
     expect(links.map(l => l.url)).toEqual(sixUrls);
     expect(new Set(links.map(l => l.label.toLowerCase())).size).toBe(6);
     for (const l of links) {
-      expect(l.label.length).toBeLessThanOrEqual(34);
+      expect(l.label.length).toBeLessThanOrEqual(48);
     }
 
     // Secondary query-parameter differences on identical paths also stay distinct without dropping links.
@@ -499,8 +499,45 @@ describe('prepareFeedLinks', () => {
     expect(qLinks.map(l => l.url)).toEqual(queryUrls);
     expect(new Set(qLinks.map(l => l.label.toLowerCase())).size).toBe(3);
     for (const l of qLinks) {
-      expect(l.label.length).toBeLessThanOrEqual(34);
+      expect(l.label.length).toBeLessThanOrEqual(48);
     }
+  });
+
+  test('avoids mid-word center-truncation on same-host LayerZero and long hyphenated slugs', () => {
+    const layerzero = prepareFeedLinks(
+      makeItem({
+        domain: 'layerzero.network',
+        links: [
+          { url: 'https://layerzero.network/blog/introducing-atlas', known: true },
+          { url: 'https://layerzero.network/blog/introducing-atlas-next', known: true },
+        ],
+      }),
+      { max: 4 },
+    );
+    expect(layerzero.map(l => l.label)).toEqual([
+      'layerzero.network/blog/introducing-atlas',
+      'layerzero.network/blog/introducing-atlas-next',
+    ]);
+
+    const longSlugs = prepareFeedLinks(
+      makeItem({
+        domain: 'layerzero.network',
+        links: [
+          { url: 'https://layerzero.network/blog/introducing-atlas-interoperability-mainnet-launch', known: true },
+          { url: 'https://layerzero.network/blog/introducing-atlas-interoperability-mainnet-next', known: true },
+        ],
+      }),
+      { max: 4 },
+    );
+    expect(new Set(longSlugs.map(l => l.label)).size).toBe(2);
+    for (const l of longSlugs) {
+      expect(l.label.length).toBeLessThanOrEqual(48);
+      expect(l.label).not.toMatch(/\/…[a-z]{1,4}-/);
+      expect(l.label).not.toContain('troducing');
+      expect(l.label).not.toContain('ucing');
+    }
+    expect(longSlugs[0].label).toContain('mainnet-launch');
+    expect(longSlugs[1].label).toContain('mainnet-next');
   });
 });
 
@@ -794,6 +831,71 @@ describe('formatFeedSummary', () => {
     expect(formatFeedSummary('Verify the official source').lead).toBe('Verify the official source');
     expect(formatFeedSummary('Complete testnet tasks to register').lead).toBe('Complete testnet tasks to register');
     expect(formatFeedSummary('Open the verified link').lead).toBe('Open the verified link');
+  });
+
+  test('repairs live Worker mid-word truncated summaries, unclosed parens, and dangling connector chains', () => {
+    expect(
+      formatFeedSummary('Build and deploy autonomous workflows with AI agen…').lead,
+    ).toBe('Build and deploy autonomous workflows with AI…');
+
+    expect(
+      formatFeedSummary('Earn weekly staking points, leaderboard bonuses, and a…').lead,
+    ).toBe('Earn weekly staking points, leaderboard bonuses…');
+
+    expect(
+      formatFeedSummary(
+        'Elysium x Opensea 8,888 Commemorative NFTs Eligibility: Held more than 10,000 KNTQ equivalent across HyperCore and HyperEVM, including s…',
+      ).lead,
+    ).toBe(
+      'Elysium x Opensea 8,888 Commemorative NFTs Eligibility: Held more than 10,000 KNTQ equivalent across HyperCore and HyperEVM…',
+    );
+
+    expect(
+      formatFeedSummary('Share creator campaigns across social channels (TikTok, Instagram…').lead,
+    ).toBe('Share creator campaigns across social channels…');
+
+    expect(
+      formatFeedSummary('The migration tool is now live on The Huddle. As part …').lead,
+    ).toBe('The migration tool is now live on The Huddle.');
+
+    // Snaps short orphan fragments after a completed sentence cleanly back to the sentence boundary.
+    expect(
+      formatFeedSummary(
+        'Flop will launch the Flop Network testnet on Nov 24 at 07:00 UTC. AI agen…',
+      ).lead,
+    ).toBe('Flop will launch the Flop Network testnet on Nov 24 at 07:00 UTC.');
+
+    expect(
+      formatFeedSummary(
+        'Nick Tomaino: Lessons Learned from 15 Years in Crypto > Lead with curiosity. Und…',
+      ).lead,
+    ).toBe('Nick Tomaino: Lessons Learned from 15 Years in Crypto > Lead with curiosity.');
+
+    // Drops ellipsis-only truncated tail bullets cleanly.
+    const rollup = formatFeedSummary(
+      'November 21st Rollup • Liv Jenks: Manufacture vs. Construct • a16z: Why Do Math When AI Can? • Thinki…',
+    );
+    expect(rollup.bullets).toEqual([
+      'Liv Jenks: Manufacture vs. Construct',
+      'a16z: Why Do Math When AI Can?',
+    ]);
+  });
+
+  test('cleans stray FE0F variation selectors and trailing dangling colons on extracted bullet steps', () => {
+    const sepolia = formatFeedSummary(
+      'LayerZero Testnet Guide · \uFE0F Get ETH Sepolia: · Bridge to L2\uFE0F: · Done',
+    );
+    expect(sepolia.lead).toBe('LayerZero Testnet Guide');
+    expect(sepolia.bullets).toEqual(['Get ETH Sepolia', 'Bridge to L2']);
+
+    const inline = formatFeedSummary(
+      'ZXOXO Signal Link: ➖ \uFE0F Connect X ➖ Get ETH Sepolia: ➖ Go to Mining : ✅ Done',
+    );
+    expect(inline.bullets).toEqual(['Connect X', 'Get ETH Sepolia', 'Go to Mining']);
+    for (const step of inline.bullets) {
+      expect(step).not.toContain('\uFE0F');
+      expect(step).not.toMatch(/:\s*$/);
+    }
   });
 });
 

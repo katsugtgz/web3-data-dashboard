@@ -1,8 +1,10 @@
 import type { AirdropFeed, Badge, Card, CardTask, Grade, Tge } from '../../../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT, fmtIsoDate, fmtPct, fmtUsd } from '../lib/format';
+import { safeHttpsUrl } from '../lib/url';
 import {
   buildSurfIndex,
   ingestPostIntoCluster,
+  normalizeProjectKey,
   type IngestPostResult,
   type SurfIndex,
 } from '../normalize/cluster';
@@ -16,6 +18,7 @@ import {
 } from '../normalize/domains';
 import { stripOrTranslateCjk } from '../normalize/i18n';
 import { extractTicker, parseDropPost, type ParseContext } from '../normalize/parse';
+import { isStopName, MAJOR_TICKERS } from '../normalize/text';
 import { loadKnownDomains } from '../safety';
 import { getSeedSourceById, type SourceConfig } from './registry';
 import { decodeHtmlEntities } from './telegram';
@@ -324,6 +327,56 @@ interface WpCalendarEvent {
   content?: { rendered?: string };
   excerpt?: { rendered?: string };
   link?: string;
+  jetpack_featured_media_url?: string;
+  yoast_head_json?: {
+    og_image?: { url?: string }[];
+  };
+  _embedded?: {
+    'wp:featuredmedia'?: { source_url?: string }[];
+  };
+}
+
+const FEED_NON_TICKER_PARENS = new Set([
+  'TGE', 'DEX', 'CEX', 'NFT', 'NFTS', 'V1', 'V2', 'V3', 'L1', 'L2', 'TBA', 'LIVE', 'NEW', 'S1', 'S2', 'S3', 'AI', 'DAO', 'DEFI', 'KYC',
+]);
+
+function extractParenthesizedTicker(text: string): string | undefined {
+  for (const m of text.matchAll(/\(\s*\$?([A-Z][A-Z0-9]{1,9})\s*\)/g)) {
+    const sym = m[1];
+    if (!sym || MAJOR_TICKERS.has(sym) || isStopName(sym) || FEED_NON_TICKER_PARENS.has(sym)) continue;
+    return sym;
+  }
+  return undefined;
+}
+
+const IGNORED_IMG_URL_RE = /(?:\/images\/core\/emoji\/|gravatar\.com|\/1x1\.|\/pixel\.|\/spacer\.)/i;
+
+function extractFirstHttpsImgFromHtml(html: string): string | null {
+  if (!html) return null;
+  const tags = html.match(/<img\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const rawSrc = extractTagAttr(tag, 'src');
+    if (!rawSrc) continue;
+    const decoded = decodeFeedHtmlEntities(rawSrc).trim();
+    if (!decoded || IGNORED_IMG_URL_RE.test(decoded)) continue;
+    const safe = safeHttpsUrl(decoded);
+    if (safe) return safe;
+  }
+  return null;
+}
+
+function extractWpCalendarLogo(item: WpCalendarEvent, bodyHtml: string): string | null {
+  const candidates = [
+    item.jetpack_featured_media_url,
+    item._embedded?.['wp:featuredmedia']?.[0]?.source_url,
+    item.yoast_head_json?.og_image?.[0]?.url,
+  ];
+  for (const raw of candidates) {
+    if (!raw || IGNORED_IMG_URL_RE.test(raw)) continue;
+    const safe = safeHttpsUrl(raw);
+    if (safe) return safe;
+  }
+  return extractFirstHttpsImgFromHtml(bodyHtml);
 }
 
 function parseWpDateMs(ev: WpCalendarEvent): number {
@@ -394,7 +447,8 @@ export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): 
     const bodyHtml = item.content?.rendered ?? item.excerpt?.rendered ?? '';
     const bodyText = htmlToPlainText(bodyHtml);
     const combined = `${title} ${bodyText}`;
-    const ticker = extractTicker(combined) ?? '';
+    const ticker = extractTicker(combined) ?? extractParenthesizedTicker(title) ?? '';
+    const logo = extractWpCalendarLogo(item, bodyHtml);
     const dateMs = parseWpDateMs(item);
     const hrefs = extractHrefsFromHtml(bodyHtml, false);
     const externalHref = hrefs.find(u => {
@@ -408,6 +462,7 @@ export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): 
       t: ticker,
       s: inferCalendarStatus(combined),
       d: Number.isFinite(dateMs) ? fmtIsoDate(dateMs) : 'TBA',
+      ...(logo ? { logo } : {}),
       url: externalHref ?? fallbackLink,
       source: 'AirdropAlert',
     });
@@ -531,6 +586,8 @@ interface PendleMarket {
   name?: string;
   address?: string;
   protocol?: string;
+  proIcon?: string;
+  icon?: string;
   chainId?: number;
   expiry?: string;
   categoryIds?: string[];
@@ -559,6 +616,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
     string,
     {
       name: string;
+      icon: string;
       chains: Set<string>;
       liquidity: number;
       isNew: boolean;
@@ -588,18 +646,22 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
     const marketName = stripOrTranslateCjk(m.name ?? protoName) || protoName;
     const expLabel = m.expiry ? fmtIsoDate(m.expiry) : 'Active';
     const apySuffix = impliedApy != null && Number.isFinite(impliedApy) ? ` · ${fmtPct(impliedApy).replace(/^\+/, '')} implied APY` : '';
+    const marketIcon = safeHttpsUrl(m.proIcon ?? m.icon) ?? '';
 
     const key = protoName.toLowerCase();
     let bucket = grouped.get(key);
     if (!bucket) {
       bucket = {
         name: protoName,
+        icon: marketIcon,
         chains: new Set<string>(),
         liquidity: 0,
         isNew: false,
         markets: [],
       };
       grouped.set(key, bucket);
+    } else if (!bucket.icon && marketIcon) {
+      bucket.icon = marketIcon;
     }
     bucket.chains.add(chainName);
     bucket.liquidity += liq;
@@ -652,7 +714,7 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
         g: grade,
         b: badges,
         x: null,
-        img: '',
+        img: g.icon,
         f: '—',
         raiseNum: 0,
         tk: `${tasks.length}/${tasks.length}`,
@@ -684,12 +746,21 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
   };
 }
 
+interface MerklToken {
+  symbol?: string;
+  icon?: string;
+}
+
 interface MerklOpportunity {
   id?: string;
   identifier?: string;
   name?: string;
-  chain?: { name?: string };
+  chain?: { name?: string; icon?: string };
   protocol?: { name?: string; icon?: string };
+  tokens?: MerklToken[];
+  rewardsRecord?: {
+    breakdowns?: { token?: MerklToken }[];
+  };
   action?: string;
   status?: string;
   tvl?: number;
@@ -706,6 +777,45 @@ function mapMerklAction(action?: string): string {
   return 'liquidity';
 }
 
+function extractMerklTokenFallbackIcon(op: MerklOpportunity): string {
+  const tokens = op.tokens ?? [];
+  for (const tok of tokens) {
+    const sym = tok?.symbol?.trim().toUpperCase();
+    if (sym && !MAJOR_TICKERS.has(sym)) {
+      const icon = safeHttpsUrl(tok.icon);
+      if (icon) return icon;
+    }
+  }
+  for (const tok of tokens) {
+    const icon = safeHttpsUrl(tok?.icon);
+    if (icon) return icon;
+  }
+  for (const b of op.rewardsRecord?.breakdowns ?? []) {
+    const icon = safeHttpsUrl(b?.token?.icon);
+    if (icon) return icon;
+  }
+  return '';
+}
+
+function extractMerklProtocolTicker(op: MerklOpportunity, protoName: string): string | null {
+  const protoKey = normalizeProjectKey(protoName);
+  if (protoKey.length < 3) return null;
+  const candidates: MerklToken[] = [
+    ...(op.rewardsRecord?.breakdowns?.map(b => b?.token).filter((t): t is MerklToken => Boolean(t)) ?? []),
+    ...(op.tokens ?? []),
+  ];
+  for (const tok of candidates) {
+    const sym = stripOrTranslateCjk(tok?.symbol ?? '').trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9]{2,9}$/.test(sym)) continue;
+    if (MAJOR_TICKERS.has(sym) || isStopName(sym)) continue;
+    const symLower = sym.toLowerCase();
+    if (protoKey === symLower || protoKey.startsWith(symLower)) {
+      return sym;
+    }
+  }
+  return null;
+}
+
 export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): AirdropFeed {
   if (!Array.isArray(raw)) {
     return { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: nowMs };
@@ -716,6 +826,8 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
     {
       name: string;
       icon: string;
+      hasProtocolIcon: boolean;
+      ticker: string | null;
       chains: Set<string>;
       tvl: number;
       maxApr: number;
@@ -739,14 +851,17 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
     const apr = typeof op.apr === 'number' && Number.isFinite(op.apr) ? op.apr : null;
     const type = mapMerklAction(op.action);
     const key = protoName.toLowerCase();
+    const protoIcon = safeHttpsUrl(op.protocol?.icon) ?? '';
+    const fallbackTokenIcon = protoIcon ? '' : extractMerklTokenFallbackIcon(op);
+    const matchedTicker = extractMerklProtocolTicker(op, protoName);
 
     let bucket = grouped.get(key);
     if (!bucket) {
-      const cleanedIcon = op.protocol?.icon ? cleanUrl(op.protocol.icon) : null;
-      const icon = cleanedIcon && cleanedIcon.startsWith('https://') ? cleanedIcon : '';
       bucket = {
         name: protoName,
-        icon,
+        icon: protoIcon || fallbackTokenIcon,
+        hasProtocolIcon: Boolean(protoIcon),
+        ticker: matchedTicker,
         chains: new Set<string>(),
         tvl: 0,
         maxApr: 0,
@@ -755,6 +870,16 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         primaryUrl: url,
       };
       grouped.set(key, bucket);
+    } else {
+      if (protoIcon && !bucket.hasProtocolIcon) {
+        bucket.icon = protoIcon;
+        bucket.hasProtocolIcon = true;
+      } else if (!bucket.icon && fallbackTokenIcon) {
+        bucket.icon = fallbackTokenIcon;
+      }
+      if (!bucket.ticker && matchedTicker) {
+        bucket.ticker = matchedTicker;
+      }
     }
     bucket.chains.add(chainName);
     bucket.tvl += tvl;
@@ -798,7 +923,7 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         id: cardId,
         chain: chains[0],
         chains,
-        t: null,
+        t: g.ticker,
         g: grade,
         b: ['live'],
         x: null,

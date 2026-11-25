@@ -32,8 +32,9 @@ export function fmtPrice(price: number): string {
 
 export function fmtPct(pct: number | null | undefined): string {
   if (typeof pct !== 'number' || !Number.isFinite(pct)) return '—';
-  const sign = pct > 0 ? '+' : '';
-  return `${sign}${pct.toFixed(2)}%`;
+  const normalized = Math.abs(pct) < 0.005 ? 0 : pct;
+  const sign = normalized > 0 ? '+' : '';
+  return `${sign}${normalized.toFixed(2)}%`;
 }
 
 export function fmtInt(n: number | null | undefined): string {

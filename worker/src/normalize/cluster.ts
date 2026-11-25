@@ -4,14 +4,17 @@ import type {
   FeedResponse,
   FeedSourceRef,
   Grade,
+  MarketSection,
   RiskLevel,
   SourceHealth,
   TaskType,
 } from '../../../shared/types';
 import { sha1Hex } from '../lib/hash';
+import { safeHttpsUrl } from '../lib/url';
 import { evaluateSafety, getTrustedSurfCardDomain, reconcileSafetyReasons } from '../safety';
 import {
   getRegistrableDomain,
+  isCuratedAggregatorDomain,
   isNewsDomain,
   isPlatformDomain,
   selectFeedLinks,
@@ -80,24 +83,156 @@ const LEGACY_BLOCKED_DOMAINS = new Set<string>([
   'ranked.plus',
 ]);
 
+const UNTRUSTED_SHEET_SOURCES = new Set<string>(['asso7878', 'arndxt']);
+
+function isUntrustedSheetSource(source?: string): boolean {
+  return Boolean(source && UNTRUSTED_SHEET_SOURCES.has(source.trim().toLowerCase()));
+}
+
 export interface SurfIndex {
   byDomain: Map<string, SurfMatch>;
   byTicker: Map<string, SurfMatch>;
+  byName?: Map<string, SurfMatch>;
 }
 
 export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   const byDomain = new Map<string, SurfMatch>();
   const byTicker = new Map<string, SurfMatch>();
-  if (!feed) return { byDomain, byTicker };
+  const byName = new Map<string, SurfMatch>();
+  if (!feed) return { byDomain, byTicker, byName };
 
   for (const card of feed.cards) {
     if (card.b?.includes('risk')) continue;
-    const match: SurfMatch = { name: card.n, tier: card.g, cardRank: card.r };
-    if (card.t) byTicker.set(card.t.toUpperCase(), match);
+    if (isUntrustedSheetSource(card.source)) continue;
+    const logo = safeHttpsUrl(card.img) ?? undefined;
+    const match: SurfMatch = {
+      name: card.n,
+      tier: card.g,
+      cardRank: card.r,
+      ...(logo ? { logo } : {}),
+    };
+    if (card.t) {
+      const upper = card.t.toUpperCase();
+      if (!byTicker.has(upper)) byTicker.set(upper, match);
+    }
     const dom = getTrustedSurfCardDomain(card);
     if (dom && !byDomain.has(dom)) byDomain.set(dom, match);
+    const nameKey = normalizeProjectKey(card.n);
+    if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, match);
   }
-  return { byDomain, byTicker };
+  return { byDomain, byTicker, byName };
+}
+
+export interface FeedLogoIndex {
+  byDomain: Map<string, string>;
+  byTicker: Map<string, string>;
+  byName: Map<string, string>;
+}
+
+/**
+ * Builds a lightweight in-memory HTTPS logo lookup from trusted Surf/curated
+ * airdrop cards, TGE entries, and DefiLlama protocols. Strictly excludes risk
+ * cards, editable public sheets (ASSO7878 / arndxt), and non-HTTPS URLs.
+ */
+export function buildFeedLogoIndex(
+  airdrops?: AirdropFeed | null,
+  defiSection?: MarketSection | null,
+): FeedLogoIndex {
+  const byDomain = new Map<string, string>();
+  const byTicker = new Map<string, string>();
+  const byName = new Map<string, string>();
+
+  if (airdrops) {
+    for (const card of airdrops.cards ?? []) {
+      if (card.b?.includes('risk') || isUntrustedSheetSource(card.source)) continue;
+      const logo = safeHttpsUrl(card.img);
+      if (!logo) continue;
+      const dom = getTrustedSurfCardDomain(card);
+      if (dom && !byDomain.has(dom)) byDomain.set(dom, logo);
+      if (card.t) {
+        const upper = card.t.trim().toUpperCase();
+        if (upper && !MAJOR_TICKERS.has(upper) && !byTicker.has(upper)) {
+          byTicker.set(upper, logo);
+        }
+      }
+      const nameKey = normalizeProjectKey(card.n);
+      if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+    }
+
+    for (const tge of airdrops.tge ?? []) {
+      if (isUntrustedSheetSource(tge.source)) continue;
+      const logo = safeHttpsUrl(tge.logo);
+      if (!logo) continue;
+      if (tge.url) {
+        const dom = getRegistrableDomain(tge.url)?.toLowerCase();
+        if (
+          dom &&
+          !isPlatformDomain(dom) &&
+          !isCuratedAggregatorDomain(dom, { n: tge.n, source: tge.source }) &&
+          !byDomain.has(dom)
+        ) {
+          byDomain.set(dom, logo);
+        }
+      }
+      if (tge.t) {
+        const upper = tge.t.trim().toUpperCase();
+        if (upper && !MAJOR_TICKERS.has(upper) && !byTicker.has(upper)) {
+          byTicker.set(upper, logo);
+        }
+      }
+      const nameKey = normalizeProjectKey(tge.n);
+      if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+    }
+  }
+
+  if (defiSection) {
+    for (const row of defiSection.rows ?? []) {
+      const logo = safeHttpsUrl(row.icon);
+      if (!logo) continue;
+      if (row.href) {
+        const dom = getRegistrableDomain(row.href)?.toLowerCase();
+        if (dom && !isPlatformDomain(dom) && !byDomain.has(dom)) {
+          byDomain.set(dom, logo);
+        }
+      }
+      const label = row.cells?.[0];
+      if (label) {
+        const nameKey = normalizeProjectKey(label);
+        if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+      }
+    }
+  }
+
+  return { byDomain, byTicker, byName };
+}
+
+/**
+ * Resolves a trusted HTTPS project logo for a Live Drops item. Suppresses
+ * logos on `risk` clusters and blocks ticker fallback when a distinct domain
+ * is already attached so impersonators never display official project art.
+ */
+export function resolveFeedItemLogo(
+  item: { project: string; domain?: string; ticker?: string; riskLevel?: RiskLevel },
+  logoIndex?: FeedLogoIndex | null,
+): string | undefined {
+  if (!logoIndex || item.riskLevel === 'risk') return undefined;
+  if (item.domain) {
+    const byDom = logoIndex.byDomain.get(item.domain.toLowerCase());
+    if (byDom) return byDom;
+  }
+  const nameKey = normalizeProjectKey(item.project);
+  if (nameKey.length >= 3 && nameKey !== 'web3project' && !isStopName(item.project)) {
+    const byName = logoIndex.byName.get(nameKey);
+    if (byName) return byName;
+  }
+  if (!item.domain && item.ticker) {
+    const upper = item.ticker.toUpperCase();
+    if (!MAJOR_TICKERS.has(upper)) {
+      const byTick = logoIndex.byTicker.get(upper);
+      if (byTick) return byTick;
+    }
+  }
+  return undefined;
 }
 
 export function normalizeProjectKey(project: string): string {
@@ -971,6 +1106,8 @@ export interface FeedQueryOptions {
   cursor?: string;
   /** Content-derived payload timestamp (excluded from the ETag digest). */
   contentTs?: number;
+  /** Optional zero-migration logo lookup built from stored Surf/curated/DeFi snapshots. */
+  logoIndex?: FeedLogoIndex | null;
 }
 
 interface FeedCursor {
@@ -1068,9 +1205,9 @@ function polishLegacyRuleSummary(
   if (!cleaned || detectNonEnglishLatin(cleaned)) {
     const tasksText = taskTypes.join(', ');
     const chainsText = chains.length > 0 ? ` on ${chains.join(', ')}` : '';
-    return truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`, 195);
+    return truncateAtWordBoundary(`${safeProject}: ${tasksText}${chainsText}`);
   }
-  return truncateAtWordBoundary(cleaned, 195);
+  return truncateAtWordBoundary(cleaned);
 }
 
 export async function queryFeed(
@@ -1340,6 +1477,11 @@ export async function queryFeed(
       };
       if (c.ticker && !MAJOR_TICKERS.has(c.ticker.toUpperCase())) item.ticker = c.ticker;
       if (cleanDomain) item.domain = cleanDomain;
+      const logo = resolveFeedItemLogo(
+        { project, domain: cleanDomain, ticker: item.ticker, riskLevel: reconciledRisk.level },
+        opts.logoIndex,
+      );
+      if (logo) item.logo = logo;
       if (c.surf_tier || c.surf_rank != null) {
         item.surf = {
           tier: c.surf_tier ?? undefined,

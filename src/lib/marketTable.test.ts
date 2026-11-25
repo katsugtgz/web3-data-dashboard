@@ -1,6 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import type { MarketRow } from '../../shared/types';
-import { classifyDeltaCell, detectNumericColumns } from './marketTable';
+import {
+  classifyDeltaCell,
+  detectNumericColumns,
+  extractYieldPoolTicker,
+  formatDeltaCell,
+  formatProtocolSlugLabel,
+  getLanguageVisual,
+  parseChainCell,
+  parseTrendingEntityCell,
+  resolveColumnKind,
+  resolveEntityCellMeta,
+  splitEntityLabel,
+  splitGithubRepo,
+} from './marketTable';
 
 function row(cells: string[], sortValues?: (string | number | null)[]): MarketRow {
   return sortValues ? { cells, sortValues } : { cells };
@@ -123,5 +136,275 @@ describe('classifyDeltaCell', () => {
     expect(classifyDeltaCell('+10% bonus')).toEqual({ tone: 'neutral', isPercentOrSigned: false });
     expect(classifyDeltaCell('-2026-01-01')).toEqual({ tone: 'neutral', isPercentOrSigned: false });
     expect(classifyDeltaCell('100% legit')).toEqual({ tone: 'neutral', isPercentOrSigned: false });
+  });
+});
+
+describe('formatDeltaCell', () => {
+  test('normalizes signed zero percentages from live worker payloads', () => {
+    expect(formatDeltaCell('-0.00%')).toBe('0.00%');
+    expect(formatDeltaCell('+0.00%')).toBe('0.00%');
+    expect(formatDeltaCell('\u22120.00%')).toBe('0.00%');
+    expect(formatDeltaCell('-0%')).toBe('0%');
+    expect(formatDeltaCell(' -0.0% ')).toBe('0.0%');
+  });
+
+  test('preserves non-zero deltas and plain values unchanged', () => {
+    expect(formatDeltaCell('+4.61%')).toBe('+4.61%');
+    expect(formatDeltaCell('-0.02%')).toBe('-0.02%');
+    expect(formatDeltaCell('0.00%')).toBe('0.00%');
+    expect(formatDeltaCell('$59,183')).toBe('$59,183');
+    expect(formatDeltaCell('—')).toBe('—');
+  });
+});
+
+describe('splitEntityLabel', () => {
+  test('extracts CoinGecko and CoinPaprika names and tickers including 1-letter and nested parens', () => {
+    expect(splitEntityLabel('Bitcoin (BTC)', 'crypto')).toEqual({ name: 'Bitcoin', ticker: 'BTC' });
+    expect(splitEntityLabel('MemeCore (M)', 'crypto')).toEqual({ name: 'MemeCore', ticker: 'M' });
+    expect(splitEntityLabel('United Stables (U)', 'crypto')).toEqual({ name: 'United Stables', ticker: 'U' });
+    expect(splitEntityLabel('Spiko Amundi Overnight Swap Fund (EUR) (EURSAFO)', 'crypto')).toEqual({
+      name: 'Spiko Amundi Overnight Swap Fund (EUR)',
+      ticker: 'EURSAFO',
+    });
+    expect(splitEntityLabel('BNB (BNB)', 'crypto')).toEqual({ name: 'BNB', ticker: 'BNB' });
+  });
+
+  test('handles Binance Vision bare ticker format on crypto section', () => {
+    expect(splitEntityLabel('BTC', 'crypto')).toEqual({ name: 'Bitcoin', ticker: 'BTC' });
+    expect(splitEntityLabel('ETH', 'crypto')).toEqual({ name: 'Ethereum', ticker: 'ETH' });
+    expect(splitEntityLabel('CUSTOMTOKEN', 'crypto')).toEqual({ name: 'CUSTOMTOKEN', ticker: 'CUSTOMTOKEN' });
+  });
+
+  test('does not treat version or currency qualifiers as tickers', () => {
+    expect(splitEntityLabel('Uniswap (V3)', 'defi')).toEqual({ name: 'Uniswap (V3)', ticker: null });
+    expect(splitEntityLabel('Fund (EUR)', 'defi')).toEqual({ name: 'Fund (EUR)', ticker: null });
+    expect(splitEntityLabel('LayerZero V2', 'defi')).toEqual({ name: 'LayerZero V2', ticker: null });
+  });
+});
+
+describe('extractYieldPoolTicker', () => {
+  test('extracts primary token ticker from single-asset and multi-asset pool symbols', () => {
+    expect(extractYieldPoolTicker('STETH')).toBe('STETH');
+    expect(extractYieldPoolTicker('WBETH')).toBe('WBETH');
+    expect(extractYieldPoolTicker('USDC-ETH')).toBe('USDC');
+    expect(extractYieldPoolTicker('WETH/USDT')).toBe('WETH');
+    expect(extractYieldPoolTicker('GROVE-STEAKUSDC')).toBe('GROVE');
+    expect(extractYieldPoolTicker('   ')).toBeNull();
+  });
+});
+
+describe('formatProtocolSlugLabel', () => {
+  test('formats DefiLlama raw lowercase protocol slugs into readable brand names', () => {
+    expect(formatProtocolSlugLabel('lido')).toBe('Lido');
+    expect(formatProtocolSlugLabel('binance-staked-eth')).toBe('Binance Staked ETH');
+    expect(formatProtocolSlugLabel('ether.fi-stake')).toBe('Ether.fi Stake');
+    expect(formatProtocolSlugLabel('aave-v3')).toBe('Aave V3');
+    expect(formatProtocolSlugLabel('morpho-blue')).toBe('Morpho Blue');
+    expect(formatProtocolSlugLabel('sparklend')).toBe('SparkLend');
+    expect(formatProtocolSlugLabel('ethena-usde')).toBe('Ethena USDe');
+    expect(formatProtocolSlugLabel('blackrock-buidl')).toBe('BlackRock BUIDL');
+    expect(formatProtocolSlugLabel('ondo-yield-assets')).toBe('Ondo Yield Assets');
+    expect(formatProtocolSlugLabel('justlend-v1')).toBe('JustLend V1');
+    expect(formatProtocolSlugLabel('kinetiq-khype')).toBe('Kinetiq kHYPE');
+    expect(formatProtocolSlugLabel('meth-protocol')).toBe('mETH Protocol');
+    expect(formatProtocolSlugLabel('usual-usd0')).toBe('Usual USD0');
+    expect(formatProtocolSlugLabel('circle-usyc')).toBe('Circle USYC');
+    expect(formatProtocolSlugLabel('invesco-ustb')).toBe('Invesco USTB');
+    expect(formatProtocolSlugLabel('binance-staked-sol')).toBe('Binance Staked SOL');
+    expect(formatProtocolSlugLabel('usd-ai')).toBe('USD AI');
+  });
+
+  test('preserves already formatted names and handles empty/placeholders', () => {
+    expect(formatProtocolSlugLabel('Aave V3')).toBe('Aave V3');
+    expect(formatProtocolSlugLabel('LayerZero V2')).toBe('LayerZero V2');
+    expect(formatProtocolSlugLabel('—')).toBe('—');
+    expect(formatProtocolSlugLabel('')).toBe('—');
+  });
+});
+
+describe('parseTrendingEntityCell', () => {
+  test('splits short address and strips live-worker 42-char mid-word stubs and dangling connectors', () => {
+    expect(parseTrendingEntityCell('npz2Fh…pump · The meme comes from Block’s Dessa announce')).toEqual({
+      shortAddr: 'npz2Fh…pump',
+      description: 'The meme comes from Block’s Dessa…',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('3N6Mp8…pump · A frog, a stone ₿, and a mountain with no ')).toEqual({
+      shortAddr: '3N6Mp8…pump',
+      description: 'A frog, a stone ₿, and a mountain…',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('DtcicP…pump · Someone asked AI to build a game the entir')).toEqual({
+      shortAddr: 'DtcicP…pump',
+      description: 'Someone asked AI to build a game…',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('FVzqGq…pump · Horse doge on Solana, paired to USDC becau')).toEqual({
+      shortAddr: 'FVzqGq…pump',
+      description: 'Horse doge on Solana, paired to USDC…',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('6NPRWp…pump · $LALA is the meme token of Tequi-la-la, an')).toEqual({
+      shortAddr: '6NPRWp…pump',
+      description: '$LALA is the meme token of Tequi-la-la…',
+      ticker: 'LALA',
+    });
+    expect(parseTrendingEntityCell('DTvEhH…Q4fy · Grand Theft Lotto ($GTL) is a lottery prot')).toEqual({
+      shortAddr: 'DTvEhH…Q4fy',
+      description: 'Grand Theft Lotto ($GTL) is a lottery…',
+      ticker: 'GTL',
+    });
+    expect(parseTrendingEntityCell('FJKt1L…pump · Maya The Samoyed - $MAYA Born in Germany. ')).toEqual({
+      shortAddr: 'FJKt1L…pump',
+      description: 'Maya The Samoyed - $MAYA Born in Germany.',
+      ticker: 'MAYA',
+    });
+    expect(parseTrendingEntityCell('0x493D…bBA1 · I am my penguin and my penguin is me. · *R')).toEqual({
+      shortAddr: '0x493D…bBA1',
+      description: 'I am my penguin and my penguin is me.',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('0x493D…bBA1 · I am my penguin and my penguin is me. ·…')).toEqual({
+      shortAddr: '0x493D…bBA1',
+      description: 'I am my penguin and my penguin is me.',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('5yK1F7…pump · The goat variant of Doge on Solana. CTO by')).toEqual({
+      shortAddr: '5yK1F7…pump',
+      description: 'The goat variant of Doge on Solana.',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('HsprHx…pump · The most anticipated game in history. One ')).toEqual({
+      shortAddr: 'HsprHx…pump',
+      description: 'The most anticipated game in history.',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('0x1234…abcd · Build fast swaps on Base • | *…')).toEqual({
+      shortAddr: '0x1234…abcd',
+      description: 'Build fast swaps on Base…',
+      ticker: null,
+    });
+  });
+
+  test('handles address-only rows, clean short descriptions, newlines, and new-worker 96-char descriptions', () => {
+    expect(parseTrendingEntityCell('GteMEC…pump')).toEqual({
+      shortAddr: 'GteMEC…pump',
+      description: null,
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('EwUVBp…pump · The official Christmas coin for @Pumpfun')).toEqual({
+      shortAddr: 'EwUVBp…pump',
+      description: 'The official Christmas coin for @Pumpfun',
+      ticker: null,
+    });
+    expect(parseTrendingEntityCell('TiMSdJ…JXNw · return to tradition\n\nOG Raydium launch.')).toEqual({
+      shortAddr: 'TiMSdJ…JXNw',
+      description: 'return to tradition OG Raydium launch.',
+      ticker: null,
+    });
+    expect(
+      parseTrendingEntityCell(
+        '0xAA1f…CdB1 · Corbel is the all-in-one liquidity routing app built for fast swaps across chains…',
+      ),
+    ).toEqual({
+      shortAddr: '0xAA1f…CdB1',
+      description: 'Corbel is the all-in-one liquidity routing app built for fast swaps across chains…',
+      ticker: null,
+    });
+  });
+});
+
+describe('parseChainCell', () => {
+  test('parses single chains, multi-chain cells with overflow count, and multi-word chain names', () => {
+    expect(parseChainCell('Ethereum')).toEqual({ chains: ['Ethereum'], overflow: null });
+    expect(parseChainCell('Polygon, Ethereum +89')).toEqual({
+      chains: ['Polygon', 'Ethereum'],
+      overflow: '+89',
+    });
+    expect(parseChainCell('Ethereum, Robinhood Chain +21')).toEqual({
+      chains: ['Ethereum', 'Robinhood Chain'],
+      overflow: '+21',
+    });
+    expect(parseChainCell('Hyperliquid L1, Arbitrum')).toEqual({
+      chains: ['Hyperliquid L1', 'Arbitrum'],
+      overflow: null,
+    });
+    expect(parseChainCell('—')).toEqual({ chains: [], overflow: null });
+    expect(parseChainCell('')).toEqual({ chains: [], overflow: null });
+  });
+});
+
+describe('splitGithubRepo', () => {
+  test('splits valid owner/repo strings and rejects non-repo strings', () => {
+    expect(splitGithubRepo('swcstudiospace/PumpGrok')).toEqual({
+      owner: 'swcstudiospace',
+      repo: 'PumpGrok',
+    });
+    expect(splitGithubRepo('plain-label')).toBeNull();
+    expect(splitGithubRepo('a/b/c')).toBeNull();
+  });
+});
+
+describe('getLanguageVisual', () => {
+  test('returns canonical linguist colors for known languages and neutral fallback for unknown', () => {
+    expect(getLanguageVisual('TypeScript')).toEqual({ label: 'TypeScript', color: '#3178C6', isUnknown: false });
+    expect(getLanguageVisual('Solidity')).toEqual({ label: 'Solidity', color: '#AA6746', isUnknown: false });
+    expect(getLanguageVisual('Python')).toEqual({ label: 'Python', color: '#3572A5', isUnknown: false });
+    expect(getLanguageVisual('Unknown').isUnknown).toBe(true);
+    expect(getLanguageVisual('').isUnknown).toBe(true);
+  });
+});
+
+describe('resolveColumnKind', () => {
+  test('maps section columns to semantic rendering kinds', () => {
+    expect(resolveColumnKind('crypto', 'Coin', 0)).toBe('entity');
+    expect(resolveColumnKind('defi', 'Chains', 2)).toBe('chain');
+    expect(resolveColumnKind('yields', 'Project', 1)).toBe('project');
+    expect(resolveColumnKind('yields', 'Chain', 2)).toBe('chain');
+    expect(resolveColumnKind('yields', 'IL risk', 5)).toBe('ilRisk');
+    expect(resolveColumnKind('trending', 'Chain', 1)).toBe('chain');
+    expect(resolveColumnKind('github', 'Language', 1)).toBe('language');
+    expect(resolveColumnKind('crypto', 'Price', 1)).toBe('data');
+  });
+});
+
+describe('resolveEntityCellMeta', () => {
+  test('resolves avatar shape, ticker, protocolSlug, and github owner/repo per section', () => {
+    expect(resolveEntityCellMeta(row(['Bitcoin (BTC)']), 'crypto')).toEqual({
+      rawCell: 'Bitcoin (BTC)',
+      displayName: 'Bitcoin',
+      displayTicker: 'BTC',
+      avatarTicker: 'BTC',
+      protocolSlug: null,
+      repoParts: null,
+      avatarShape: 'circle',
+    });
+    expect(resolveEntityCellMeta(row(['WEETH', 'aave-v3']), 'yields')).toEqual({
+      rawCell: 'WEETH',
+      displayName: 'WEETH',
+      displayTicker: null,
+      avatarTicker: 'WEETH',
+      protocolSlug: 'aave-v3',
+      repoParts: null,
+      avatarShape: 'rounded',
+    });
+    expect(resolveEntityCellMeta({ id: 'aave-v3', cells: ['Aave V3'] }, 'defi')).toEqual({
+      rawCell: 'Aave V3',
+      displayName: 'Aave V3',
+      displayTicker: null,
+      avatarTicker: null,
+      protocolSlug: 'aave-v3',
+      repoParts: null,
+      avatarShape: 'rounded',
+    });
+    expect(resolveEntityCellMeta(row(['swcstudiospace/PumpGrok']), 'github')).toEqual({
+      rawCell: 'swcstudiospace/PumpGrok',
+      displayName: 'swcstudiospace/PumpGrok',
+      displayTicker: null,
+      avatarTicker: null,
+      protocolSlug: null,
+      repoParts: { owner: 'swcstudiospace', repo: 'PumpGrok' },
+      avatarShape: 'circle',
+    });
   });
 });

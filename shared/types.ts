@@ -95,6 +95,8 @@ export interface MarketRow {
   chain?: string;
   chains?: string[];
   href?: string;
+  /** Authoritative HTTPS logo/avatar URL for the row's primary entity, when available. */
+  icon?: string | null;
 }
 
 export interface MarketSection {
@@ -148,6 +150,8 @@ export interface FeedItem {
   project: string;
   ticker?: string;
   domain?: string;
+  /** Authoritative HTTPS project logo URL enriched from trusted Surf/curated indexes. */
+  logo?: string | null;
   chains: string[];
   taskTypes: TaskType[];
   summary: string;

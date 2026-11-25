@@ -20,6 +20,7 @@ import {
   writeFileAtomic,
   type MergePost,
 } from './snapshot.mts';
+import { buildFeedLogoIndex } from '../worker/src/normalize/cluster';
 import { parseWpCalendarFeedPayload } from '../worker/src/sources/feeds';
 import type { AirdropFeed, FeedResponse, MarketSection, MarketSector, MarketsResponse, SourceHealth } from '../shared/types';
 
@@ -263,6 +264,92 @@ describe('finalizeSnapshotCluster (Worker safety & link parity)', () => {
     );
     expect(twinItem.risk.level).toBe('ok');
     expect(twinItem.risk.reasons).toEqual([]);
+
+    // Propagates known Surf/curated logo onto non-risk FeedItem.logo and suppresses on risk clusters.
+    const logoIndex = buildFeedLogoIndex(
+      {
+        cards: [
+          {
+            r: 1,
+            n: 'AlphaProto',
+            t: 'ALPHA',
+            g: 'S',
+            b: ['live'],
+            img: 'https://images.asksurf.ai/alphaproto.png',
+            f: '$10M',
+            tk: '1/1',
+            h: 100,
+            u: 'today',
+            fit: ['zero'],
+            best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5 min' },
+            sc: 90,
+            sub: [9, 9, null],
+            url: 'https://alphaproto.xyz/',
+            source: 'Surf',
+          },
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: now,
+      },
+      null,
+    );
+    const logoItem = finalizeSnapshotCluster(
+      {
+        id: 'c-logo',
+        project: 'AlphaProto',
+        domain: 'alphaproto.xyz',
+        chains: new Set(['Base']),
+        taskTypes: new Set(['testnet']),
+        summary: 'AlphaProto testnet live',
+        urls: new Set(['https://alphaproto.xyz/claim']),
+        rawIpUrls: new Set(),
+        sources: [{ platform: 'telegram', handle: 'airdropfind', postUrl: 'https://t.me/airdropfind/3', postedAt: now }],
+        sourceIds: new Set(['telegram:airdropfind']),
+        sourceHandles: new Set(['airdropfind']),
+        trustMax: 0.85,
+        firstSeen: now,
+        lastSeen: now,
+        texts: ['AlphaProto testnet live https://alphaproto.xyz/claim'],
+      },
+      {
+        projectDomains: new Map([['alphaproto.xyz', 'AlphaProto']]),
+        platformDomains: new Set(['zealy.io']),
+        allKnownDomains: new Set(['alphaproto.xyz', 'zealy.io']),
+        logoIndex,
+        nowMs: now,
+      },
+    );
+    expect(logoItem.logo).toBe('https://images.asksurf.ai/alphaproto.png');
+
+    const riskyLogoItem = finalizeSnapshotCluster(
+      {
+        id: 'c-risk-logo',
+        project: 'AlphaProto',
+        domain: 'a1phaproto.xyz',
+        chains: new Set(['Base']),
+        taskTypes: new Set(['testnet']),
+        summary: 'Fake AlphaProto claim',
+        urls: new Set(['https://a1phaproto.xyz/claim']),
+        rawIpUrls: new Set(),
+        sources: [{ platform: 'telegram', handle: 'airdropfind', postUrl: 'https://t.me/airdropfind/4', postedAt: now }],
+        sourceIds: new Set(['telegram:airdropfind']),
+        sourceHandles: new Set(['airdropfind']),
+        trustMax: 0.85,
+        firstSeen: now,
+        lastSeen: now,
+        texts: ['Fake AlphaProto claim https://a1phaproto.xyz/claim'],
+      },
+      {
+        projectDomains: new Map([['alphaproto.xyz', 'AlphaProto']]),
+        platformDomains: new Set(['zealy.io']),
+        allKnownDomains: new Set(['alphaproto.xyz', 'zealy.io']),
+        logoIndex,
+        nowMs: now,
+      },
+    );
+    expect(riskyLogoItem.risk.level).toBe('risk');
+    expect(riskyLogoItem.logo).toBeUndefined();
   });
 
   test('resolveSnapshotSurfMatch does not use ticker fallback when a post has a different projectDomain, and parseWpCalendarFeedPayload rejects malformed objects', () => {

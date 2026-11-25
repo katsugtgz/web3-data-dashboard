@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import worker from '../src/index';
 import { applyMigrations, createTestD1, MIGRATION_FILES } from './helpers';
-import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
+import {
+  buildFeedLogoIndex,
+  computeClusterId,
+  ingestPostIntoCluster,
+  queryFeed,
+  resolveFeedItemLogo,
+} from '../src/normalize/cluster';
+import { upsertSnapshot } from '../src/lib/db';
 import {
   cleanUrl,
   CURATED_AGGREGATOR_DOMAINS,
@@ -1047,10 +1054,10 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     expect(cjkRes.parsed.isRelevantDrop).toBe(true);
     expect(cjkRes.parsed.summary).toBe('Nexus: other');
 
-    // 2) >195-char English drop whose drop keyword appears AFTER char 210
+    // 2) >320-char English drop whose drop keyword appears AFTER char 330
     const longLead =
-      'VortexLayer is building a modular verifiable compute mesh connecting independent GPU clusters across global regions for real-time inference routing, low-latency proof verification, and open developer tooling across the ecosystem. ';
-    expect(longLead.length).toBeGreaterThan(200);
+      'VortexLayer is building a modular verifiable compute mesh connecting independent GPU clusters across global regions for real-time inference routing, low-latency proof verification, decentralized orchestration benchmarks, enterprise telemetry streams, cross-region workload balancing, and open developer tooling across the ecosystem. ';
+    expect(longLead.length).toBeGreaterThan(325);
     const longDropText = `${longLead}Join the incentivized testnet and claim your airdrop allocation today.`;
     const longRes = await ingestPostIntoCluster(
       db,
@@ -1069,7 +1076,7 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       now,
     );
     expect(longRes.parsed.isRelevantDrop).toBe(true);
-    expect(longRes.parsed.summary.length).toBeLessThanOrEqual(195);
+    expect(longRes.parsed.summary.length).toBeLessThanOrEqual(320);
     expect(longRes.parsed.summary.toLowerCase()).not.toContain('airdrop');
 
     // Verify is_drop = 1 persisted and never demoted by a subsequent non-drop post on the same cluster.
@@ -3138,5 +3145,212 @@ describe('Domain classification & i18n ASSO7878 regression fixes', () => {
       costNum: 0,
       isZero: true,
     });
+  });
+
+  test('truncateAtWordBoundary defaults to 320 chars, prefers sentence boundaries >= 65% of budget, and strips dangling connectors', () => {
+    // 1. Default maxLen (~320) keeps 240-char summaries intact without premature ellipsis.
+    const medium =
+      'MegaETH testnet phase 2 is live with daily faucet claims, cross-chain bridge tasks, and leaderboard quests across Ethereum and Base for early community testers participating before the Q4 mainnet snapshot closes.';
+    expect(medium.length).toBeGreaterThan(195);
+    expect(medium.length).toBeLessThanOrEqual(320);
+    expect(truncateAtWordBoundary(medium)).toBe(medium);
+
+    // 2. Prefers clean sentence boundary ('.' / '!' / '?') when >= 65% of budget (no ellipsis needed).
+    const twoSentences =
+      'MegaETH testnet phase 2 is live with daily faucet claims and bridge quests on Ethereum. Complete all bonus steps before Friday snapshot to qualify for multiplier points.';
+    const sentCut = truncateAtWordBoundary(twoSentences, 110);
+    expect(sentCut).toBe(
+      'MegaETH testnet phase 2 is live with daily faucet claims and bridge quests on Ethereum.',
+    );
+
+    // Does NOT split on decimals ($1.5M) or abbreviations (e.g.) as sentence boundaries.
+    const decimalText =
+      'VortexLayer raised $1.5M in seed funding and opened testnet quests with daily tasks across Base and Arbitrum for early contributors';
+    const decCut = truncateAtWordBoundary(decimalText, 95);
+    expect(decCut.length).toBeLessThanOrEqual(95);
+    expect(decCut).not.toBe('VortexLayer raised $1.');
+    expect(decCut.endsWith('\u2026')).toBe(true);
+
+    // 3. Strips trailing dangling connectors ('and', 'or', 'with', 'for', 'of', 'to', 'in', 'on', 'the', 'across', etc.) before ellipsis.
+    const dangling =
+      'HyperNova incentivized testnet is now open to early builders with daily quests and rewards across the entire ecosystem';
+    const cleanCut = truncateAtWordBoundary(dangling, 102);
+    expect(cleanCut.length).toBeLessThanOrEqual(102);
+    expect(cleanCut.endsWith('\u2026')).toBe(true);
+    expect(cleanCut).not.toMatch(/\b(?:and|or|with|for|of|to|in|on|a|an|the|across)\u2026$/i);
+
+    // 4. Drops unclosed parenthetical fragments on truncation instead of leaving "(TikTok, Instagram…".
+    const openParen =
+      'Complete daily creator quests across major social channels (TikTok, Instagram, YouTube, X) to earn bonus points';
+    const parenCut = truncateAtWordBoundary(openParen, 80);
+    expect(parenCut).toBe('Complete daily creator quests across major social channels\u2026');
+    expect(parenCut).not.toContain('(');
+
+    // 5. cleanSummaryText strips orphan variation selectors (\uFE0F) after bullets and dangling colons before separators.
+    expect(
+      cleanSummaryText(
+        'Testnet Guide\n\u25AA\uFE0F Get ETH Sepolia: https://faucet.example.com\n\u25AA\uFE0F Bridge to Base: https://bridge.example.com\n\u25AA\uFE0F Done',
+      ),
+    ).toBe('Testnet Guide \u00b7 Get ETH Sepolia \u00b7 Bridge to Base \u00b7 Done');
+  });
+
+  test('FeedLogoIndex propagates trusted Surf/curated/DeFi logos onto FeedItem.logo in queryFeed and /feed.json while blocking untrusted sheets and risk items', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_400_000_000;
+    await db
+      .prepare(
+        `INSERT INTO sources (id, platform, handle, lang, trust, enabled)
+         VALUES ('telegram:alpha', 'telegram', 'alpha', 'en', 0.85, 1)`,
+      )
+      .run();
+
+    const airdrops = {
+      cards: [
+        {
+          r: 1,
+          n: 'HyperNova',
+          t: 'HNOVA',
+          g: 'S' as const,
+          b: ['live' as const],
+          img: 'https://images.asksurf.ai/hypernova.png',
+          f: '$25M',
+          tk: '2/2',
+          h: 100,
+          u: 'today',
+          fit: ['zero' as const],
+          best: { n: 'Testnet', ty: 'testnet', c: 'Free', m: '5 min' },
+          sc: 92,
+          sub: [9, 9, null] as [number, number, number | null],
+          url: 'https://hypernova.xyz/',
+          source: 'Surf',
+        },
+        {
+          r: 2,
+          n: 'SheetEvil',
+          t: 'SEVIL',
+          g: 'B' as const,
+          b: ['live' as const],
+          img: 'https://evil-sheet.example/pixel.png',
+          f: '$1M',
+          tk: '1/1',
+          h: 10,
+          u: 'today',
+          fit: ['zero' as const],
+          best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5 min' },
+          sc: 60,
+          sub: [6, 6, null] as [number, number, number | null],
+          url: 'https://sheetevil.xyz/',
+          source: 'ASSO7878',
+        },
+        {
+          r: 3,
+          n: 'RiskCard',
+          t: 'RCARD',
+          g: 'C' as const,
+          b: ['risk' as const],
+          img: 'https://images.asksurf.ai/riskcard.png',
+          f: '$0',
+          tk: '1/1',
+          h: 5,
+          u: 'today',
+          fit: [],
+          best: { n: 'Risk', ty: 'other', c: 'Free', m: '1 min' },
+          sc: 20,
+          sub: [2, 2, null] as [number, number, number | null],
+          url: 'https://riskcard.xyz/',
+          source: 'Surf',
+        },
+      ],
+      tge: [],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: now,
+    };
+
+    const defiSection = {
+      id: 'defi' as const,
+      title: 'DeFi TVL',
+      blurb: '',
+      cols: ['Protocol'],
+      rows: [
+        {
+          id: 'lido',
+          cells: ['Lido'],
+          href: 'https://lido.fi/',
+          icon: 'https://icons.llama.fi/lido.png',
+        },
+      ],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: now,
+      stale: false,
+    };
+
+    const logoIndex = buildFeedLogoIndex(airdrops, defiSection);
+    expect(resolveFeedItemLogo({ project: 'HyperNova', domain: 'hypernova.xyz' }, logoIndex)).toBe(
+      'https://images.asksurf.ai/hypernova.png',
+    );
+    expect(resolveFeedItemLogo({ project: 'Lido', domain: 'lido.fi' }, logoIndex)).toBe(
+      'https://icons.llama.fi/lido.png',
+    );
+    // Domain-less ticker fallback works, but domain-identified unrelated project never gets hijacked by ticker.
+    expect(resolveFeedItemLogo({ project: 'Unknown', ticker: 'HNOVA' }, logoIndex)).toBe(
+      'https://images.asksurf.ai/hypernova.png',
+    );
+    expect(resolveFeedItemLogo({ project: 'OtherProto', domain: 'otherproto.xyz', ticker: 'HNOVA' }, logoIndex)).toBeUndefined();
+    // Untrusted sheet cards, risk cards, and risk FeedItems never attach logos.
+    expect(resolveFeedItemLogo({ project: 'SheetEvil', domain: 'sheetevil.xyz', ticker: 'SEVIL' }, logoIndex)).toBeUndefined();
+    expect(resolveFeedItemLogo({ project: 'RiskCard', domain: 'riskcard.xyz', ticker: 'RCARD' }, logoIndex)).toBeUndefined();
+    expect(
+      resolveFeedItemLogo({ project: 'HyperNova', domain: 'hypernova.xyz', riskLevel: 'risk' }, logoIndex),
+    ).toBeUndefined();
+
+    // Seed snapshots + cluster in D1 and verify queryFeed + Worker /feed.json enrich logo with zero migrations.
+    await upsertSnapshot(db, 'airdrops', airdrops, now);
+    await upsertSnapshot(db, 'markets:defi', defiSection, now);
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+         VALUES ('c-hn', 'HyperNova', 'HNOVA', 'hypernova.xyz', '["Base"]', '["testnet"]', 'HyperNova testnet live', 'rule', 'ok', '[]', 12, 1, ?1, ?1, 1),
+                ('c-risk', 'HyperNova', 'HNOVA', 'hypern0va.xyz', '["Base"]', '["testnet"]', 'Fake HyperNova claim', 'rule', 'risk', '["Possible lookalike domain"]', 2, 1, ?1, ?1, 1)`,
+      )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p-hn', 'telegram:alpha', 'https://t.me/alpha/1', ?1, 'HyperNova testnet', '["https://hypernova.xyz/quest"]', 'c-hn', ?1),
+                ('p-risk', 'telegram:alpha', 'https://t.me/alpha/2', ?1, 'Fake HyperNova', '["https://hypern0va.xyz/claim"]', 'c-risk', ?1)`,
+      )
+      .bind(now)
+      .run();
+
+    const directFeed = await queryFeed(db, new Set(['hypernova.xyz']), { logoIndex });
+    expect(directFeed.items.find(i => i.id === 'c-hn')?.logo).toBe('https://images.asksurf.ai/hypernova.png');
+    expect(directFeed.items.find(i => i.id === 'c-risk')?.logo).toBeUndefined();
+
+    // Worker /feed.json enriches FeedItem.logo from stored snapshots automatically (zero migration).
+    const g = globalThis as unknown as { caches?: CacheStorage };
+    const prevCaches = g.caches;
+    g.caches = {
+      default: {
+        async match() {
+          return undefined;
+        },
+        async put() {},
+      },
+    } as unknown as CacheStorage;
+    try {
+      const res = await worker.fetch(
+        new Request('https://radar.test/feed.json'),
+        { DB: db },
+        { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { items: { id: string; logo?: string }[] };
+      expect(body.items.find(i => i.id === 'c-hn')?.logo).toBe('https://images.asksurf.ai/hypernova.png');
+      expect(body.items.find(i => i.id === 'c-risk')?.logo).toBeUndefined();
+    } finally {
+      g.caches = prevCaches;
+    }
   });
 });

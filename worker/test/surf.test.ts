@@ -96,6 +96,7 @@ describe('surf normalizer + i18n', () => {
       {
         active: [
           { project_name: 'GoodLogo', logo_url: 'https://cdn.example.com/logo.png' },
+          { project_name: 'HttpLogo', logo_url: 'http://cdn.example.com/logo.png' },
           { project_name: 'SurfHost', logo_url: 'https://cdn.surf.computer/logo.png' },
           { project_name: 'SurfRoot', logo_url: 'https://surf.computer/logo.png' },
           { project_name: 'JsLogo', logo_url: 'javascript:alert(1)' },
@@ -112,6 +113,7 @@ describe('surf normalizer + i18n', () => {
 
     expect(feed.cards.map(c => c.img)).toEqual([
       'https://cdn.example.com/logo.png',
+      '',
       '',
       '',
       '',

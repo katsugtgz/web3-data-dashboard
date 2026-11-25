@@ -1,6 +1,6 @@
 import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../../../shared/types';
 import { FETCH_TIMEOUT_MS, fmtUsd, USER_AGENT } from '../lib/format';
-import { parseSafeHttpUrl, safeHttpUrl } from '../lib/url';
+import { safeHttpUrl, safeHttpsUrl } from '../lib/url';
 import {
   mapFitKey,
   stripOrTranslateCjk,
@@ -116,11 +116,11 @@ function formatIsoDate(ts: number): string {
 }
 
 function sanitizeLogo(url?: string | null): string {
-  const parsed = parseSafeHttpUrl(url);
-  if (!parsed) return '';
-  const host = parsed.hostname.toLowerCase();
+  const safe = safeHttpsUrl(url);
+  if (!safe) return '';
+  const host = new URL(safe).hostname.toLowerCase();
   if (host === 'surf.computer' || host.endsWith('.surf.computer')) return '';
-  return parsed.toString();
+  return safe;
 }
 
 function extractChains(p: UpstreamProject): string[] {

@@ -239,14 +239,32 @@
   gap: 11px;
 }
 
+.feed-head-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
 .feed-head-right {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.feed-domain {
+.feed-domain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
   color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.feed-domain-icon {
+  flex: none;
+  opacity: 0.78;
 }
 
 .ai-tag {
@@ -340,8 +358,17 @@
   padding: 2px 7px;
 }
 
+.feed-tags .chain-badge {
+  color: var(--color-text-primary);
+}
+
+.feed-task-icon {
+  opacity: 0.72;
+  flex: none;
+}
+
 .feed-link {
-  max-width: min(268px, 100%);
+  max-width: 100%;
   padding: 5px 9px;
   background: var(--color-background-card);
   border-color: var(--color-border-emphasized);
@@ -350,11 +377,32 @@
 }
 
 .feed-link-label {
-  max-width: 240px;
+  max-width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.feed-link-platform {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.feed-link-platform.is-telegram {
+  color: #229ed9;
+}
+
+.feed-link-platform.is-x {
+  color: var(--color-text-primary);
+}
+
+.feed-link-platform.is-github {
+  color: #6366f1;
+}
+
+.feed-link-platform.is-sheet {
+  color: #16a34a;
 }
 
 .feed-link:hover {
@@ -499,6 +547,22 @@
 .project-card .task-preview {
   border: 1px solid var(--color-border);
   padding: 10px 11px;
+}
+
+.best-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.best-label-icon {
+  color: var(--color-text-accent);
+  flex: none;
+}
+
+.footer-brand-icon {
+  vertical-align: -2px;
+  color: var(--color-text-accent);
 }
 
 .project-card .scorebar-wrap {

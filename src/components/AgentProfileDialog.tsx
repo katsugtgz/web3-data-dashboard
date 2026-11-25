@@ -2,7 +2,15 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { AgentProfile } from '../../shared/types';
 import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
-import { BotIcon, CopyIcon, ShieldCheckIcon, XIcon } from './Icons';
+import {
+  BotIcon,
+  CheckIcon,
+  CopyIcon,
+  LockIcon,
+  ShieldCheckIcon,
+  SlidersHorizontalIcon,
+  XIcon,
+} from './Icons';
 
 interface SectionFieldsProps {
   form: AgentProfile;
@@ -13,7 +21,8 @@ function EnvironmentSection({ form, onUpdate }: SectionFieldsProps) {
   return (
     <section className="profile-section" aria-labelledby="profile-section-env">
       <h3 id="profile-section-env" className="profile-section-title">
-        Agent &amp; Environment
+        <SlidersHorizontalIcon size={13} className="profile-section-icon" />
+        <span>Agent &amp; Environment</span>
       </h3>
       <div className="profile-grid">
         <label className="field" htmlFor="profile-agent">
@@ -120,7 +129,8 @@ function GuardrailsSection({
   return (
     <section className="profile-section" aria-labelledby="profile-section-guardrails">
       <h3 id="profile-section-guardrails" className="profile-section-title">
-        Wallet &amp; Guardrails
+        <LockIcon size={13} className="profile-section-icon" />
+        <span>Wallet &amp; Guardrails</span>
       </h3>
       <div className="profile-grid">
         <label className="field" htmlFor="profile-wallet">
@@ -301,7 +311,8 @@ function AgentProfileForm({
           Cancel
         </button>
         <button type="submit" className="btn">
-          Save profile
+          <CheckIcon size={14} />
+          <span>Save profile</span>
         </button>
       </div>
     </form>

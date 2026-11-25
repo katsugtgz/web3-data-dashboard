@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { fmtIsoDate, fmtPct, fmtPrice, fmtUsd } from '../src/lib/format';
 import { HAN_RE } from '../src/normalize/i18n';
 import {
+  enrichYieldRowIcons,
   fetchCryptoSection,
   fetchGithubSection,
+  fetchTrendingSection,
   normalizeDefiProtocols,
   normalizeDefiYields,
   normalizePredictionRows,
@@ -187,7 +189,7 @@ describe('market row sort contract', () => {
       },
     ]);
     expect(trending[0].cells[0]).not.toMatch(/[\n\t]/);
-    expect(trending[0].cells[0]).toBe('0x1234…cdef · Line1 Line2 extra spaces that push past 42');
+    expect(trending[0].cells[0]).toBe('0x1234…cdef · Line1 Line2 extra spaces that push past 42 chars');
     expect(trending[0].href).toBeUndefined();
     expect(trending[0].cells[3]).toBe('https://project.example.com/info');
     expect(FORBIDDEN_CJK_RE.test(JSON.stringify(trending))).toBe(false);
@@ -354,6 +356,281 @@ describe('market row sort contract', () => {
     } finally {
       globalThis.fetch = prevFetch;
       console.warn = prevWarn;
+    }
+  });
+
+  test('captures sanitized https:// icons across crypto, defi, yields, predictions, trending, and github, and avoids mid-word trending cuts', async () => {
+    const prevFetch = globalThis.fetch;
+    try {
+      // 1. CoinGecko crypto primary captures https image and drops http/unsafe URLs.
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('cg-markets')) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 'bitcoin',
+                symbol: 'btc',
+                name: 'Bitcoin',
+                image: 'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png',
+                current_price: 90000,
+                market_cap: 1_800_000_000_000,
+                total_volume: 40_000_000_000,
+                price_change_percentage_24h: 2.1,
+              },
+              {
+                id: 'unsafe',
+                symbol: 'uns',
+                name: 'UnsafeCoin',
+                image: 'http://insecure.example.com/coin.png',
+                current_price: 1,
+                market_cap: 1_000_000,
+                total_volume: 100_000,
+                price_change_percentage_24h: 0,
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response('[]', { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const cg = await fetchCryptoSection(1_700_000_000_000, {
+        coingeckoMarkets: 'https://mock.test/cg-markets',
+        coingeckoCategories: 'https://mock.test/cg-cats',
+      });
+      expect(cg.section.rows[0].icon).toBe('https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png');
+      expect(cg.section.rows[1].icon).toBeUndefined();
+
+      // 2. DefiLlama protocols capture https logo and enrich yields rows by protocol slug/name.
+      const defi = normalizeDefiProtocols(
+        [
+          {
+            slug: 'lido',
+            name: 'Lido',
+            category: 'Liquid Staking',
+            tvl: 20_000_000_000,
+            chains: ['Ethereum'],
+            url: 'https://lido.fi',
+            logo: 'https://icons.llama.fi/lido.png',
+          },
+          {
+            slug: 'aave-v3',
+            name: 'Aave V3',
+            category: 'Lending',
+            tvl: 18_000_000_000,
+            chains: ['Ethereum'],
+            url: 'https://aave.com',
+            logo: 'https://icons.llama.fi/aave-v3.png',
+          },
+          {
+            slug: 'bad-logo',
+            name: 'BadLogo',
+            category: 'DEX',
+            tvl: 5_000_000,
+            chains: ['Base'],
+            url: 'https://badlogo.xyz',
+            logo: 'https://127.0.0.1/logo.png',
+          },
+        ],
+        1_700_000_000_000,
+      );
+      expect(defi.rows[0].icon).toBe('https://icons.llama.fi/lido.png');
+      expect(defi.rows[1].icon).toBe('https://icons.llama.fi/aave-v3.png');
+      expect(defi.rows[2].icon).toBeUndefined();
+
+      const rawYields = normalizeDefiYields(
+        {
+          data: [
+            { pool: 'p-lido', symbol: 'STETH', project: 'lido', chain: 'Ethereum', tvlUsd: 16_000_000_000, apy: 3.1, ilRisk: 'no' },
+            { pool: 'p-aave', symbol: 'USDC', project: 'aave-v3', chain: 'Arbitrum', tvlUsd: 200_000_000, apy: 5.2, ilRisk: 'no' },
+            { pool: 'p-direct', symbol: 'ETH', project: 'custom', chain: 'Base', tvlUsd: 50_000_000, apy: 4.0, ilRisk: 'no', logo: 'https://cdn.custom.fi/icon.png' },
+          ],
+        },
+        1_700_000_000_000,
+      );
+      expect(rawYields.rows[2].icon).toBe('https://cdn.custom.fi/icon.png');
+      const enrichedYields = enrichYieldRowIcons(rawYields, defi);
+      expect(enrichedYields.rows[0].icon).toBe('https://icons.llama.fi/lido.png');
+      expect(enrichedYields.rows[1].icon).toBe('https://icons.llama.fi/aave-v3.png');
+      expect(enrichedYields.rows[2].icon).toBe('https://cdn.custom.fi/icon.png');
+
+      // 3. Polymarket captures icon (falling back to image), strictly https.
+      const preds = normalizePredictionRows([
+        {
+          slug: 'm1',
+          question: 'Will ETH hit 5k?',
+          icon: 'https://polymarket-upload.s3.us-east-2.amazonaws.com/eth-icon.png',
+          image: 'https://polymarket-upload.s3.us-east-2.amazonaws.com/eth-img.png',
+        },
+        {
+          slug: 'm2',
+          question: 'Will BTC hit 150k?',
+          icon: 'http://insecure.polymarket.com/bad.png',
+          image: 'https://polymarket-upload.s3.us-east-2.amazonaws.com/btc-img.png',
+        },
+      ]);
+      expect(preds[0].icon).toBe('https://polymarket-upload.s3.us-east-2.amazonaws.com/eth-icon.png');
+      expect(preds[1].icon).toBe('https://polymarket-upload.s3.us-east-2.amazonaws.com/btc-img.png');
+
+      // 4. DexScreener captures https icon, ignores bare hash/non-https, preserves icon across boost+profile merge,
+      //    and truncates long descriptions cleanly at word boundaries (~96 char budget, never mid-word).
+      const longDesc =
+        "The meme comes from Block's Dessa announcement celebrating community builders across Solana and Ethereum liquidity pools today";
+      const trendingRows = normalizeTrendingRows([
+        {
+          chainId: 'solana',
+          tokenAddress: 'npz2fhoufq7pkqhgpaipywacrakidyw2ydpvwsvpump',
+          icon: 'https://dd.dexscreener.com/ds-data/tokens/solana/abc.png',
+          description: longDesc,
+          totalAmount: 100,
+        },
+        {
+          chainId: 'base',
+          tokenAddress: '0xabcdef1234567890',
+          icon: 'raw-hash-not-a-url',
+          description: 'Short token summary',
+        },
+      ]);
+      expect(trendingRows[0].icon).toBe('https://dd.dexscreener.com/ds-data/tokens/solana/abc.png');
+      expect(trendingRows[1].icon).toBeUndefined();
+      const renderedDesc = trendingRows[0].cells[0].split(' · ')[1] ?? '';
+      expect(renderedDesc.length).toBeLessThanOrEqual(96);
+      expect(renderedDesc).toContain('announcement');
+      expect(renderedDesc).not.toMatch(/\bannounce\b/);
+      expect(renderedDesc.endsWith('…')).toBe(true);
+      expect(renderedDesc).not.toMatch(/\b(?:and|or|across|for|of|the|with)\u2026$/i);
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('boosts')) {
+          return new Response(
+            JSON.stringify([{ chainId: 'solana', tokenAddress: 'So111111111111', totalAmount: 50 }]),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify([
+            {
+              chainId: 'solana',
+              tokenAddress: 'So111111111111',
+              icon: 'https://dd.dexscreener.com/ds-data/tokens/solana/merged.png',
+              description: 'Merged profile description',
+            },
+          ]),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch;
+      const mergedTrending = await fetchTrendingSection(1_700_000_000_000, {
+        dexBoosts: 'https://mock.test/boosts',
+        dexProfiles: 'https://mock.test/profiles',
+      });
+      expect(mergedTrending.rows[0].icon).toBe('https://dd.dexscreener.com/ds-data/tokens/solana/merged.png');
+      expect(mergedTrending.rows[0].cells[0]).toContain('Merged profile description');
+
+      // 5. GitHub captures owner.avatar_url (https only).
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                full_name: 'ethereum/EIPs',
+                language: 'Solidity',
+                stargazers_count: 12000,
+                pushed_at: '2026-11-22T00:00:00Z',
+                html_url: 'https://github.com/ethereum/EIPs',
+                owner: { avatar_url: 'https://avatars.githubusercontent.com/u/6250754?v=4' },
+              },
+              {
+                full_name: 'bad/avatar',
+                language: 'TypeScript',
+                stargazers_count: 5,
+                pushed_at: '2026-11-22T00:00:00Z',
+                html_url: 'https://github.com/bad/avatar',
+                owner: { avatar_url: 'http://insecure.example.com/a.png' },
+              },
+            ],
+          }),
+          { status: 200 },
+        )) as unknown as typeof fetch;
+      const ghIcons = await fetchGithubSection(1_700_000_000_000, { github: 'https://mock.test/gh' });
+      expect(ghIcons.rows[0].icon).toBe('https://avatars.githubusercontent.com/u/6250754?v=4');
+      expect(ghIcons.rows[1].icon).toBeUndefined();
+
+      // 6. Verified CDN fallbacks (from Phase 1 CDN Verification Matrix):
+      //    - CoinPaprika compound IDs (<sym>-<slug>) -> static.coinpaprika.com; non-compound -> undefined
+      //    - DefiLlama protocol/yields without explicit logo -> icons.llamao.fi/icons/protocols/<slug>?w=48&h=48
+      //    - GitHub repo without owner.avatar_url -> github.com/<owner>.png?size=64
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes('paprika')) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 'btc-bitcoin',
+                name: 'Bitcoin',
+                symbol: 'BTC',
+                rank: 1,
+                quotes: { USD: { price: 90000, volume_24h: 25e9, market_cap: 1.8e12, percent_change_24h: -0.002 } },
+              },
+              {
+                id: 'bitcoin',
+                name: 'BadId',
+                symbol: 'BAD',
+                rank: 2,
+                quotes: { USD: { price: 1, volume_24h: 1e6, market_cap: 1e7, percent_change_24h: 0 } },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        if (u.includes('gh-fallback')) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                {
+                  full_name: 'LayerZero-Labs/LayerZero-v2',
+                  language: 'Solidity',
+                  stargazers_count: 500,
+                  pushed_at: '2026-11-22T00:00:00Z',
+                  html_url: 'https://github.com/LayerZero-Labs/LayerZero-v2',
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response('down', { status: 503 });
+      }) as unknown as typeof fetch;
+
+      const cpFallback = await fetchCryptoSection(1_700_000_000_000, {
+        coingeckoMarkets: 'https://mock.test/cg-down',
+        coinpaprikaTickers: 'https://mock.test/paprika',
+      });
+      expect(cpFallback.section.rows[0].icon).toBe('https://static.coinpaprika.com/coin/btc-bitcoin/logo.png');
+      expect(cpFallback.section.rows[0].cells[2]).toBe('0.00%');
+      expect(cpFallback.section.rows[1].icon).toBeUndefined();
+
+      const defiSlugFallback = normalizeDefiProtocols(
+        [{ slug: 'ether.fi-stake', name: 'ether.fi Stake', category: 'Liquid Restaking', tvl: 8e9, chains: ['Ethereum'] }],
+        1_700_000_000_000,
+      );
+      expect(defiSlugFallback.rows[0].icon).toBe('https://icons.llamao.fi/icons/protocols/ether.fi-stake?w=48&h=48');
+
+      const yieldsSlugFallback = normalizeDefiYields(
+        {
+          data: [
+            { pool: 'p-spark', symbol: 'USDS', project: 'sparklend', chain: 'Ethereum', tvlUsd: 5e8, apy: 4.5, ilRisk: 'no' },
+          ],
+        },
+        1_700_000_000_000,
+      );
+      expect(yieldsSlugFallback.rows[0].icon).toBe('https://icons.llamao.fi/icons/protocols/sparklend?w=48&h=48');
+
+      const ghFallback = await fetchGithubSection(1_700_000_000_000, { github: 'https://mock.test/gh-fallback' });
+      expect(ghFallback.rows[0].icon).toBe('https://github.com/LayerZero-Labs.png?size=64');
+    } finally {
+      globalThis.fetch = prevFetch;
     }
   });
 });

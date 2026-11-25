@@ -1,7 +1,8 @@
 import type { MarketRow, MarketSection, MarketSector } from '../../../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT, fmtInt, fmtIsoDate, fmtPct, fmtPrice, fmtUsd } from '../lib/format';
-import { safeHttpUrl } from '../lib/url';
+import { safeHttpUrl, safeHttpsUrl } from '../lib/url';
 import { stripOrTranslateCjk } from '../normalize/i18n';
+import { truncateAtWordBoundary } from '../normalize/text';
 
 export interface CryptoFetchResult {
   section: MarketSection;
@@ -64,6 +65,7 @@ interface CgCoin {
   id: string;
   symbol: string;
   name: string;
+  image?: string;
   current_price: number;
   market_cap: number;
   total_volume: number;
@@ -99,6 +101,17 @@ interface BinanceTicker {
   quoteVolume: string;
 }
 
+const SAFE_COINPAPRIKA_ID_RE = /^[a-z0-9]{2,12}-[a-z0-9][a-z0-9-]{1,60}$/i;
+const SAFE_LLAMA_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
+const SAFE_GH_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const LLAMA_ICON_FALLBACK_PREFIX = 'https://icons.llamao.fi/icons/protocols/';
+
+function llamaSlugIconUrl(slug: string): string | undefined {
+  const clean = slug.trim().toLowerCase();
+  if (!clean || !SAFE_LLAMA_SLUG_RE.test(clean)) return undefined;
+  return `${LLAMA_ICON_FALLBACK_PREFIX}${encodeURIComponent(clean)}?w=48&h=48`;
+}
+
 function finiteOrNull(v: number | null | undefined): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
@@ -119,6 +132,7 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
       const label = `${name} (${sym})`;
       const id = stripOrTranslateCjk(c.id ?? '') || stableFallbackId('coin', c.id || sym);
       const change24h = finiteOrNull(c.price_change_percentage_24h);
+      const icon = safeHttpsUrl(c.image) ?? undefined;
       return {
         id,
         cells: [
@@ -136,6 +150,7 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
           usdSort(c.market_cap),
         ],
         href: c.id ? `https://www.coingecko.com/en/coins/${encodeURIComponent(c.id)}` : undefined,
+        ...(icon ? { icon } : {}),
       };
     });
 
@@ -195,11 +210,17 @@ export async function fetchCryptoSection(nowMs = Date.now(), urls: MarketUrls = 
       const change24h = finiteOrNull(usd?.percent_change_24h);
       const volume = usd?.volume_24h ?? NaN;
       const marketCap = usd?.market_cap ?? NaN;
+      const rawId = (t.id ?? '').trim();
+      const icon =
+        rawId && SAFE_COINPAPRIKA_ID_RE.test(rawId)
+          ? `https://static.coinpaprika.com/coin/${encodeURIComponent(rawId)}/logo.png`
+          : undefined;
       return {
         id,
         cells: [label, fmtPrice(price), fmtPct(change24h), fmtUsd(volume), fmtUsd(marketCap)],
         sortValues: [label, usdSort(price), change24h, usdSort(volume), usdSort(marketCap)],
         href: t.id ? `https://coinpaprika.com/coin/${encodeURIComponent(t.id)}` : undefined,
+        ...(icon ? { icon } : {}),
       };
     });
 
@@ -272,6 +293,8 @@ interface PolyMarket {
   slug?: string;
   conditionId?: string;
   id?: number | string;
+  icon?: string;
+  image?: string;
   outcomePrices?: string;
   volume24hr?: number | string;
   liquidity?: number | string;
@@ -320,25 +343,29 @@ function parseYesProb(outcomePrices?: string): string {
 
 /** Pure row mapping for the Polymarket payload: the sort contract's seam. */
 export function normalizePredictionRows(markets: PolyMarket[]): MarketRow[] {
-  return markets.slice(0, 30).map(m => ({
-    // slug (unique, feeds href) > conditionId (contract key) > numeric id.
-    id: m.slug ?? m.conditionId ?? (m.id != null ? String(m.id) : undefined),
-    cells: [
-      stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
-      parseYesProb(m.outcomePrices),
-      fmtUsd(Number(m.volume24hr ?? 0)),
-      fmtUsd(Number(m.liquidity ?? 0)),
-      fmtIsoDate(m.endDate),
-    ],
-    sortValues: [
-      stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
-      yesProbSort(m.outcomePrices),
-      usdSort(m.volume24hr),
-      usdSort(m.liquidity),
-      isoDateSort(m.endDate),
-    ],
-    href: m.slug ? `https://polymarket.com/event/${encodeURIComponent(m.slug)}` : undefined,
-  }));
+  return markets.slice(0, 30).map(m => {
+    const icon = safeHttpsUrl(m.icon) ?? safeHttpsUrl(m.image) ?? undefined;
+    return {
+      // slug (unique, feeds href) > conditionId (contract key) > numeric id.
+      id: m.slug ?? m.conditionId ?? (m.id != null ? String(m.id) : undefined),
+      cells: [
+        stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
+        parseYesProb(m.outcomePrices),
+        fmtUsd(Number(m.volume24hr ?? 0)),
+        fmtUsd(Number(m.liquidity ?? 0)),
+        fmtIsoDate(m.endDate),
+      ],
+      sortValues: [
+        stripOrTranslateCjk(m.question ?? 'Market') || 'Market',
+        yesProbSort(m.outcomePrices),
+        usdSort(m.volume24hr),
+        usdSort(m.liquidity),
+        isoDateSort(m.endDate),
+      ],
+      href: m.slug ? `https://polymarket.com/event/${encodeURIComponent(m.slug)}` : undefined,
+      ...(icon ? { icon } : {}),
+    };
+  });
 }
 
 export async function fetchPredictionsSection(nowMs = Date.now(), urls: MarketUrls = {}): Promise<MarketSection> {
@@ -362,6 +389,7 @@ interface DexTokenEntry {
   url?: string;
   chainId?: string;
   tokenAddress?: string;
+  icon?: string;
   description?: string;
   totalAmount?: number;
   amount?: number;
@@ -399,7 +427,9 @@ export function normalizeTrendingRows(items: DexTokenEntry[]): MarketRow[] {
     const boostCount = it.totalAmount ?? it.amount ?? 0;
     const extLink = it.links?.map(l => safeHttpUrl(l.url)).find((u): u is string => u !== null);
     const safeUrl = safeHttpUrl(it.url) ?? undefined;
-    const desc = it.description ? stripOrTranslateCjk(it.description).replace(/\s+/g, ' ').trim().slice(0, 42) : '';
+    const icon = safeHttpsUrl(it.icon) ?? undefined;
+    const cleanDesc = it.description ? stripOrTranslateCjk(it.description).replace(/\s+/g, ' ').trim() : '';
+    const desc = cleanDesc ? truncateAtWordBoundary(cleanDesc, 96) : '';
     const tokenLabel = desc ? `${shortAddr} · ${desc}` : shortAddr;
     const links = extLink ?? safeUrl ?? '—';
     return {
@@ -413,6 +443,7 @@ export function normalizeTrendingRows(items: DexTokenEntry[]): MarketRow[] {
       ],
       chain,
       href: safeUrl,
+      ...(icon ? { icon } : {}),
     };
   });
 }
@@ -427,8 +458,29 @@ export async function fetchTrendingSection(nowMs = Date.now(), urls: MarketUrls 
     if (!entry.chainId || !entry.tokenAddress) continue;
     const key = `${entry.chainId}:${entry.tokenAddress.toLowerCase()}`;
     const prev = merged.get(key);
-    if (!prev || (entry.totalAmount ?? 0) > (prev.totalAmount ?? 0)) {
+    if (!prev) {
       merged.set(key, entry);
+    } else if ((entry.totalAmount ?? 0) > (prev.totalAmount ?? 0)) {
+      merged.set(key, {
+        ...entry,
+        icon: entry.icon || prev.icon,
+        description: entry.description || prev.description,
+        links: entry.links?.length ? entry.links : prev.links,
+        url: entry.url || prev.url,
+      });
+    } else if (
+      (!prev.icon && entry.icon) ||
+      (!prev.description && entry.description) ||
+      (!prev.links?.length && entry.links?.length) ||
+      (!prev.url && entry.url)
+    ) {
+      merged.set(key, {
+        ...prev,
+        icon: prev.icon || entry.icon,
+        description: prev.description || entry.description,
+        links: prev.links?.length ? prev.links : entry.links,
+        url: prev.url || entry.url,
+      });
     }
   }
   const items = [...merged.values()].slice(0, 30);
@@ -454,6 +506,9 @@ interface GithubSearchResult {
     stargazers_count: number;
     pushed_at: string;
     html_url: string;
+    owner?: {
+      avatar_url?: string;
+    };
   }[];
 }
 
@@ -469,6 +524,16 @@ export async function fetchGithubSection(nowMs = Date.now(), urls: MarketUrls = 
   const rows: MarketRow[] = items.slice(0, 30).map(repo => {
     const cleanName = stripOrTranslateCjk(repo.full_name ?? '') || stableFallbackId('repo', repo.full_name ?? '');
     const language = stripOrTranslateCjk(repo.language ?? '') || 'Unknown';
+    const rawAvatar = repo.owner?.avatar_url;
+    let icon: string | undefined;
+    if (rawAvatar != null && rawAvatar !== '') {
+      icon = safeHttpsUrl(rawAvatar) ?? undefined;
+    } else {
+      const owner = cleanName.split('/')[0]?.trim() ?? '';
+      if (owner && SAFE_GH_OWNER_RE.test(owner)) {
+        icon = `https://github.com/${encodeURIComponent(owner)}.png?size=64`;
+      }
+    }
     return {
       id: cleanName,
       cells: [
@@ -484,6 +549,7 @@ export async function fetchGithubSection(nowMs = Date.now(), urls: MarketUrls = 
         isoDateSort(repo.pushed_at),
       ],
       href: safeHttpUrl(repo.html_url) ?? undefined,
+      ...(icon ? { icon } : {}),
     };
   });
 
@@ -504,6 +570,7 @@ interface LlamaProtocol {
   id?: number | string;
   slug?: string;
   name?: string;
+  logo?: string;
   category?: string;
   chain?: string;
   chains?: string[];
@@ -528,6 +595,12 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
       const cleanCategory = stripOrTranslateCjk(p.category ?? 'DeFi') || 'DeFi';
       const cleanSlug = p.slug ? stripOrTranslateCjk(p.slug) : '';
       const cleanId = p.id != null ? stripOrTranslateCjk(String(p.id)) : '';
+      const icon =
+        p.logo != null && p.logo !== ''
+          ? safeHttpsUrl(p.logo) ?? undefined
+          : cleanSlug
+            ? llamaSlugIconUrl(cleanSlug)
+            : undefined;
       return {
         // id must stay zero-CJK too: the p.name fallback can carry Han
         // (slug/id absent on some payloads) and then leaks into snapshots.
@@ -551,6 +624,7 @@ export function normalizeDefiProtocols(raw: unknown, nowMs = Date.now()): Market
         chain: chains[0],
         chains,
         href: safeHttpUrl(p.url) ?? undefined,
+        ...(icon ? { icon } : {}),
       };
     });
 
@@ -575,13 +649,77 @@ interface LlamaPool {
   tvlUsd?: number;
   apy?: number | null;
   ilRisk?: string | null;
+  logo?: string;
+  icon?: string;
 }
 
 interface LlamaPoolsPayload {
   data?: LlamaPool[];
 }
 
-export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSection {
+function normalizeProtocolSlugKey(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+const YIELD_SLUG_SUFFIX_RE = /-(?:v[1-9]|stake|staking|lending|finance|protocol|swap|dex|earn|vaults?|pools?)$/i;
+
+/**
+ * Cross-populates missing `MarketRow.icon` on DefiLlama yields rows from the
+ * DeFi TVL protocols section by exact slug, normalized key, or base slug.
+ */
+export function enrichYieldRowIcons(
+  yields: MarketSection,
+  defi?: MarketSection | null,
+): MarketSection {
+  if (!defi?.rows?.length || !yields.rows?.length) return yields;
+
+  const bySlug = new Map<string, string>();
+  const byNorm = new Map<string, string>();
+  for (const row of defi.rows) {
+    const icon = safeHttpsUrl(row.icon);
+    if (!icon) continue;
+    if (row.id) {
+      const slugLower = row.id.trim().toLowerCase();
+      if (slugLower && !bySlug.has(slugLower)) bySlug.set(slugLower, icon);
+      const normId = normalizeProtocolSlugKey(row.id);
+      if (normId.length >= 2 && !byNorm.has(normId)) byNorm.set(normId, icon);
+    }
+    const name = row.cells?.[0];
+    if (name) {
+      const normName = normalizeProtocolSlugKey(name);
+      if (normName.length >= 2 && !byNorm.has(normName)) byNorm.set(normName, icon);
+    }
+  }
+  if (bySlug.size === 0 && byNorm.size === 0) return yields;
+
+  let changed = false;
+  const rows = yields.rows.map(row => {
+    const existingIcon = safeHttpsUrl(row.icon);
+    const existingIsFallback = Boolean(existingIcon && existingIcon.startsWith(LLAMA_ICON_FALLBACK_PREFIX));
+    if (existingIcon && !existingIsFallback) return row;
+    const project = (row.cells?.[1] ?? '').trim();
+    if (!project) return row;
+    const lower = project.toLowerCase();
+    const norm = normalizeProtocolSlugKey(project);
+    const baseSlug = lower.replace(YIELD_SLUG_SUFFIX_RE, '');
+    const icon =
+      bySlug.get(lower) ??
+      byNorm.get(norm) ??
+      (baseSlug.length >= 3 ? bySlug.get(baseSlug) ?? byNorm.get(normalizeProtocolSlugKey(baseSlug)) : undefined);
+    if (!icon || icon === existingIcon) return row;
+    if (existingIsFallback && icon.startsWith(LLAMA_ICON_FALLBACK_PREFIX)) return row;
+    changed = true;
+    return { ...row, icon };
+  });
+
+  return changed ? { ...yields, rows } : yields;
+}
+
+export function normalizeDefiYields(
+  raw: unknown,
+  nowMs = Date.now(),
+  protocolIcons?: ReadonlyMap<string, string>,
+): MarketSection {
   const payload = raw as LlamaPoolsPayload | null;
   const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(raw) ? (raw as LlamaPool[]) : null;
   if (!list) throw new Error('Expected DefiLlama yields payload');
@@ -595,6 +733,14 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
       const cleanProject = stripOrTranslateCjk(p.project ?? '') || 'Protocol';
       const chain = stripOrTranslateCjk(p.chain ?? '') || 'Multi-Chain';
       const cleanPool = p.pool ? stripOrTranslateCjk(p.pool) : '';
+      const mappedIcon =
+        protocolIcons?.get(cleanProject.toLowerCase()) ??
+        protocolIcons?.get(normalizeProtocolSlugKey(cleanProject));
+      const explicitLogo = p.logo ?? p.icon;
+      const icon =
+        explicitLogo != null && explicitLogo !== ''
+          ? safeHttpsUrl(explicitLogo) ?? undefined
+          : safeHttpsUrl(mappedIcon) ?? llamaSlugIconUrl(cleanProject);
       return {
         // DefiLlama's stable pool UUID; distinct pools of one protocol get
         // distinct ids. Fallback is a lossy slug only when the upstream omits
@@ -620,6 +766,7 @@ export function normalizeDefiYields(raw: unknown, nowMs = Date.now()): MarketSec
         ],
         chain,
         href: p.pool ? `https://defillama.com/yields/pool/${encodeURIComponent(p.pool)}` : undefined,
+        ...(icon ? { icon } : {}),
       };
     });
 

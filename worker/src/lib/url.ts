@@ -1,6 +1,7 @@
 const BARE_DOMAIN_URL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)+\.[a-z]{2,}(?:[/?#].*)?$/i;
 const SIMPLE_BARE_DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,}(?:[/?#].*)?$/i;
 const FORBIDDEN_URL_CHARS_RE = /[\s\u0000-\u001F\u007F]/;
+const IPV4_HOST_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
 export interface SafeUrlOptions {
   /** Upgrade scheme-less bare domains (e.g. `t.me/channel`) to `https://`. */
@@ -38,4 +39,18 @@ export function parseSafeHttpUrl(raw?: string | null, opts: SafeUrlOptions = {})
 
 export function safeHttpUrl(raw?: string | null, opts: SafeUrlOptions = {}): string | null {
   return parseSafeHttpUrl(raw, opts)?.toString() ?? null;
+}
+
+/**
+ * Strictly validates an external `https://` asset/image URL: rejects plain
+ * `http://`, userinfo, whitespace/control chars, localhost/.local, dotless
+ * hosts, and raw IPv4/IPv6 literals while preserving safe query parameters.
+ */
+export function safeHttpsUrl(raw?: string | null): string | null {
+  const parsed = parseSafeHttpUrl(raw);
+  if (!parsed || parsed.protocol !== 'https:') return null;
+  const host = parsed.hostname.toLowerCase();
+  if (!host || !host.includes('.') || host === 'localhost' || host.endsWith('.local')) return null;
+  if ((host.startsWith('[') && host.endsWith(']')) || IPV4_HOST_RE.test(host)) return null;
+  return parsed.toString();
 }

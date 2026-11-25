@@ -1,5 +1,6 @@
 import type { AirdropFeed, Badge, Card, FitKey, Grade, Tge } from '../../../shared/types';
 import { fmtUsd } from '../lib/format';
+import { safeHttpsUrl } from '../lib/url';
 import { normalizeProjectKey } from '../normalize/cluster';
 import {
   cleanUrl,
@@ -24,6 +25,7 @@ import { SURF_AIRDROPS_URL, fetchSurfAirdrops } from './surf';
 interface LlamaProtocolItem {
   slug?: string;
   name?: string;
+  logo?: string;
   symbol?: string | null;
   category?: string;
   chains?: string[];
@@ -36,6 +38,7 @@ interface LlamaProtocolItem {
 const DEFILLAMA_MIN_TVL_USD = 5_000_000;
 const DEFILLAMA_MAX_CARDS = 80;
 const DEFILLAMA_RECENT_WINDOW_SEC = 365 * 86_400;
+const SAFE_LLAMA_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
 const DEFILLAMA_EXCLUDED_CATEGORIES = new Set([
   'cex',
   'canonical bridge',
@@ -109,18 +112,25 @@ export function extractDefiLlamaTokenlessAirdrops(raw: unknown, nowMs = Date.now
     const badges: Badge[] = isRecentlyListed ? ['live', 'early'] : ['early'];
     const taskType = mapLlamaCategoryType(category);
     const taskTitle = `Use tokenless ${category} protocol (${fmtUsd(tvl)} TVL)`;
+    const cleanSlug = p.slug ? stripOrTranslateCjk(p.slug).trim().toLowerCase() : '';
+    const img =
+      p.logo != null && p.logo !== ''
+        ? safeHttpsUrl(p.logo) ?? ''
+        : cleanSlug && SAFE_LLAMA_SLUG_RE.test(cleanSlug)
+          ? `https://icons.llamao.fi/icons/protocols/${encodeURIComponent(cleanSlug)}?w=48&h=48`
+          : '';
 
     cards.push({
       r: cards.length + 1,
       n: name,
-      id: `defillama:${p.slug ? stripOrTranslateCjk(p.slug) || slugify(name) : slugify(name)}`,
+      id: `defillama:${cleanSlug || slugify(name)}`,
       chain: chains[0],
       chains: chains.length > 0 ? chains : undefined,
       t: null,
       g: grade,
       b: badges,
       x: null,
-      img: '',
+      img,
       f: '—',
       raiseNum: 0,
       tk: '1/1',
@@ -218,7 +228,14 @@ function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
   if ((!merged.chains || merged.chains.length === 0) && secondary.chains?.length) {
     merged.chains = [...secondary.chains];
   }
-  if (!merged.img && secondary.img) merged.img = secondary.img;
+  if (!merged.img && secondary.img && !secondaryIsUntrustedSheet) {
+    const safeImg = safeHttpsUrl(secondary.img);
+    if (safeImg) merged.img = safeImg;
+  }
+  if (!merged.t && secondary.t && !secondaryIsUntrustedSheet) {
+    const cleanTicker = secondary.t.trim().toUpperCase();
+    if (cleanTicker) merged.t = cleanTicker;
+  }
 
   const badgeSet = new Set(merged.b);
   for (const b of secondary.b) {
@@ -316,13 +333,70 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
   const rankedCards = mergedCards.map((c, idx) => ({ ...c, r: idx + 1 }));
 
   const mergedTge: Tge[] = [];
-  const seenTge = new Set<string>();
+  const tgeIdxByKey = new Map<string, number>();
   for (const feed of feeds) {
     for (const entry of feed.tge) {
       const key = normalizeProjectKey(entry.n);
-      if (!key || seenTge.has(key)) continue;
-      seenTge.add(key);
-      mergedTge.push({ ...entry });
+      if (!key) continue;
+      const existingIdx = tgeIdxByKey.get(key);
+      if (existingIdx !== undefined) {
+        const primaryTge = mergedTge[existingIdx];
+        const secUntrusted =
+          isUntrustedSheetSource(entry.source) && !isUntrustedSheetSource(primaryTge.source);
+        if (!secUntrusted) {
+          if (!primaryTge.logo && entry.logo) {
+            const safeLogo = safeHttpsUrl(entry.logo);
+            if (safeLogo) primaryTge.logo = safeLogo;
+          }
+          if (!primaryTge.t && entry.t) {
+            primaryTge.t = entry.t.trim().toUpperCase();
+          }
+        }
+        continue;
+      }
+      tgeIdxByKey.set(key, mergedTge.length);
+      const safeLogo = entry.logo ? safeHttpsUrl(entry.logo) : entry.logo;
+      mergedTge.push({ ...entry, ...(entry.logo ? { logo: safeLogo } : {}) });
+    }
+  }
+
+  // Cross-populate missing TGE logos and tickers from matching merged cards
+  // by normalized project key (with canonical domain fallback), respecting
+  // untrusted-sheet trust boundaries.
+  const cardByKey = new Map<string, Card>();
+  const cardByDom = new Map<string, Card>();
+  for (const card of rankedCards) {
+    const key = normalizeProjectKey(card.n);
+    if (key.length >= 3) {
+      const prev = cardByKey.get(key);
+      if (!prev || (!prev.img && card.img && !isUntrustedSheetSource(card.source))) {
+        cardByKey.set(key, card);
+      }
+    }
+    const dom = canonicalProjectDomain(card);
+    if (dom && !cardByDom.has(dom) && !isUntrustedSheetSource(card.source)) {
+      cardByDom.set(dom, card);
+    }
+  }
+
+  for (const entry of mergedTge) {
+    const key = normalizeProjectKey(entry.n);
+    const entryDom = entry.url ? getRegistrableDomain(entry.url)?.toLowerCase() : undefined;
+    const validEntryDom =
+      entryDom && !isPlatformDomain(entryDom) && !URL_SHORTENERS[entryDom] && !isCuratedAggregatorDomain(entryDom, { n: entry.n, source: entry.source })
+        ? entryDom
+        : undefined;
+    const matched = (key.length >= 3 ? cardByKey.get(key) : undefined) ?? (validEntryDom ? cardByDom.get(validEntryDom) : undefined);
+    if (!matched) continue;
+    const cardUntrusted =
+      isUntrustedSheetSource(matched.source) && !isUntrustedSheetSource(entry.source);
+    if (cardUntrusted) continue;
+    if (!entry.logo && matched.img) {
+      const safeLogo = safeHttpsUrl(matched.img);
+      if (safeLogo) entry.logo = safeLogo;
+    }
+    if (!entry.t && matched.t) {
+      entry.t = matched.t.trim().toUpperCase();
     }
   }
 
