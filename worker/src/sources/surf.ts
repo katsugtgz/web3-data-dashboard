@@ -240,6 +240,7 @@ function mapProject(p: UpstreamProject, rank: number, nowMs: number): Card {
     sc: safeNum(p.score, 0),
     sub: [safeNum(p.token_launch_score, 0), safeNum(p.cost_perf_score, 0), null],
     url: normalizeExternalUrl(bt.external_link),
+    source: 'Surf',
   };
 }
 
@@ -255,6 +256,7 @@ function mapTge(p: UpstreamProject): Tge {
     tier: normalizeGrade(p.tier),
     raise: raise > 0 ? fmtUsd(raise) : undefined,
     url: normalizeExternalUrl(p.best_task?.external_link ?? p.tasks?.find(t => t.external_link)?.external_link),
+    source: 'Surf',
   };
 }
 

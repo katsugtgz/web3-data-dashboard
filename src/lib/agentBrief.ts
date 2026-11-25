@@ -1,5 +1,10 @@
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
-import { formatProjectTitle, formatRiskReasons, prepareFeedLinks } from './feedDisplay';
+import {
+  formatProjectTitle,
+  formatRiskReasons,
+  formatSourceHandle,
+  prepareFeedLinks,
+} from './feedDisplay';
 import { formatRelativeTime, isHttpUrl, normalizeExternalUrl, parseCost } from './format';
 
 const HUMAN_REQUIRED_RE =
@@ -79,7 +84,7 @@ function sanitizeStepText(input: string): string {
 
 function sanitizeSourceUrl(raw: string): string | null {
   const cleaned = stripInvisibles(raw).trim();
-  if (!cleaned || !isHttpUrl(cleaned)) return null;
+  if (!cleaned || /[\s\u0000-\u001F\u007F]/.test(cleaned) || !isHttpUrl(cleaned)) return null;
   try {
     const parsed = new URL(cleaned);
     if (parsed.username || parsed.password) return null;
@@ -231,13 +236,16 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
     const sources: string[] = [];
     for (const s of item.sources) {
       const safeUrl = sanitizeSourceUrl(s.postUrl);
-      const handle = sanitizeBriefText(s.handle) || 'unknown';
-      const platform = sanitizeBriefText(s.platform) || 'source';
-      const dedupeKey = safeUrl ?? `${platform}:${handle}:${s.postedAt}`;
+      const cleanPlatform = sanitizeBriefText(s.platform) || 'source';
+      const cleanHandle = sanitizeBriefText(s.handle);
+      const displayHandle = cleanHandle
+        ? formatSourceHandle(s.platform, cleanHandle) || cleanHandle
+        : cleanPlatform;
+      const dedupeKey = safeUrl ?? `${cleanPlatform}:${displayHandle}:${s.postedAt}`;
       if (seenSources.has(dedupeKey)) continue;
       seenSources.add(dedupeKey);
       sources.push(
-        `- @${handle} (${platform}) — ${safeUrl ?? 'URL omitted'} (${formatRelativeTime(s.postedAt)})`,
+        `- ${displayHandle} (${cleanPlatform}) — ${safeUrl ?? 'URL omitted'} (${formatRelativeTime(s.postedAt)})`,
       );
     }
     const warnNotes = formatRiskReasons(item)
@@ -283,11 +291,10 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
 
   if (item.b.includes('risk')) return null;
   const project = sanitizeBriefText(item.n) || 'Web3 Project';
-  const taskTypes =
-    (item.taskTypes?.length ? item.taskTypes : [item.best.ty || 'airdrop'])
-      .map(sanitizeBriefText)
-      .filter(Boolean)
-      .join(', ') || 'airdrop';
+  const rawTaskTypes = item.taskTypes?.length ? item.taskTypes : [item.best.ty ?? ''];
+  const cleanTaskTypes = rawTaskTypes.map(t => sanitizeBriefText(t ?? '')).filter(Boolean);
+  const fallbackTaskType = sanitizeBriefText(item.best.ty ?? '') || 'airdrop';
+  const taskTypes = cleanTaskTypes.length > 0 ? cleanTaskTypes.join(', ') : fallbackTaskType;
   const chains =
     (item.chains?.length ? item.chains : item.chain ? [item.chain] : [])
       .map(sanitizeBriefText)
@@ -302,6 +309,7 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
   }
   const unverifiedLinks = [...linkSet].map(u => `- ${u}`);
   const steps = buildStepsForCard(item);
+  const cardSource = item.source ? sanitizeBriefText(item.source) : '';
 
   const lines = sharedHeaderLines(project, taskTypes, null, profile);
 
@@ -321,6 +329,7 @@ export function buildBrief(item: FeedItem | Card, profile: AgentProfile): string
     '',
     '## Sources',
     `- Curated Airdrop Radar (Rank #${item.r}, Tier ${sanitizeBriefText(item.g) || item.g})`,
+    ...(cardSource ? [`- Source: ${cardSource}`] : []),
   );
 
   return lines.join('\n');

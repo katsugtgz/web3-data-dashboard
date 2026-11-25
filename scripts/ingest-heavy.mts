@@ -2,16 +2,27 @@ import { rmSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MarketSection } from '../shared/types';
+import type { AirdropFeed, MarketSection } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import { sha1Hex } from '../worker/src/lib/hash';
+import { extractDefiLlamaTokenlessAirdrops } from '../worker/src/sources/curated';
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
+import { resolveCuratedSourceUrl } from '../worker/src/sources/registry';
+import {
+  ARNDXT_SHEET_URL,
+  ASSO7878_SHEET_URL,
+  fetchArndxtSheet,
+  fetchAsso7878Sheet,
+} from '../worker/src/sources/sheets';
 
 export const DEFILLAMA_PROTOCOLS_URL = 'https://api.llama.fi/protocols';
 export const DEFILLAMA_YIELDS_URL = 'https://yields.llama.fi/pools';
 
 export interface HeavyIngestDeps {
   fetchJson?: (url: string) => Promise<unknown>;
+  fetchAsso7878?: (url: string, nowMs: number) => Promise<AirdropFeed>;
+  fetchArndxt?: (url: string, nowMs: number) => Promise<AirdropFeed>;
+  includeSheets?: boolean;
   executeSqlFile?: (sqlPath: string) => Promise<void>;
   nowMs?: number;
   dryRun?: boolean;
@@ -52,7 +63,7 @@ ON CONFLICT(key) DO UPDATE SET
   error = excluded.error;`;
 }
 
-async function buildSuccessSql(key: string, section: MarketSection, nowMs: number): Promise<string> {
+async function buildSuccessSql(key: string, section: unknown, nowMs: number): Promise<string> {
   const body = JSON.stringify(section);
   const etag = `"${await sha1Hex(body)}"`;
   // Same fetched_at guard as the Worker's upsertSnapshot (worker/src/lib/db.ts):
@@ -97,17 +108,49 @@ export async function runHeavyIngest(deps: HeavyIngestDeps = {}): Promise<HeavyI
   const nowMs = deps.nowMs ?? Date.now();
   const dryRun = deps.dryRun ?? process.argv.includes('--dry-run');
   const log = deps.log ?? ((msg: string) => console.log(msg));
+  const includeSheets =
+    deps.includeSheets ?? (deps.fetchJson === undefined || deps.fetchAsso7878 !== undefined || deps.fetchArndxt !== undefined);
 
-  const settled = await Promise.allSettled(
-    SECTION_SPECS.map(async spec => {
-      const raw = await fetchJson(spec.url);
-      const section = spec.normalize(raw, nowMs);
-      if (section.rows.length === 0) {
-        throw new Error(`Empty ${spec.label} section (0 rows) — refusing to overwrite D1 snapshot`);
-      }
-      return section;
-    }),
+  const assoSheetUrl = resolveCuratedSourceUrl(
+    process.env.ASSO7878_SHEET_URL,
+    'sheet:asso7878_sheet',
+    ASSO7878_SHEET_URL,
   );
+  const arndxtSheetUrl = resolveCuratedSourceUrl(
+    process.env.ARNDXT_SHEET_URL,
+    'sheet:arndxt_sheet',
+    ARNDXT_SHEET_URL,
+  );
+  const fetchAsso = deps.fetchAsso7878 ?? fetchAsso7878Sheet;
+  const fetchArndxt = deps.fetchArndxt ?? fetchArndxtSheet;
+
+  // Fetch heavy DefiLlama payloads and optional Google Sheets concurrently
+  // outside the Worker's 10 ms free-tier CPU budget; sheet failures are
+  // non-fatal so DefiLlama snapshots still refresh.
+  const [settled, asso7878Feed, arndxtFeed] = await Promise.all([
+    Promise.allSettled(
+      SECTION_SPECS.map(async spec => {
+        const raw = await fetchJson(spec.url);
+        const section = spec.normalize(raw, nowMs);
+        if (section.rows.length === 0) {
+          throw new Error(`Empty ${spec.label} section (0 rows) — refusing to overwrite D1 snapshot`);
+        }
+        return { raw, section };
+      }),
+    ),
+    includeSheets
+      ? fetchAsso(assoSheetUrl, nowMs).catch(err => {
+          console.warn('Optional ASSO7878 sheet fetch failed (continuing with other snapshots):', err);
+          return null;
+        })
+      : Promise.resolve(null),
+    includeSheets
+      ? fetchArndxt(arndxtSheetUrl, nowMs).catch(err => {
+          console.warn('Optional arndxt sheet fetch failed (continuing with other snapshots):', err);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
 
   const statements: string[] = [];
   const okKeys: string[] = [];
@@ -118,9 +161,18 @@ export async function runHeavyIngest(deps: HeavyIngestDeps = {}): Promise<HeavyI
     const spec = SECTION_SPECS[i];
     const outcome = settled[i];
     if (outcome.status === 'fulfilled') {
-      statements.push(await buildSuccessSql(spec.key, outcome.value, nowMs));
+      statements.push(await buildSuccessSql(spec.key, outcome.value.section, nowMs));
       okKeys.push(spec.key);
-      summaryParts.push(`${spec.label}: ${outcome.value.rows.length} rows`);
+      summaryParts.push(`${spec.label}: ${outcome.value.section.rows.length} rows`);
+      if (spec.key === 'markets:defi') {
+        // Zero extra requests: reuse protocolsRaw to extract tokenless protocols (symbol === "-", TVL >= $5M).
+        const defiLlamaAirdrops = extractDefiLlamaTokenlessAirdrops(outcome.value.raw, nowMs);
+        if (defiLlamaAirdrops.cards.length > 0) {
+          statements.push(await buildSuccessSql('airdrops:defillama', defiLlamaAirdrops, nowMs));
+          okKeys.push('airdrops:defillama');
+          summaryParts.push(`Tokenless Airdrops: ${defiLlamaAirdrops.cards.length} cards`);
+        }
+      }
     } else {
       const errMsg = formatErrorMessage(outcome.reason);
       statements.push(buildErrorTelemetrySql(spec.key, errMsg));
@@ -128,6 +180,19 @@ export async function runHeavyIngest(deps: HeavyIngestDeps = {}): Promise<HeavyI
       summaryParts.push(`${spec.label}: FAILED (${errMsg})`);
     }
   }
+
+  if (asso7878Feed && (asso7878Feed.cards.length > 0 || asso7878Feed.tge.length > 0)) {
+    statements.push(await buildSuccessSql('airdrops:asso7878', asso7878Feed, nowMs));
+    okKeys.push('airdrops:asso7878');
+    summaryParts.push(`ASSO7878: ${asso7878Feed.cards.length} cards/${asso7878Feed.tge.length} tge`);
+  }
+  if (arndxtFeed && (arndxtFeed.cards.length > 0 || arndxtFeed.tge.length > 0)) {
+    statements.push(await buildSuccessSql('airdrops:arndxt', arndxtFeed, nowMs));
+    okKeys.push('airdrops:arndxt');
+    summaryParts.push(`arndxt: ${arndxtFeed.cards.length} cards/${arndxtFeed.tge.length} tge`);
+  }
+  // Note: Dune snapshot ingestion (worker/src/sources/dune.ts) is deferred until
+  // a Worker/frontend response consumer reads the airdrops:dune snapshot body.
 
   log(`Heavy ingest summary — ${summaryParts.join(', ')}`);
 

@@ -13,10 +13,22 @@ import type {
   TaskType,
 } from '../shared/types';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
-import { buildSurfIndex, computeClusterId } from '../worker/src/normalize/cluster';
+import { buildSurfIndex, computeClusterId, type SurfIndex } from '../worker/src/normalize/cluster';
+import { selectFeedLinks } from '../worker/src/normalize/domains';
 import { getRegistrableDomain, parseDropPost } from '../worker/src/normalize/parse';
 import { computeScore } from '../worker/src/normalize/score';
-import { collectKnownDomainEntries, evaluateSafety } from '../worker/src/safety';
+import { collectKnownDomainEntries, evaluateSafety, reconcileSafetyReasons } from '../worker/src/safety';
+import {
+  buildCuratedAirdropFeed,
+  extractDefiLlamaTokenlessAirdrops,
+  type CuratedSourceOutcome,
+} from '../worker/src/sources/curated';
+import {
+  AIRDROPALERT_CALENDAR_URL,
+  fetchDropFeedPosts,
+  parseWpCalendarFeedPayload,
+  parseWpCalendarToAirdropFeed,
+} from '../worker/src/sources/feeds';
 import {
   fetchCryptoSection,
   fetchGithubSection,
@@ -25,8 +37,8 @@ import {
   normalizeDefiProtocols,
   normalizeDefiYields,
 } from '../worker/src/sources/markets';
-import { SEED_SOURCES } from '../worker/src/sources/registry';
-import { fetchSurfAirdrops, normalizeSurf } from '../worker/src/sources/surf';
+import { SEED_SOURCES, getSeedSourceById } from '../worker/src/sources/registry';
+import { normalizeSurf } from '../worker/src/sources/surf';
 import { fetchTelegramChannelHtml, parseTelegramHtml } from '../worker/src/sources/telegram';
 
 const nowMs = Date.now();
@@ -141,6 +153,7 @@ export function selectFeedOutput(
  * per-post cap (6) as the per-channel slice.
  */
 export interface MergePost {
+  platform?: FeedSourceRef['platform'];
   handle: string;
   msgId: string;
   postUrl: string;
@@ -167,6 +180,7 @@ export function mergePostsStable(
     .sort(
       (a, b) =>
         b.postedAt - a.postedAt ||
+        (a.platform ?? 'telegram').localeCompare(b.platform ?? 'telegram') ||
         a.handle.localeCompare(b.handle) ||
         a.msgId.localeCompare(b.msgId),
     );
@@ -258,6 +272,9 @@ export interface BuildAirdropsDeps {
   fetchLive?: (nowMs: number) => Promise<AirdropFeed>;
   readPrior?: () => Promise<AirdropFeed | null>;
   readFixture?: () => Promise<unknown>;
+  protocolsRawPromise?: Promise<unknown>;
+  airdropAlertRawPromise?: Promise<unknown>;
+  onOutcomes?: (outcomes: CuratedSourceOutcome[]) => void;
 }
 
 export async function buildAirdrops(deps: BuildAirdropsDeps = {}): Promise<AirdropFeed> {
@@ -270,7 +287,33 @@ export async function buildAirdrops(deps: BuildAirdropsDeps = {}): Promise<Airdr
         headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS * 2),
       }));
-  const fetchLive = deps.fetchLive ?? ((ts: number) => fetchSurfAirdrops(undefined, ts));
+  const fetchLive =
+    deps.fetchLive ??
+    (async (ts: number): Promise<AirdropFeed> => {
+      const defiLlamaRaw = deps.protocolsRawPromise ? await deps.protocolsRawPromise.catch(() => null) : null;
+      const defiLlamaFeed = defiLlamaRaw ? extractDefiLlamaTokenlessAirdrops(defiLlamaRaw, ts) : null;
+      const { feed, outcomes } = await buildCuratedAirdropFeed({
+        nowMs: ts,
+        defiLlamaFeed,
+        fetchers: deps.airdropAlertRawPromise
+          ? {
+              airdropalert: async () => {
+                const raw = await deps.airdropAlertRawPromise;
+                const parsed = parseWpCalendarToAirdropFeed(raw, ts);
+                if (parsed.cards.length === 0 && parsed.tge.length === 0) {
+                  throw new Error('AirdropAlert calendar returned 0 events');
+                }
+                return parsed;
+              },
+            }
+          : undefined,
+      });
+      for (const o of outcomes) {
+        if (!o.ok) console.warn(`Curated source "${o.name}" failed:`, o.error);
+      }
+      deps.onOutcomes?.(outcomes);
+      return feed;
+    });
   const readPrior = deps.readPrior ?? readPriorAirdrops;
   const readFixture =
     deps.readFixture ??
@@ -291,7 +334,7 @@ export async function buildAirdrops(deps: BuildAirdropsDeps = {}): Promise<Airdr
   try {
     return await fetchLive(runNowMs);
   } catch (err) {
-    console.warn('Live surf fetch failed, falling back to prior/fixture:', err);
+    console.warn('All curated airdrop fetches failed, falling back to prior/fixture:', err);
     const prior = await readPrior();
     if (prior) return prior;
     const raw = await readFixture();
@@ -370,7 +413,9 @@ async function readPriorMarkets(): Promise<{ sections: MarketSection[]; sectors:
   }
 }
 
-async function buildMarkets(): Promise<MarketsResponse | null> {
+async function buildMarkets(
+  protocolsRawPromise?: Promise<unknown>,
+): Promise<MarketsResponse | null> {
   if (workerBase) {
     try {
       const res = await fetch(`${workerBase}/markets.json`, {
@@ -392,7 +437,7 @@ async function buildMarkets(): Promise<MarketsResponse | null> {
 
   const [cryptoRes, defiRes, yieldsRes, polyRes, dexRes, ghRes] = await Promise.allSettled([
     fetchCryptoSection(nowMs),
-    fetchJson('https://api.llama.fi/protocols').then(r => normalizeDefiProtocols(r, nowMs)),
+    (protocolsRawPromise ?? fetchJson('https://api.llama.fi/protocols')).then(r => normalizeDefiProtocols(r, nowMs)),
     fetchJson('https://yields.llama.fi/pools').then(r => normalizeDefiYields(r, nowMs)),
     fetchPredictionsSection(nowMs),
     fetchTrendingSection(nowMs),
@@ -420,9 +465,122 @@ async function buildMarkets(): Promise<MarketsResponse | null> {
   return merged ? { generatedAt: nowMs, sections: merged.sections, sectors: merged.sectors } : null;
 }
 
+/** Matches Worker parseDropPost's guard: ticker fallback applies only when no projectDomain is present. */
+export function resolveSnapshotSurfMatch(
+  parsed: { projectDomain?: string; ticker?: string },
+  surfIndex: SurfIndex,
+) {
+  return (
+    (parsed.projectDomain && surfIndex.byDomain.get(parsed.projectDomain)) ||
+    (!parsed.projectDomain && parsed.ticker && surfIndex.byTicker.get(parsed.ticker)) ||
+    undefined
+  );
+}
+
+export interface SnapshotAccCluster {
+  id: string;
+  project: string;
+  ticker?: string;
+  domain?: string;
+  chains: Set<string>;
+  taskTypes: Set<TaskType>;
+  summary: string;
+  urls: Set<string>;
+  rawIpUrls: Set<string>;
+  sources: FeedSourceRef[];
+  sourceIds: Set<string>;
+  sourceHandles: Set<string>;
+  trustMax: number;
+  firstSeen: number;
+  lastSeen: number;
+  texts: string[];
+  surf?: FeedItem['surf'];
+}
+
+export interface FinalizeSnapshotClusterCtx {
+  projectDomains: Map<string, string>;
+  platformDomains: Set<string>;
+  allKnownDomains: Set<string>;
+  nowMs: number;
+}
+
+/**
+ * Mirrors Worker `cluster.ts` safety + link hygiene on each accumulated
+ * snapshot cluster: passes `platformDomains` + `rawIpUrls` into `evaluateSafety`,
+ * selects up to 6 cleaned links via `selectFeedLinks`, and reconciles safety reasons.
+ */
+export function finalizeSnapshotCluster(
+  acc: SnapshotAccCluster,
+  ctx: FinalizeSnapshotClusterCtx,
+): FeedItem {
+  const urlsList = [...acc.urls].sort((a, b) => a.localeCompare(b));
+  const rawIpUrlsList = [...acc.rawIpUrls].sort((a, b) => a.localeCompare(b));
+  const chainsList = [...acc.chains].sort((a, b) => a.localeCompare(b));
+  const texts = [...acc.texts].sort((a, b) => a.localeCompare(b));
+  const cleanedLinks = selectFeedLinks(urlsList, {
+    projectDomain: acc.domain,
+    sourceHandles: acc.sourceHandles,
+    allKnownDomains: ctx.allKnownDomains,
+    maxLinks: 6,
+  });
+  const rawSafety = evaluateSafety({
+    domain: acc.domain,
+    urls: urlsList,
+    rawIpUrls: rawIpUrlsList,
+    text: texts.join('\n'),
+    knownProjectDomains: ctx.projectDomains,
+    platformDomains: ctx.platformDomains,
+    trustMax: acc.trustMax,
+    sourceCount: acc.sourceIds.size,
+  });
+  const safety = reconcileSafetyReasons({
+    level: rawSafety.level,
+    reasons: rawSafety.reasons,
+    domain: acc.domain,
+    cleanedLinks,
+    knownDomains: ctx.allKnownDomains,
+  });
+  const taskTypes = acc.taskTypes.size > 1
+    ? [...acc.taskTypes].sort((a, b) => a.localeCompare(b)).filter(t => t !== 'other')
+    : [...acc.taskTypes].sort((a, b) => a.localeCompare(b));
+  const score = computeScore({
+    trustMax: acc.trustMax,
+    sourceCount: acc.sourceIds.size,
+    lastSeen: acc.lastSeen,
+    nowMs: ctx.nowMs,
+    surfTier: acc.surf?.tier,
+    riskLevel: safety.level,
+  });
+  return {
+    id: acc.id,
+    project: acc.project,
+    ...(acc.ticker ? { ticker: acc.ticker } : {}),
+    ...(acc.domain ? { domain: acc.domain } : {}),
+    chains: chainsList,
+    taskTypes,
+    summary: acc.summary,
+    summarySource: 'rule',
+    links: cleanedLinks.map(url => {
+      const dom = getRegistrableDomain(url);
+      return { url, known: Boolean(dom && ctx.allKnownDomains.has(dom)) };
+    }),
+    sources: [...acc.sources]
+      .sort((a, b) => b.postedAt - a.postedAt || a.postUrl.localeCompare(b.postUrl))
+      .slice(0, 10),
+    sourceCount: acc.sourceIds.size,
+    score,
+    risk: safety as { level: RiskLevel; reasons: string[] },
+    ...(acc.surf ? { surf: acc.surf } : {}),
+    firstSeen: acc.firstSeen,
+    lastSeen: acc.lastSeen,
+  };
+}
+
 async function buildDropsAndSources(
   airdrops: AirdropFeed,
   markets: MarketsResponse,
+  curatedOutcomes: CuratedSourceOutcome[] = [],
+  airdropAlertRawPromise?: Promise<unknown>,
 ): Promise<{ feed: FeedResponse; sources: SourceHealth[]; liveChannelsSucceeded: number }> {
   if (workerBase) {
     const [fRes, sRes] = await Promise.allSettled([
@@ -470,44 +628,96 @@ async function buildDropsAndSources(
   const knownEntries = collectKnownDomainEntries(airdrops, defiSection);
   const allKnownDomains = new Set(knownEntries.map(e => e.domain));
   const projectDomains = new Map(knownEntries.filter(e => e.origin !== 'platform').map(e => [e.domain, e.project]));
+  const platformDomains = new Set(knownEntries.filter(e => e.origin === 'platform').map(e => e.domain));
   const surfIndex = buildSurfIndex(airdrops);
 
   const tgEnabled = SEED_SOURCES.filter(s => s.platform === 'telegram' && s.enabled);
+  const dropFeeds = SEED_SOURCES.filter(s => s.platform === 'feed' && s.enabled && s.tags.includes('drops'));
   // Rotate through the registry: without a usable WORKER_URL only 12 channels
   // can be polled per run, so successive runs cover the rest instead of
   // always omitting the same tail.
   const runSlot = Math.floor(nowMs / (6 * 3_600_000)) % Math.max(1, Math.ceil(tgEnabled.length / 12));
   const sampleBatch = tgEnabled.slice(runSlot * 12, runSlot * 12 + 12);
 
-  const { channelPosts, healthMap, liveChannelsSucceeded } = await collectLiveTelegramPosts(sampleBatch, nowMs);
+  let dropFeedsSucceeded = 0;
+  const feedPostsMap = new Map<string, { handle: string; posts: MergePost[] }>();
+  const feedHealthMap = new Map<string, SourceHealth>();
 
-  interface AccCluster {
-    id: string;
-    project: string;
-    ticker?: string;
-    domain?: string;
-    chains: Set<string>;
-    taskTypes: Set<TaskType>;
-    summary: string;
-    urls: Set<string>;
-    sources: FeedSourceRef[];
-    sourceIds: Set<string>;
-    trustMax: number;
-    firstSeen: number;
-    lastSeen: number;
-    texts: string[];
-    surf?: FeedItem['surf'];
+  const [{ channelPosts, healthMap, liveChannelsSucceeded: tgChannelsSucceeded }] = await Promise.all([
+    collectLiveTelegramPosts(sampleBatch, nowMs),
+    Promise.allSettled(
+      dropFeeds.map(async src => {
+        const id = `feed:${src.handle}`;
+        try {
+          const posts =
+            src.parser === 'wp_calendar' && airdropAlertRawPromise
+              ? parseWpCalendarFeedPayload(await airdropAlertRawPromise)
+              : await fetchDropFeedPosts(src, nowMs);
+          feedHealthMap.set(id, {
+            id,
+            platform: 'feed',
+            handle: src.handle,
+            status: 'ok',
+            lastOkAt: nowMs,
+          });
+          if (posts.length > 0) {
+            dropFeedsSucceeded++;
+            feedPostsMap.set(id, {
+              handle: src.handle,
+              posts: posts.map(p => ({
+                platform: 'feed',
+                handle: src.handle,
+                msgId: p.id,
+                postUrl: p.postUrl,
+                postedAt: p.postedAt,
+                text: p.text,
+                urls: p.urls,
+              })),
+            });
+          }
+        } catch {
+          feedHealthMap.set(id, {
+            id,
+            platform: 'feed',
+            handle: src.handle,
+            status: 'down',
+            lastOkAt: null,
+          });
+        }
+      }),
+    ),
+  ]);
+
+  for (const [id, entry] of feedPostsMap) {
+    channelPosts.set(id, entry);
+  }
+  for (const [id, health] of feedHealthMap) {
+    healthMap.set(id, health);
+  }
+  for (const o of curatedOutcomes) {
+    if (!o.sourceId || o.sourceId === 'feed:airdropalert_calendar') continue;
+    const [platform, handle] = o.sourceId.split(':');
+    if (!platform || !handle) continue;
+    healthMap.set(o.sourceId, {
+      id: o.sourceId,
+      platform,
+      handle,
+      status: o.ok ? 'ok' : 'down',
+      lastOkAt: o.ok ? nowMs : null,
+    });
   }
 
-  const clusters = new Map<string, AccCluster>();
+  const liveChannelsSucceeded = tgChannelsSucceeded + dropFeedsSucceeded;
+  const clusters = new Map<string, SnapshotAccCluster>();
   const cutoff = nowMs - 14 * 86_400_000;
 
-  // Deterministic merge before clustering: caps (summary pick, links 8,
+  // Deterministic merge before clustering: caps (summary pick, links 6,
   // sources 10) no longer depend on channel completion order.
   const merged = fixtureFallbackNeeded(channelPosts) ? [] : mergePostsStable([...channelPosts.values()], cutoff);
   for (const post of merged) {
-    const src = SEED_SOURCES.find(s => s.handle === post.handle) ?? {
-      platform: 'telegram' as const,
+    const platform = post.platform ?? 'telegram';
+    const src = SEED_SOURCES.find(s => s.platform === platform && s.handle === post.handle) ?? {
+      platform,
       handle: post.handle,
       lang: 'en',
       trust: 0.6,
@@ -515,19 +725,23 @@ async function buildDropsAndSources(
       enabled: true,
     };
     const parsed = parseDropPost(post.text, post.urls, {
+      sourceLang: src.lang,
       knownDomains: projectDomains,
       surfByDomain: surfIndex.byDomain,
       surfByTicker: surfIndex.byTicker,
     });
+    if (!parsed.isRelevantDrop) continue;
     // Same identity rule as the Worker: drift here silently split or
     // merged clusters between the committed snapshot and the live feed.
-    const cid = await computeClusterId(parsed.projectDomain, parsed.ticker, parsed.project, `${post.handle}:${post.msgId}`);
+    const cid = await computeClusterId(
+      parsed.projectDomain,
+      parsed.ticker,
+      parsed.project,
+      `${platform}:${post.handle}:${post.msgId}`,
+    );
 
-    const srcId = `telegram:${post.handle}`;
-    const surfMatch =
-      (parsed.projectDomain && surfIndex.byDomain.get(parsed.projectDomain)) ||
-      (parsed.ticker && surfIndex.byTicker.get(parsed.ticker)) ||
-      undefined;
+    const srcId = `${platform}:${post.handle}`;
+    const surfMatch = resolveSnapshotSurfMatch(parsed, surfIndex);
 
     let acc = clusters.get(cid);
     if (!acc) {
@@ -540,8 +754,10 @@ async function buildDropsAndSources(
         taskTypes: new Set(parsed.taskTypes),
         summary: parsed.summary,
         urls: new Set(parsed.urls),
+        rawIpUrls: new Set(parsed.rawIpUrls ?? []),
         sources: [],
         sourceIds: new Set(),
+        sourceHandles: new Set(),
         trustMax: src.trust,
         firstSeen: post.postedAt,
         lastSeen: post.postedAt,
@@ -553,15 +769,17 @@ async function buildDropsAndSources(
       for (const c of parsed.chains) acc.chains.add(c);
       for (const t of parsed.taskTypes) acc.taskTypes.add(t);
       for (const u of parsed.urls) acc.urls.add(u);
+      for (const ipUrl of parsed.rawIpUrls ?? []) acc.rawIpUrls.add(ipUrl);
       acc.trustMax = Math.max(acc.trustMax, src.trust);
       acc.firstSeen = Math.min(acc.firstSeen, post.postedAt);
       acc.lastSeen = Math.max(acc.lastSeen, post.postedAt);
       acc.texts.push(post.text);
     }
     acc.sourceIds.add(srcId);
+    acc.sourceHandles.add(post.handle);
     if (acc.sources.length < 10) {
       acc.sources.push({
-        platform: 'telegram',
+        platform,
         handle: post.handle,
         postUrl: post.postUrl,
         postedAt: post.postedAt,
@@ -570,58 +788,14 @@ async function buildDropsAndSources(
   }
 
   const items: FeedItem[] = [];
+  const finalizeCtx: FinalizeSnapshotClusterCtx = {
+    projectDomains,
+    platformDomains,
+    allKnownDomains,
+    nowMs,
+  };
   for (const acc of clusters.values()) {
-    // Determinism: every collection here feeds a cap, join, or pick. Sort by
-    // stable keys so identical input data cannot produce different bytes when
-    // post arrival order changed (the merge order is already stable).
-    const urlsList = [...acc.urls].sort((a, b) => a.localeCompare(b));
-    const chainsList = [...acc.chains].sort((a, b) => a.localeCompare(b));
-    const texts = [...acc.texts].sort((a, b) => a.localeCompare(b));
-    const safety = evaluateSafety({
-      domain: acc.domain,
-      urls: urlsList,
-      text: texts.join('\n'),
-      knownProjectDomains: projectDomains,
-      trustMax: acc.trustMax,
-      sourceCount: acc.sourceIds.size,
-    });
-    const taskTypes = acc.taskTypes.size > 1
-      ? [...acc.taskTypes].sort((a, b) => a.localeCompare(b)).filter(t => t !== 'other')
-      : [...acc.taskTypes].sort((a, b) => a.localeCompare(b));
-    const score = computeScore({
-      trustMax: acc.trustMax,
-      sourceCount: acc.sourceIds.size,
-      lastSeen: acc.lastSeen,
-      nowMs,
-      surfTier: acc.surf?.tier,
-      riskLevel: safety.level,
-    });
-    items.push({
-      id: acc.id,
-      project: acc.project,
-      ...(acc.ticker ? { ticker: acc.ticker } : {}),
-      ...(acc.domain ? { domain: acc.domain } : {}),
-      chains: chainsList,
-      taskTypes,
-      summary: acc.summary,
-      summarySource: 'rule',
-      links: urlsList.slice(0, 8).map(url => {
-        const dom = getRegistrableDomain(url);
-        return { url, known: Boolean(dom && allKnownDomains.has(dom)) };
-      }),
-      // Stable cap: postedAt desc with postUrl tiebreak, so identical data
-      // cannot reorder on completion timing (merge is already deterministic;
-      // this keeps the in-flight cap below 10 order-free too).
-      sources: [...acc.sources]
-        .sort((a, b) => b.postedAt - a.postedAt || a.postUrl.localeCompare(b.postUrl))
-        .slice(0, 10),
-      sourceCount: acc.sourceIds.size,
-      score,
-      risk: safety as { level: RiskLevel; reasons: string[] },
-      ...(acc.surf ? { surf: acc.surf } : {}),
-      firstSeen: acc.firstSeen,
-      lastSeen: acc.lastSeen,
-    });
+    items.push(finalizeSnapshotCluster(acc, finalizeCtx));
   }
 
   // Deterministic order: id tiebreak matches the Worker's queryFeed, so two
@@ -703,13 +877,35 @@ if (import.meta.main) {
 
 async function runSnapshot(): Promise<void> {
   await mkdir('data/snapshot', { recursive: true });
-  const [airdrops, markets] = await Promise.all([buildAirdrops(), buildMarkets()]);
+  // Share single DefiLlama protocols & AirdropAlert calendar fetches concurrently
+  // across airdrops, markets, and drop feeds without pre-awaiting serially.
+  const sharedProtocolsPromise = workerBase ? undefined : fetchJson('https://api.llama.fi/protocols');
+  const airdropAlertUrl = getSeedSourceById('feed:airdropalert_calendar')?.url ?? AIRDROPALERT_CALENDAR_URL;
+  const sharedAirdropAlertPromise = workerBase ? undefined : fetchJson(airdropAlertUrl);
+  sharedProtocolsPromise?.catch(() => {});
+  sharedAirdropAlertPromise?.catch(() => {});
+  let curatedOutcomes: CuratedSourceOutcome[] = [];
+  const [airdrops, markets] = await Promise.all([
+    buildAirdrops({
+      protocolsRawPromise: sharedProtocolsPromise,
+      airdropAlertRawPromise: sharedAirdropAlertPromise,
+      onOutcomes: outcomes => {
+        curatedOutcomes = outcomes;
+      },
+    }),
+    buildMarkets(sharedProtocolsPromise),
+  ]);
   // Never publish empty payloads: a total fetch failure must keep the last
   // committed snapshot instead of wiping markets (or the feed) to `[]`.
   if (!markets) {
     throw new Error('All market fetches failed and no committed section could be reused — refusing to overwrite data/snapshot/markets.json');
   }
-  const { feed, sources, liveChannelsSucceeded } = await buildDropsAndSources(airdrops, markets);
+  const { feed, sources, liveChannelsSucceeded } = await buildDropsAndSources(
+    airdrops,
+    markets,
+    curatedOutcomes,
+    sharedAirdropAlertPromise,
+  );
   const existingFeed = liveChannelsSucceeded > 0 && feed.items.length > 0 ? null : await readExistingFeed();
   const feedOut = selectFeedOutput(feed, liveChannelsSucceeded, existingFeed);
 

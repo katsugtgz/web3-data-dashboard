@@ -1,6 +1,28 @@
 import sourcesJson from '../../sources.json';
 
-export type SourcePlatform = 'telegram' | 'x';
+export type SourcePlatform = 'telegram' | 'x' | 'sheet' | 'feed';
+
+export const ALLOWED_SOURCE_PARSERS = [
+  'asso7878',
+  'arndxt',
+  'rss',
+  'wp_calendar',
+  'substack',
+  'galxe',
+  'pendle',
+  'merkl',
+] as const;
+
+export type SourceParser = (typeof ALLOWED_SOURCE_PARSERS)[number];
+
+const ALLOWED_SOURCE_PARSER_SET: ReadonlySet<string> = new Set(ALLOWED_SOURCE_PARSERS);
+const SHEET_SOURCE_PARSER_SET: ReadonlySet<SourceParser> = new Set(['asso7878', 'arndxt']);
+const DROP_FEED_PARSER_SET: ReadonlySet<SourceParser> = new Set(['rss', 'wp_calendar', 'substack', 'galxe']);
+const CURATED_FEED_PARSER_SET: ReadonlySet<SourceParser> = new Set(['wp_calendar', 'pendle', 'merkl']);
+const FEED_SOURCE_PARSER_SET: ReadonlySet<SourceParser> = new Set([
+  ...DROP_FEED_PARSER_SET,
+  ...CURATED_FEED_PARSER_SET,
+]);
 
 export interface SourceConfig {
   platform: SourcePlatform;
@@ -9,9 +31,27 @@ export interface SourceConfig {
   trust: number;
   tags: string[];
   enabled: boolean;
+  url?: string;
+  parser?: SourceParser;
 }
 
 const HANDLE_RE = /^[A-Za-z0-9_]{4,32}$/;
+
+function validateHttpsUrl(raw: unknown, label: string): string {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error(`${label} must be a valid https:// URL`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    throw new Error(`${label} invalid URL: ${raw}`);
+  }
+  if (parsed.protocol !== 'https:' || !parsed.hostname) {
+    throw new Error(`${label} must use https://: ${raw}`);
+  }
+  return parsed.toString();
+}
 
 export function validateSources(raw: unknown): SourceConfig[] {
   if (!Array.isArray(raw)) {
@@ -26,7 +66,7 @@ export function validateSources(raw: unknown): SourceConfig[] {
       throw new Error(`sources[${i}] must be an object`);
     }
     const platform = item.platform;
-    if (platform !== 'telegram' && platform !== 'x') {
+    if (platform !== 'telegram' && platform !== 'x' && platform !== 'sheet' && platform !== 'feed') {
       throw new Error(`sources[${i}].platform invalid: ${String(platform)}`);
     }
     const handle = item.handle;
@@ -51,13 +91,70 @@ export function validateSources(raw: unknown): SourceConfig[] {
       throw new Error(`sources[${i}].enabled must be a boolean: ${String(item.enabled)}`);
     }
     const enabled = item.enabled;
-    out.push({ platform, handle, lang, trust, tags, enabled });
+
+    let url: string | undefined;
+    if (platform === 'sheet' || platform === 'feed' || item.url !== undefined) {
+      url = validateHttpsUrl(item.url, `sources[${i}].url`);
+    }
+
+    let parser: SourceParser | undefined;
+    if (platform === 'sheet' || platform === 'feed' || item.parser !== undefined) {
+      if (platform !== 'sheet' && platform !== 'feed') {
+        throw new Error(`sources[${i}].parser is not supported for platform ${platform}`);
+      }
+      if (typeof item.parser !== 'string' || !ALLOWED_SOURCE_PARSER_SET.has(item.parser.trim())) {
+        throw new Error(`sources[${i}].parser invalid: ${String(item.parser)}`);
+      }
+      parser = item.parser.trim() as SourceParser;
+      if (platform === 'sheet') {
+        if (!SHEET_SOURCE_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" is not valid for sheet platform`);
+        }
+        if (tags.includes('drops')) {
+          throw new Error(`sources[${i}] sheet source cannot use drops polling role`);
+        }
+      } else {
+        if (!FEED_SOURCE_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" is not valid for feed platform`);
+        }
+        if (tags.includes('drops') && !DROP_FEED_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" cannot run in drops polling role`);
+        }
+        if (tags.includes('curated') && !CURATED_FEED_PARSER_SET.has(parser)) {
+          throw new Error(`sources[${i}].parser "${parser}" cannot run in curated polling role`);
+        }
+      }
+    }
+
+    const entry: SourceConfig = { platform, handle, lang, trust, tags, enabled };
+    if (url !== undefined) entry.url = url;
+    if (parser !== undefined) entry.parser = parser;
+    out.push(entry);
   }
 
   return out;
 }
 
 export const SEED_SOURCES: SourceConfig[] = validateSources(sourcesJson);
+
+export const SEED_SOURCE_BY_ID: ReadonlyMap<string, SourceConfig> = new Map(
+  SEED_SOURCES.map(s => [`${s.platform}:${s.handle.toLowerCase()}`, s]),
+);
+
+export function getSeedSourceById(id: string): SourceConfig | undefined {
+  return SEED_SOURCE_BY_ID.get(id.toLowerCase());
+}
+
+export function resolveCuratedSourceUrl(
+  overrideUrl: string | undefined,
+  sourceId: string,
+  fallbackUrl: string,
+  registry: ReadonlyMap<string, SourceConfig> = SEED_SOURCE_BY_ID,
+): string {
+  const explicit = overrideUrl?.trim();
+  if (explicit) return explicit;
+  return registry.get(sourceId.toLowerCase())?.url ?? fallbackUrl;
+}
 
 /**
  * Conditionally syncs `sources.json` into D1 with one table read and one

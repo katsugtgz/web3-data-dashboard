@@ -14,6 +14,7 @@ export interface CardTask {
   timeMinutes: number | null;
   url: string | null;
   isExclusive?: boolean;
+  source?: string;
 }
 
 export interface Card {
@@ -45,6 +46,7 @@ export interface Card {
   sc: number;
   sub: [number, number, number | null];
   url: string | null;
+  source?: string;
 }
 
 export interface Tge {
@@ -56,6 +58,7 @@ export interface Tge {
   tier?: Grade;
   raise?: string;
   url?: string | null;
+  source?: string;
 }
 
 export interface Tab {
@@ -134,7 +137,7 @@ export type TaskType = (typeof TASK_TYPES)[number];
 export type RiskLevel = 'ok' | 'warn' | 'risk';
 
 export interface FeedSourceRef {
-  platform: 'telegram' | 'x' | 'surf';
+  platform: 'telegram' | 'x' | 'surf' | 'sheet' | 'feed';
   handle: string;
   postUrl: string;
   postedAt: number;

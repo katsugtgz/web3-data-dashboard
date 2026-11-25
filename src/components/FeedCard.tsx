@@ -5,6 +5,7 @@ import {
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
+  formatSourceHandle,
   prepareFeedLinks,
   type DisplayLink,
   type DisplayRiskNote,
@@ -143,20 +144,17 @@ function FeedSourceRefs({ sources }: { sources: FeedItem['sources'] }) {
     <ul className="source-refs" aria-label="Source posts">
       {sources.map(src => {
         const safePostUrl = isHttpUrl(src.postUrl) ? src.postUrl.trim() : null;
+        const label = `${formatSourceHandle(src.platform, src.handle) || src.platform} (${src.platform})`;
         return (
           <li key={src.postUrl}>
             {safePostUrl ? (
               <a href={safePostUrl} target="_blank" rel="noopener noreferrer">
-                <span>
-                  @{src.handle} ({src.platform})
-                </span>
+                <span>{label}</span>
                 <span className="sr"> post (opens in a new tab)</span>
                 <ExternalLinkIcon size={11} />
               </a>
             ) : (
-              <span>
-                @{src.handle} ({src.platform})
-              </span>
+              <span>{label}</span>
             )}
             <span className="mono note">{formatRelativeTime(src.postedAt)}</span>
           </li>
@@ -215,7 +213,7 @@ export function FeedCard({ item, onCopyBrief }: Props) {
 
         <div className="card-actions feed-head-right">
           {item.surf?.tier && (
-            <span className={`gradetip tier-pill ${item.surf.tier}`} title={`Surf Tier ${item.surf.tier}`}>
+            <span className={`gradetip tier-pill ${item.surf.tier}`} title={`Curated Tier ${item.surf.tier}`}>
               Tier {item.surf.tier}
             </span>
           )}

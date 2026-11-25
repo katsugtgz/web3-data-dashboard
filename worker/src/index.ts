@@ -13,9 +13,11 @@ import {
   listSnapshotsByPrefix,
   markSnapshotError,
   readSnapshot,
+  readSnapshotMeta,
   sha1Hex,
   toHealthMap,
   upsertSnapshot,
+  type SnapshotMetaWithLenRow,
   type SnapshotRow,
 } from './lib/db';
 import { queryFeed, querySourcesHealth, type IngestPostResult } from './normalize/cluster';
@@ -27,7 +29,9 @@ import {
   type AiBindingLike,
 } from './normalize/summarize';
 import { loadKnownDomains, seedKnownDomains } from './safety';
+import { buildCuratedAirdropFeed, type CuratedSourceOutcome } from './sources/curated';
 import { extractCandidateHandles, getTopCandidates, recordCandidates } from './sources/discover';
+import { computeFeedBackoff, pollFeedBatch } from './sources/feeds';
 import {
   fetchCryptoSection,
   fetchGithubSection,
@@ -36,7 +40,6 @@ import {
   type MarketUrls,
 } from './sources/markets';
 import { SEED_SOURCES, syncSources } from './sources/registry';
-import { fetchSurfAirdrops } from './sources/surf';
 import { pollTelegramBatch, pruneOldPosts } from './sources/telegram';
 import { pollXBatch } from './sources/x';
 
@@ -45,9 +48,16 @@ export interface Env {
   AI?: AiBindingLike;
   TG_BATCH_SIZE?: string;
   X_BATCH_SIZE?: string;
+  FEED_BATCH_SIZE?: string;
+  X_RSS_MIRROR_BASE?: string;
   AI_DAILY_MAX?: string;
   AI_SUMMARY_CHUNK?: string;
   SURF_AIRDROPS_URL?: string;
+  ASSO7878_SHEET_URL?: string;
+  ARNDXT_SHEET_URL?: string;
+  PENDLE_POINTS_URL?: string;
+  MERKL_OPPORTUNITIES_URL?: string;
+  AIRDROPALERT_CALENDAR_URL?: string;
   POLYMARKET_URL?: string;
   COINGECKO_MARKETS_URL?: string;
   DEX_BOOSTS_URL?: string;
@@ -66,6 +76,7 @@ const utf8Encoder = new TextEncoder();
 
 const THIRTY_MIN_MS = 30 * 60_000;
 const SIXTY_MIN_MS = 60 * 60_000;
+const SIX_H_MS = 6 * 3_600_000;
 const FIVE_MIN_STALE_MS = 15 * 60_000;
 const THIRTY_MIN_STALE_MS = 90 * 60_000;
 
@@ -168,23 +179,26 @@ async function loadCachedSurf(db: D1Database): Promise<AirdropFeed | null> {
   }
 }
 
-async function loadCachedSurfAndDefi(db: D1Database): Promise<{
-  surf: AirdropFeed | null;
-  defi: MarketSection | null;
-}> {
-  // A transient D1 read failure here must not abort the rest of the cron
-  // (X polling, domain seeding, pruning, decay all follow). Degrade to nulls.
-  let surfRow: SnapshotRow | null = null;
-  let defiRow: SnapshotRow | null = null;
+async function loadCachedAirdrops(db: D1Database): Promise<{ feed: AirdropFeed | null; fetchedAt: number }> {
+  let row: SnapshotRow | null = null;
   try {
-    [surfRow, defiRow] = await Promise.all([readSnapshot(db, 'airdrops'), readSnapshot(db, 'markets:defi')]);
+    row = await readSnapshot(db, 'airdrops');
   } catch (err) {
-    console.error('cron-error:loadCachedSurfAndDefi', err);
+    console.error('cron-error:loadCachedAirdrops', err);
   }
-  return {
-    surf: parseSnapshotJson<AirdropFeed>(surfRow),
-    defi: parseSnapshotJson<MarketSection>(defiRow),
-  };
+  const feed = parseSnapshotJson<AirdropFeed>(row);
+  return { feed, fetchedAt: feed && row ? row.fetched_at : 0 };
+}
+
+async function loadCachedDefi(db: D1Database): Promise<{ defi: MarketSection | null; fetchedAt: number }> {
+  let row: SnapshotRow | null = null;
+  try {
+    row = await readSnapshot(db, 'markets:defi');
+  } catch (err) {
+    console.error('cron-error:loadCachedDefi', err);
+  }
+  const defi = parseSnapshotJson<MarketSection>(row);
+  return { defi, fetchedAt: defi && row ? row.fetched_at : 0 };
 }
 
 /** Exported for behavior tests: the AI-summary chunk/backlog seam. */
@@ -282,6 +296,111 @@ async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
   }
 }
 
+async function loadCachedDefiLlamaAirdrops(db: D1Database, nowMs: number): Promise<AirdropFeed | null> {
+  try {
+    const row = await readSnapshot(db, 'airdrops:defillama');
+    if (!row?.body || row.body === '{}') return null;
+    if (nowMs - row.fetched_at > SIX_H_MS) return null;
+    const parsed = JSON.parse(row.body) as AirdropFeed;
+    return Array.isArray(parsed?.cards) ? parsed : null;
+  } catch (err) {
+    console.error('cron-error:loadCachedDefiLlamaAirdrops', err);
+    return null;
+  }
+}
+
+async function loadFreshCachedSheetFeed(
+  db: D1Database,
+  key: string,
+  nowMs: number,
+): Promise<{ feed: AirdropFeed; fetchedAt: number } | null> {
+  try {
+    const row = await readSnapshot(db, key);
+    if (!row || row.ok !== 1 || !row.body || row.body === '{}') return null;
+    if (nowMs - row.fetched_at > SIX_H_MS) return null;
+    const parsed = JSON.parse(row.body) as AirdropFeed;
+    const hasCards = Array.isArray(parsed?.cards) && parsed.cards.length > 0;
+    const hasTge = Array.isArray(parsed?.tge) && parsed.tge.length > 0;
+    return hasCards || hasTge ? { feed: parsed, fetchedAt: row.fetched_at } : null;
+  } catch (err) {
+    console.error(`cron-error:loadFreshCachedSheetFeed:${key}`, err);
+    return null;
+  }
+}
+
+async function recordCachedSheetHealth(
+  db: D1Database,
+  entries: { sourceId: string; fetchedAt: number }[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  await Promise.all(
+    entries.map(async ({ sourceId, fetchedAt }) => {
+      try {
+        await db
+          .prepare(
+            `UPDATE sources
+             SET last_ok_at = MAX(COALESCE(last_ok_at, 0), ?2),
+                 last_polled_at = MAX(COALESCE(last_polled_at, 0), ?2),
+                 status = 'ok',
+                 fail_count = 0,
+                 first_fail_at = NULL,
+                 next_poll_at = NULL
+             WHERE id = ?1`,
+          )
+          .bind(sourceId, fetchedAt)
+          .run();
+      } catch (err) {
+        console.error(`cron-error:cached-sheet-health:${sourceId}`, err);
+      }
+    }),
+  );
+}
+
+async function recordCuratedSourceOutcomes(
+  db: D1Database,
+  outcomes: CuratedSourceOutcome[],
+  nowMs: number,
+): Promise<void> {
+  // Update health for sheet:* and curated-only feed:* sources (airdropalert_calendar
+  // is owned by pollFeedBatch so its cursor and TTL stay independent).
+  const tracked = outcomes.filter(o => o.sourceId && o.sourceId !== 'feed:airdropalert_calendar');
+  if (tracked.length === 0) return;
+
+  await Promise.all(
+    tracked.map(async o => {
+      try {
+        if (o.ok) {
+          await db
+            .prepare(
+              `UPDATE sources
+               SET last_ok_at = ?2, last_polled_at = ?2, status = 'ok',
+                   fail_count = 0, first_fail_at = NULL, next_poll_at = ?3
+               WHERE id = ?1`,
+            )
+            .bind(o.sourceId!, nowMs, nowMs + THIRTY_MIN_MS)
+            .run();
+        } else {
+          const prev = await db
+            .prepare('SELECT fail_count, first_fail_at FROM sources WHERE id = ?1')
+            .bind(o.sourceId!)
+            .first<{ fail_count: number; first_fail_at: number | null }>();
+          const backoff = computeFeedBackoff(prev?.fail_count ?? 0, prev?.first_fail_at ?? null, nowMs);
+          await db
+            .prepare(
+              `UPDATE sources
+               SET last_polled_at = ?2, fail_count = ?3, first_fail_at = ?4, status = ?5, next_poll_at = ?6
+               WHERE id = ?1`,
+            )
+            .bind(o.sourceId!, nowMs, backoff.failCount, backoff.firstFailAt, backoff.status, backoff.nextPollAt)
+            .run();
+        }
+      } catch (err) {
+        console.error(`cron-error:curated-health:${o.sourceId}`, err);
+      }
+    }),
+  );
+}
+
 async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   await ensureSourcesSynced(env.DB);
   const urls: MarketUrls = {
@@ -291,8 +410,109 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
     github: env.GITHUB_SEARCH_URL,
   };
 
+  let inMemoryAirdrops: AirdropFeed | null = null;
+  let airdropsLoaded = false;
+  let airdropsFetchedAt = 0;
+  let airdropsHasBody = false;
+
   await Promise.all([
-    runIsolated(env.DB, 'airdrops', nowMs, () => fetchSurfAirdrops(env.SURF_AIRDROPS_URL, nowMs)),
+    (async () => {
+      // Throttle curated multi-source refresh via metadata-only snapshots lookup
+      // (30-min TTL), avoiding full 600KB body reads on sub-interval ticks.
+      let prevMeta: SnapshotMetaWithLenRow | null = null;
+      try {
+        prevMeta = await readSnapshotMeta(env.DB, 'airdrops');
+      } catch (err) {
+        console.error('cron-error:readSnapshotMeta:airdrops', err);
+      }
+      if (prevMeta && prevMeta.body_len > 2) {
+        airdropsHasBody = true;
+        airdropsFetchedAt = prevMeta.fetched_at;
+        if (prevMeta.ok === 1 && nowMs - prevMeta.fetched_at < THIRTY_MIN_MS) return;
+      }
+
+      const [prevLoaded, defiLlamaFeed, cachedAsso, cachedArndxt, sourceStates] = await Promise.all([
+        !prevMeta || prevMeta.body_len > 2 ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: null, fetchedAt: 0 }),
+        loadCachedDefiLlamaAirdrops(env.DB, nowMs),
+        loadFreshCachedSheetFeed(env.DB, 'airdrops:asso7878', nowMs),
+        loadFreshCachedSheetFeed(env.DB, 'airdrops:arndxt', nowMs),
+        (async () => {
+          const disabledSourceIds = new Set<string>();
+          const deferredSourceIds = new Set<string>();
+          try {
+            const res = await env.DB.prepare(
+              `SELECT id, enabled, status, next_poll_at
+               FROM sources
+               WHERE platform IN ('sheet', 'feed')`,
+            ).all<{ id: string; enabled: number; status: string | null; next_poll_at: number | null }>();
+            for (const row of res.results ?? []) {
+              const lowerId = row.id.toLowerCase();
+              if (row.enabled === 0) {
+                disabledSourceIds.add(lowerId);
+              } else if (
+                row.next_poll_at != null &&
+                row.next_poll_at > nowMs &&
+                (lowerId !== 'feed:airdropalert_calendar' || row.status !== 'ok')
+              ) {
+                deferredSourceIds.add(lowerId);
+              }
+            }
+          } catch (err) {
+            console.error('cron-error:curated-sources-state', err);
+          }
+          return { disabledSourceIds, deferredSourceIds };
+        })(),
+      ]);
+
+      // Fresh offloaded sheet snapshots bypass live CSV parsing (keeping Worker
+      // CPU well under 10 ms) and should never be blocked by prior live backoff.
+      const cachedSheetHealth: { sourceId: string; fetchedAt: number }[] = [];
+      if (cachedAsso && !sourceStates.disabledSourceIds.has('sheet:asso7878_sheet')) {
+        sourceStates.deferredSourceIds.delete('sheet:asso7878_sheet');
+        cachedSheetHealth.push({ sourceId: 'sheet:asso7878_sheet', fetchedAt: cachedAsso.fetchedAt });
+      }
+      if (cachedArndxt && !sourceStates.disabledSourceIds.has('sheet:arndxt_sheet')) {
+        sourceStates.deferredSourceIds.delete('sheet:arndxt_sheet');
+        cachedSheetHealth.push({ sourceId: 'sheet:arndxt_sheet', fetchedAt: cachedArndxt.fetchedAt });
+      }
+
+      const prevFeed = prevLoaded.feed;
+      try {
+        const res = await buildCuratedAirdropFeed({
+          nowMs,
+          surfUrl: env.SURF_AIRDROPS_URL,
+          asso7878Url: env.ASSO7878_SHEET_URL,
+          arndxtUrl: env.ARNDXT_SHEET_URL,
+          pendleUrl: env.PENDLE_POINTS_URL,
+          merklUrl: env.MERKL_OPPORTUNITIES_URL,
+          airdropAlertUrl: env.AIRDROPALERT_CALENDAR_URL,
+          defiLlamaFeed,
+          cachedAsso7878Feed: cachedAsso?.feed ?? null,
+          cachedArndxtFeed: cachedArndxt?.feed ?? null,
+          prevFeed,
+          disabledSourceIds: sourceStates.disabledSourceIds,
+          deferredSourceIds: sourceStates.deferredSourceIds,
+          onOutcomes: async outcomes => {
+            await Promise.all([
+              recordCuratedSourceOutcomes(env.DB, outcomes, nowMs),
+              recordCachedSheetHealth(env.DB, cachedSheetHealth),
+            ]);
+          },
+        });
+        await upsertSnapshot(env.DB, 'airdrops', res.feed, nowMs);
+        inMemoryAirdrops = res.feed;
+        airdropsLoaded = true;
+        airdropsHasBody = true;
+        airdropsFetchedAt = nowMs;
+      } catch (err) {
+        console.error('cron-error:airdrops', err);
+        await markSnapshotError(env.DB, 'airdrops', err, nowMs);
+        inMemoryAirdrops = prevFeed;
+        airdropsLoaded = true;
+        airdropsHasBody = Boolean(prevFeed);
+        airdropsFetchedAt = prevFeed ? prevLoaded.fetchedAt : 0;
+      }
+    })(),
     runIsolated(env.DB, 'markets:crypto', nowMs, () => fetchCryptoSection(nowMs, urls)),
     runIsolated(env.DB, 'markets:predictions', nowMs, () => fetchPredictionsSection(nowMs, urls)),
     runIsolated(env.DB, 'markets:trending', nowMs, () => fetchTrendingSection(nowMs, urls)),
@@ -300,28 +520,77 @@ async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
       // Transient D1 read failure must not abort the cron (domain seeding, X
       // polling, pruning, decay all follow). On failure, fall through and
       // refresh github this tick.
-      let prev: SnapshotRow | null = null;
+      let prev: SnapshotMetaWithLenRow | null = null;
       try {
-        prev = await readSnapshot(env.DB, 'markets:github');
+        prev = await readSnapshotMeta(env.DB, 'markets:github');
       } catch (err) {
-        console.error('cron-error:readSnapshot:markets:github', err);
+        console.error('cron-error:readSnapshotMeta:markets:github', err);
       }
-      if (prev && prev.ok === 1 && nowMs - prev.fetched_at < THIRTY_MIN_MS) return;
+      if (prev && prev.ok === 1 && prev.body_len > 2 && nowMs - prev.fetched_at < THIRTY_MIN_MS) return;
       await runIsolated(env.DB, 'markets:github', nowMs, () => fetchGithubSection(nowMs, urls));
     })(),
   ]);
 
-  const { surf, defi } = await loadCachedSurfAndDefi(env.DB);
-  await seedKnownDomains(env.DB, surf, defi);
-
-  // Best-effort X polling (never throws unhandled errors)
-  const xBatch = parseNonNegativeInt(env.X_BATCH_SIZE, 3);
-  const xSummary =
-    xBatch > 0
-      ? await pollXBatch(env.DB, xBatch, nowMs, surf)
-      : { polled: 0, insertedPosts: 0, errors: 0, ingestedResults: [] };
+  // Gate seedKnownDomains on actual airdrops or markets:defi snapshot updates
+  // (tracked via cron_state 'known_domains_seed') to avoid full 5-min rescans.
+  let defiMeta: SnapshotMetaWithLenRow | null = null;
+  let lastSeededAt = 0;
   try {
-    await postProcessIngest(env, xSummary.ingestedResults, nowMs);
+    const [dm, seedRow] = await Promise.all([
+      readSnapshotMeta(env.DB, 'markets:defi'),
+      env.DB.prepare(`SELECT last_run_at FROM cron_state WHERE key = 'known_domains_seed'`).first<{
+        last_run_at: number;
+      }>(),
+    ]);
+    defiMeta = dm;
+    lastSeededAt = seedRow?.last_run_at ?? 0;
+  } catch (err) {
+    console.error('cron-error:known_domains_seed_meta', err);
+  }
+
+  const airdropsValidTs = airdropsHasBody ? airdropsFetchedAt : 0;
+  const defiValidTs = defiMeta && defiMeta.body_len > 2 ? defiMeta.fetched_at : 0;
+  const latestDomainSourceTs = Math.max(airdropsValidTs, defiValidTs);
+
+  const xBatch = parseNonNegativeInt(env.X_BATCH_SIZE, 3);
+  const feedBatch = parseNonNegativeInt(env.FEED_BATCH_SIZE, 3);
+
+  let surf: AirdropFeed | null = inMemoryAirdrops;
+  if (latestDomainSourceTs > lastSeededAt) {
+    const [loadedSurf, loadedDefi] = await Promise.all([
+      !airdropsLoaded && airdropsHasBody ? loadCachedAirdrops(env.DB) : Promise.resolve({ feed: surf, fetchedAt: airdropsFetchedAt }),
+      defiValidTs > 0 ? loadCachedDefi(env.DB) : Promise.resolve({ defi: null, fetchedAt: 0 }),
+    ]);
+    surf = loadedSurf.feed;
+    airdropsLoaded = true;
+    await seedKnownDomains(env.DB, surf, loadedDefi.defi);
+    await env.DB.prepare(
+      `INSERT INTO cron_state (key, last_run_at) VALUES ('known_domains_seed', ?1)
+       ON CONFLICT(key) DO UPDATE SET last_run_at = excluded.last_run_at
+       WHERE excluded.last_run_at > cron_state.last_run_at`,
+    )
+      .bind(latestDomainSourceTs)
+      .run();
+  } else if (!airdropsLoaded && airdropsHasBody && (xBatch > 0 || feedBatch > 0)) {
+    surf = (await loadCachedAirdrops(env.DB)).feed;
+    airdropsLoaded = true;
+  }
+
+  // Best-effort X polling + chronological keyless drop feeds (both throttled via sources.next_poll_at)
+  const [xRes, feedRes] = await Promise.allSettled([
+    xBatch > 0
+      ? pollXBatch(env.DB, xBatch, nowMs, surf, undefined, env.X_RSS_MIRROR_BASE)
+      : Promise.resolve({ polled: 0, insertedPosts: 0, degraded: 0, ingestedResults: [] }),
+    feedBatch > 0
+      ? pollFeedBatch(env.DB, feedBatch, nowMs, surf)
+      : Promise.resolve({ polled: 0, insertedPosts: 0, degraded: 0, ingestedResults: [] }),
+  ]);
+  if (xRes.status === 'rejected') console.error('cron-error:pollXBatch', xRes.reason);
+  if (feedRes.status === 'rejected') console.error('cron-error:pollFeedBatch', feedRes.reason);
+  const xIngested = xRes.status === 'fulfilled' ? xRes.value.ingestedResults : [];
+  const feedIngested = feedRes.status === 'fulfilled' ? feedRes.value.ingestedResults : [];
+  try {
+    await postProcessIngest(env, [...xIngested, ...feedIngested], nowMs);
   } catch (err) {
     console.error('cron-error:postProcessIngest', err);
   }

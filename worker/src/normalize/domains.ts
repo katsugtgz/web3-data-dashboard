@@ -52,6 +52,7 @@ export const CONTENT_HOST_DOMAINS = new Set<string>([
   'lu.ma',
   'tokopedia.com',
   'bitget.cloud',
+  'thedefinvestor.com',
   // Shared PaaS / static hosting domains (never a project's trusted registrable domain)
   'vercel.app',
   'netlify.app',
@@ -160,6 +161,9 @@ export const TRACKER_MARKETPLACE_DOMAINS = new Set<string>([
   'pump.fun',
   'dropstab.com',
   'cryptorank.io',
+  'airdroptracker.io',
+  'airdrops.io',
+  'airdropalert.com',
   'coinmarketcap.com',
   'coingecko.com',
   'defillama.com',
@@ -207,6 +211,22 @@ export const PLATFORM_DOMAINS = new Set<string>([
   ...NEWS_MEDIA_DOMAINS,
   ...TRACKER_MARKETPLACE_DOMAINS,
 ]);
+
+/**
+ * Curated aggregator hosts that serve third-party protocol campaigns (e.g.
+ * Pendle Points markets, Merkl incentives). Kept OUT of PLATFORM_DOMAINS so
+ * Pendle/Merkl themselves remain real protocols while third-party campaign
+ * cards sourced from them don't collapse into one project or hijack domains.
+ */
+export const CURATED_AGGREGATOR_DOMAINS = new Set<string>([
+  'pendle.finance',
+  'merkl.xyz',
+]);
+
+const CURATED_AGGREGATOR_SELF_NAMES: Record<string, ReadonlySet<string>> = {
+  'pendle.finance': new Set(['pendle', 'pendlefinance']),
+  'merkl.xyz': new Set(['merkl', 'merklxyz']),
+};
 
 /** Hosts that enforce HTTPS globally (upgrading Telegram's http:// auto-links is safe). */
 export const ALWAYS_HTTPS_DOMAINS = PLATFORM_DOMAINS;
@@ -261,7 +281,7 @@ const ACTIONABLE_PATH_RANK_RE =
   /\/(?:claim|mint|waitlist|whitelist|faucet|quest|quests|apply|campaign|checker|rewards|early-access)/;
 
 const GLOBAL_STRIP_PARAMS_RE =
-  /^(?:utm_.*|fbclid|gclid|igshid|si|mc_cid|mc_eid|ref|ref_.*|referral|refcode|ref_code|referrer|invite|invitecode|invite_code|inviter|aff_id|affiliate|via)$/i;
+  /^(?:utm_.*|fbclid|gclid|igshid|si|mc_cid|mc_eid|ref|ref_.*|referral|referralcode|referral_code|refcode|ref_code|referrer|invite|invitecode|invite_code|inviter|aff_id|affiliate|via)$/i;
 const X_SHARE_PARAMS_RE = /^(?:s|t|a|mx)$/i;
 const REFERRAL_SHORT_CODE_RE = /^[A-Za-z0-9_-]{4,24}$/;
 const REFERRAL_CODE_PATH_RE = /^\/(?:r|ref|invite)\/([A-Za-z0-9_-]{3,24})\/?$/i;
@@ -317,23 +337,82 @@ function matchesDomainSet(domain: string, set: ReadonlySet<string>): boolean {
 
 export function isRawIpHost(host: string): boolean {
   const clean = host.trim().toLowerCase();
-  return IPV4_RE.test(clean) || (clean.startsWith('[') && clean.endsWith(']'));
+  if (!clean) return false;
+  const c0 = clean.charCodeAt(0);
+  if (c0 === 91) return clean.endsWith(']');
+  if (c0 >= 48 && c0 <= 57) return IPV4_RE.test(clean);
+  return false;
 }
 
 function registrableFromHost(hostRaw: string): string | undefined {
-  const host = hostRaw.toLowerCase().replace(/^www\./, '');
-  if (!host || !host.includes('.')) return undefined;
-  if (isRawIpHost(host)) return host;
-  const parts = host.split('.');
-  if (parts.length <= 2) return host;
-  const lastTwo = parts.slice(-2).join('.');
-  if (MULTI_PART_TLDS.has(lastTwo) && parts.length >= 3) {
-    return parts.slice(-3).join('.');
+  if (!hostRaw) return undefined;
+  let host = hostRaw.toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const lastDot = host.lastIndexOf('.');
+  if (lastDot <= 0) return undefined;
+  const c0 = host.charCodeAt(0);
+  if (c0 === 91 && host.endsWith(']')) return host;
+  if (c0 >= 48 && c0 <= 57 && IPV4_RE.test(host)) return host;
+  const prevDot = host.lastIndexOf('.', lastDot - 1);
+  if (prevDot === -1) return host;
+  const lastTwo = host.slice(prevDot + 1);
+  if (MULTI_PART_TLDS.has(lastTwo)) {
+    const thirdDot = host.lastIndexOf('.', prevDot - 1);
+    return thirdDot === -1 ? host : host.slice(thirdDot + 1);
   }
   return lastTwo;
 }
 
 export function getRegistrableDomain(rawUrl: string): string | undefined {
+  // Fast path for standard ASCII http(s)://host[/|?|#] URLs (skips new URL() overhead).
+  let start = -1;
+  if (rawUrl.startsWith('https://') || rawUrl.startsWith('HTTPS://')) start = 8;
+  else if (rawUrl.startsWith('http://') || rawUrl.startsWith('HTTP://')) start = 7;
+
+  if (start !== -1) {
+    const len = rawUrl.length;
+    let end = start;
+    let valid = true;
+    let hasDot = false;
+    let prevDot = true;
+    let lastDotIdx = -1;
+    while (end < len) {
+      const cc = rawUrl.charCodeAt(end);
+      if (cc === 47 || cc === 63 || cc === 35) break; // '/', '?', '#'
+      if (cc === 46) {
+        if (prevDot) {
+          valid = false;
+          break;
+        }
+        hasDot = true;
+        prevDot = true;
+        lastDotIdx = end;
+      } else if (
+        (cc >= 97 && cc <= 122) || // a-z
+        (cc >= 65 && cc <= 90) || // A-Z
+        (cc >= 48 && cc <= 57) || // 0-9
+        cc === 45 // '-'
+      ) {
+        prevDot = false;
+      } else {
+        // ':', '@', non-ASCII, whitespace, etc. -> fall back to WHATWG new URL()
+        valid = false;
+        break;
+      }
+      end++;
+    }
+    if (valid && hasDot && !prevDot && lastDotIdx + 1 < end) {
+      const tldFirst = rawUrl.charCodeAt(lastDotIdx + 1);
+      const isAlphaTld = (tldFirst >= 97 && tldFirst <= 122) || (tldFirst >= 65 && tldFirst <= 90);
+      if (isAlphaTld) {
+        const host = rawUrl.slice(start, end);
+        if (!host.includes('xn--') && !host.includes('XN--')) {
+          return registrableFromHost(host);
+        }
+      }
+    }
+  }
+
   try {
     return registrableFromHost(new URL(rawUrl).hostname);
   } catch {
@@ -364,6 +443,23 @@ export function isTrackerOrMarketplaceDomain(domain: string): boolean {
 export function isAlwaysHttpsDomain(domain?: string): boolean {
   if (!domain) return false;
   return matchesDomainSet(domain, ALWAYS_HTTPS_DOMAINS);
+}
+
+/**
+ * Returns true when `domain` is a shared curated-aggregator host (`pendle.finance`
+ * or `merkl.xyz`) on any card whose project name is NOT that aggregator itself.
+ * Applies regardless of `card.source` so merged Surf/sheet cards inheriting
+ * Pendle/Merkl task URLs can never poison `known_domains` or `surfIndex`.
+ */
+export function isCuratedAggregatorDomain(
+  domain: string,
+  card: { n: string; source?: string },
+): boolean {
+  const reg = registrableFromHost(domain.trim().replace(/\.+$/, ''));
+  if (!reg || !CURATED_AGGREGATOR_DOMAINS.has(reg)) return false;
+  const normName = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (CURATED_AGGREGATOR_SELF_NAMES[reg]?.has(normName)) return false;
+  return true;
 }
 
 /**
@@ -424,22 +520,47 @@ function decodeAmpEntities(input: string): string {
   return out;
 }
 
+const NON_ASCII_URL_RE = /[^\u0000-\u007f]/;
+
 function stripTrailingUrlNoise(raw: string): string {
-  let cleaned = decodeAmpEntities(raw.trim());
-  if (!cleaned) return '';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  let cleaned = trimmed.includes('&') ? decodeAmpEntities(trimmed) : trimmed;
 
   // Strip raw trailing emoji and anything glued after an emoji BEFORE new URL(),
   // otherwise URL serialization percent-encodes raw emoji (`s=19🏂` -> `s=19%F0%9F%8F%82`).
-  const emojiMatch = cleaned.match(RAW_EMOJI_RE);
-  if (emojiMatch && emojiMatch.index !== undefined) {
-    cleaned = cleaned.slice(0, emojiMatch.index);
+  const hasNonAscii = NON_ASCII_URL_RE.test(cleaned);
+  if (hasNonAscii) {
+    const emojiMatch = cleaned.match(RAW_EMOJI_RE);
+    if (emojiMatch && emojiMatch.index !== undefined) {
+      cleaned = cleaned.slice(0, emojiMatch.index);
+    }
   }
-  const encodedEmojiMatch = cleaned.match(ENCODED_EMOJI_START_RE);
-  if (encodedEmojiMatch && encodedEmojiMatch.index !== undefined) {
-    cleaned = cleaned.slice(0, encodedEmojiMatch.index);
+  if (cleaned.includes('%')) {
+    const encodedEmojiMatch = cleaned.match(ENCODED_EMOJI_START_RE);
+    if (encodedEmojiMatch && encodedEmojiMatch.index !== undefined) {
+      cleaned = cleaned.slice(0, encodedEmojiMatch.index);
+    }
   }
+  if (!cleaned) return '';
 
-  return cleaned.replace(/[\uFE0E\uFE0F\u200B-\u200F]+$/g, '').replace(/[),.;!?\]"'»]+$/, '');
+  if (hasNonAscii) {
+    cleaned = cleaned.replace(/[\uFE0E\uFE0F\u200B-\u200F]+$/g, '');
+    if (!cleaned) return '';
+  }
+  const lastCode = cleaned.charCodeAt(cleaned.length - 1);
+  // Only run trailing punctuation strip when last char isn't alphanumeric or '/'.
+  if (
+    !(
+      (lastCode >= 97 && lastCode <= 122) ||
+      (lastCode >= 65 && lastCode <= 90) ||
+      (lastCode >= 48 && lastCode <= 57) ||
+      lastCode === 47
+    )
+  ) {
+    cleaned = cleaned.replace(/[),.;!?\]"'»]+$/, '');
+  }
+  return cleaned;
 }
 
 interface CleanedUrlParts {
@@ -451,19 +572,93 @@ interface CleanedUrlParts {
   key: string;
 }
 
+/**
+ * Fast path for already-clean lowercase `https://host[/safe-path]` URLs with no
+ * query/hash/percent/entity/dot-segment/trailing-noise, avoiding WHATWG `new URL()`.
+ */
+function tryFastCleanHttpsUrl(cleaned: string): string | null {
+  if (!cleaned.startsWith('https://')) return null;
+  const len = cleaned.length;
+  let hostEnd = 8;
+  let hasDot = false;
+  let prevDot = true;
+  let lastDotIdx = -1;
+  while (hostEnd < len) {
+    const cc = cleaned.charCodeAt(hostEnd);
+    if (cc === 47) break; // '/'
+    if (cc === 46) {
+      if (prevDot) return null;
+      hasDot = true;
+      prevDot = true;
+      lastDotIdx = hostEnd;
+    } else if (
+      (cc >= 97 && cc <= 122) || // lowercase a-z only (uppercase falls back for host lowercasing)
+      (cc >= 48 && cc <= 57) ||
+      cc === 45
+    ) {
+      prevDot = false;
+    } else {
+      return null;
+    }
+    hostEnd++;
+  }
+  if (!hasDot || prevDot || lastDotIdx + 1 >= hostEnd) return null;
+  const tldFirst = cleaned.charCodeAt(lastDotIdx + 1);
+  if (tldFirst < 97 || tldFirst > 122) return null;
+  if (cleaned.indexOf('xn--', 8) !== -1 && cleaned.indexOf('xn--', 8) < hostEnd) return null;
+
+  if (hostEnd === len) {
+    return `${cleaned}/`;
+  }
+
+  let lastSlash = hostEnd;
+  for (let i = hostEnd + 1; i < len; i++) {
+    const cc = cleaned.charCodeAt(i);
+    if (cc === 47) {
+      lastSlash = i;
+    } else if (
+      !(
+        (cc >= 97 && cc <= 122) ||
+        (cc >= 65 && cc <= 90) ||
+        (cc >= 48 && cc <= 57) ||
+        cc === 45 || // '-'
+        cc === 95 || // '_'
+        cc === 126 // '~'
+      )
+    ) {
+      return null;
+    }
+  }
+
+  // Defer long digit-prefixed trailing segments to full idGlue logic.
+  const segLen = len - lastSlash - 1;
+  if (segLen >= 9) {
+    const segFirst = cleaned.charCodeAt(lastSlash + 1);
+    if (segFirst >= 48 && segFirst <= 57) return null;
+  }
+
+  const pathLen = len - hostEnd;
+  if (pathLen > 1 && cleaned.charCodeAt(len - 1) === 47) {
+    let end = len - 1;
+    while (end > hostEnd + 1 && cleaned.charCodeAt(end - 1) === 47) end--;
+    return cleaned.slice(0, end);
+  }
+  return cleaned;
+}
+
 const TRAILING_ENCODED_PUNCT_RE = /(?:%(?:2C|2E|29|3B|3A|21|3F|22|27))+$/i;
 
 function cleanUrlParts(raw: string): CleanedUrlParts | null {
   try {
     let cleaned = raw.trim();
     if (!cleaned) return null;
-    if (/&amp;/i.test(cleaned)) {
+    if (cleaned.includes('&') && /&amp;/i.test(cleaned)) {
       cleaned = decodeAmpEntities(cleaned);
     }
 
     // Truncated Telegram preview URLs (`https://x.com/T%E2%80%A6lumayan`,
     // `https://discord.gg/acepyr...Musang:`) are broken links — reject them.
-    if (ELLIPSIS_RE.test(cleaned)) return null;
+    if ((cleaned.includes('\u2026') || cleaned.includes('%')) && ELLIPSIS_RE.test(cleaned)) return null;
 
     cleaned = stripTrailingUrlNoise(cleaned);
     if (!cleaned) return null;
@@ -552,7 +747,11 @@ function cleanUrlParts(raw: string): CleanedUrlParts | null {
 }
 
 export function cleanUrl(raw: string): string | null {
-  return cleanUrlParts(raw)?.href ?? null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const fast = tryFastCleanHttpsUrl(trimmed);
+  if (fast !== null) return fast;
+  return cleanUrlParts(trimmed)?.href ?? null;
 }
 
 /**

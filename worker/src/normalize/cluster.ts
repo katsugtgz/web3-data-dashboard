@@ -1025,7 +1025,7 @@ interface FeedPostRow {
   post_url: string;
   posted_at: number;
   urls: string;
-  platform: 'telegram' | 'x' | 'surf' | null;
+  platform: FeedSourceRef['platform'] | null;
   handle: string | null;
 }
 

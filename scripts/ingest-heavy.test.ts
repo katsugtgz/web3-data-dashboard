@@ -182,4 +182,68 @@ describe('ingest-heavy independent settlement & D1 error telemetry', () => {
     expect(capturedDir).toContain('web3-radar-heavy-');
     expect(existsSync(capturedDir)).toBe(false);
   });
+
+  test('extracts tokenless airdrops:defillama and ingests optional sheets non-fatally', async () => {
+    const protocolsWithTokenless = [
+      ...SAMPLE_PROTOCOLS,
+      {
+        name: 'TokenlessProto',
+        symbol: '-',
+        category: 'Dexes',
+        tvl: 45_000_000,
+        change_1d: 1.2,
+        change_7d: 8.4,
+        chains: ['Arbitrum'],
+        url: 'https://tokenlessproto.xyz',
+      },
+    ];
+
+    let executedSql = '';
+    const res = await runHeavyIngest({
+      nowMs: 1_800_000_000_000,
+      dryRun: false,
+      fetchJson: async url => (url.includes('protocols') ? protocolsWithTokenless : SAMPLE_YIELDS),
+      fetchAsso7878: async (_url, ts) => ({
+        cards: [
+          {
+            r: 1,
+            n: 'AssoProto',
+            t: null,
+            g: 'A',
+            b: ['live'],
+            f: '$5M',
+            tk: '1/1',
+            h: 10,
+            u: 'today',
+            fit: ['zero'],
+            best: { n: 'Quest', ty: 'quest', c: 'Free', m: '5m' },
+            sc: 75,
+            sub: [7, 7, null],
+            url: 'https://assoproto.xyz',
+            source: 'ASSO7878',
+          },
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: ts,
+      }),
+      fetchArndxt: async () => {
+        throw new Error('sheet 503');
+      },
+      executeSqlFile: async sqlPath => {
+        executedSql = await readFile(sqlPath, 'utf8');
+      },
+      log: () => {},
+    });
+
+    expect(res.okKeys).toEqual(['markets:defi', 'airdrops:defillama', 'markets:yields', 'airdrops:asso7878']);
+    expect(res.failedKeys).toEqual([]);
+
+    const { sqlite } = createTestD1();
+    sqlite.exec(executedSql);
+    const keys = (sqlite.query('SELECT key FROM snapshots WHERE ok = 1 ORDER BY key').all() as { key: string }[]).map(
+      r => r.key,
+    );
+    expect(keys).toEqual(['airdrops:asso7878', 'airdrops:defillama', 'markets:defi', 'markets:yields']);
+  });
 });

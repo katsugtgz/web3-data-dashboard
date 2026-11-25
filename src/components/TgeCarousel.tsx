@@ -25,7 +25,7 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
           ticker = m[2];
         }
       }
-      const baseKey = `${name}-${it.t}-${it.d}`;
+      const baseKey = `${name}-${it.t}-${it.d}-${it.source ?? ''}`;
       const occ = seen.get(baseKey) ?? 0;
       seen.set(baseKey, occ + 1);
       return {
@@ -135,6 +135,11 @@ export function TgeCarousel({ items }: { items: Tge[] }) {
                 <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
                 <span className="tt mono">{it.d}</span>
                 {it.raise && <span className="tt mono">{it.raise}</span>}
+                {it.source && (
+                  <span className="typetip mono" title={`Source: ${it.source}`}>
+                    {it.source}
+                  </span>
+                )}
               </div>
               {it.safeUrl && (
                 <a className="tge-link" href={it.safeUrl} target="_blank" rel="noopener noreferrer">

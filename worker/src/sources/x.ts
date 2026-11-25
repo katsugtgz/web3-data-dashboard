@@ -8,12 +8,16 @@ import {
 } from '../normalize/cluster';
 import {
   BENIGN_DNS_IPS,
+  cleanUrl,
   extractBareDomainUrls,
+  extractSuspiciousRawIpUrls,
+  extractUrls,
   getRegistrableDomain,
   isRawIpHost,
 } from '../normalize/domains';
 import { parseDropPost, type ParseContext } from '../normalize/parse';
 import { loadKnownDomains, URL_SHORTENERS } from '../safety';
+import { decodeHtmlEntities } from './telegram';
 
 export interface ParsedXPost {
   idStr: string;
@@ -144,6 +148,61 @@ export function parseCdnSyndication(body: string, handle: string, nowMs = Date.n
 const TWENTY_FOUR_H_MS = 24 * 3_600_000;
 const SIX_H_MS = 6 * 3_600_000;
 const FOURTEEN_DAYS_MS = 14 * 86_400_000;
+const MAX_POSTS_PER_POLL = 10;
+const MIRROR_TIMEOUT_MS = Math.min(FETCH_TIMEOUT_MS, 7000);
+
+const MAX_MIRROR_REDIRECTS = 3;
+
+function validateSafeMirrorUrl(u: URL): { host: string; reg: string } | null {
+  if (u.protocol !== 'https:') return null;
+  if (u.username || u.password) return null;
+  const host = u.hostname.toLowerCase();
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    !host.includes('.') ||
+    host.includes(':') ||
+    isRawIpHost(host)
+  ) {
+    return null;
+  }
+  const reg = getRegistrableDomain(u.origin);
+  if (!reg) return null;
+  return { host, reg };
+}
+
+function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: string; reg: string } | null {
+  const trimmed = rssMirrorBase?.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.search || u.hash) return null;
+  const valid = validateSafeMirrorUrl(u);
+  if (!valid) return null;
+  const pathname = u.pathname.replace(/\/+$/, '');
+  return { base: `${u.origin}${pathname}`, host: valid.host, reg: valid.reg };
+}
+
+function parseSafeMirrorRedirectUrl(location: string, currentUrl: string): { url: string; host: string } | null {
+  const trimmed = location.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed, currentUrl);
+  } catch {
+    return null;
+  }
+  const valid = validateSafeMirrorUrl(u);
+  if (!valid) return null;
+  u.hash = '';
+  return { url: u.toString(), host: valid.host };
+}
 
 export function computeXBackoff(
   prevFailCount: number,
@@ -174,32 +233,190 @@ export function computeXBackoff(
   };
 }
 
-export async function fetchXTimelineBestEffort(handle: string, nowMs = Date.now()): Promise<ParsedXPost[]> {
-  const urls = [
-    `https://cdn.syndication.twimg.com/timeline/profile?screen_name=${encodeURIComponent(handle)}`,
-    `https://syndication.twitter.com/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`,
-  ];
+export function parseXRssTimeline(
+  xml: string,
+  handle: string,
+  mirrorHost?: string | string[],
+  nowMs = Date.now(),
+): ParsedXPost[] {
+  const items = xml.match(/<item(?:\s[^>]*)?>[\s\S]*?<\/item>/gi) ?? [];
+  const out: ParsedXPost[] = [];
+  const seenIds = new Set<string>();
+  const maxAllowedTs = nowMs + MAX_FUTURE_SKEW_MS;
+  const rawMirrorHosts = Array.isArray(mirrorHost) ? mirrorHost : mirrorHost ? [mirrorHost] : [];
+  const mirrorHostsLower = new Set<string>();
+  const mirrorRegs = new Set<string>();
+  for (const h of rawMirrorHosts) {
+    const lower = h.trim().toLowerCase();
+    if (!lower) continue;
+    mirrorHostsLower.add(lower);
+    const reg = getRegistrableDomain(`https://${lower}`);
+    if (reg) mirrorRegs.add(reg);
+  }
 
-  for (const endpoint of urls) {
+  const isMirrorUrl = (u: string): boolean => {
+    if (mirrorHostsLower.size === 0) return false;
     try {
-      const res = await fetch(endpoint, {
-        headers: { 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        await res.body?.cancel();
+      const host = new URL(u).hostname.toLowerCase();
+      if (mirrorHostsLower.has(host)) return true;
+      const reg = getRegistrableDomain(u);
+      return Boolean(reg && mirrorRegs.has(reg));
+    } catch {
+      return true;
+    }
+  };
+
+  for (const block of items) {
+    const getTag = (name: string): string => {
+      const m = block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, 'i'));
+      return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1').trim() : '';
+    };
+
+    const rawDate = getTag('pubDate');
+    const postedAt = rawDate ? Date.parse(decodeHtmlEntities(rawDate)) : NaN;
+    if (!Number.isFinite(postedAt) || postedAt > maxAllowedTs) continue;
+
+    const rawLink = decodeHtmlEntities(getTag('link'));
+    const rawGuid = decodeHtmlEntities(getTag('guid'));
+    const statusMatch =
+      rawLink.match(/(?:status|statuses)\/(\d{5,})/i) ?? rawGuid.match(/(?:status|statuses)\/(\d{5,})/i);
+    const idStr = statusMatch?.[1] ?? '';
+    if (!idStr || seenIds.has(idStr)) continue;
+    seenIds.add(idStr);
+
+    const rawTitle = decodeHtmlEntities(getTag('title'));
+    const rawDesc = decodeHtmlEntities(getTag('description'));
+    const hrefs: string[] = [];
+    const rawIpHrefs: string[] = [];
+    for (const m of rawDesc.matchAll(/href\s*=\s*["'](https?:\/\/[^"'\s>]+)["']/gi)) {
+      const rawHref = decodeHtmlEntities(m[1]).trim();
+      try {
+        const parsedHref = new URL(rawHref);
+        const host = parsedHref.hostname.toLowerCase();
+        if (isRawIpHost(host)) {
+          if (!BENIGN_DNS_IPS.has(host)) {
+            rawIpHrefs.push(parsedHref.toString());
+          }
+          continue;
+        }
+      } catch {
         continue;
       }
-      const body = await res.text();
-      if (!body.trim()) continue;
-      const parsed = endpoint.includes('cdn.syndication')
-        ? parseCdnSyndication(body, handle, nowMs)
-        : parseNextDataTimeline(body, handle, nowMs);
-      if (parsed.length > 0) return parsed;
+      const cleaned = cleanUrl(rawHref);
+      if (!cleaned || isMirrorUrl(cleaned)) continue;
+      hrefs.push(cleaned);
+    }
+
+    const plainDesc = rawDesc
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|li)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+    const text = (plainDesc || rawTitle).trim();
+    if (!text) continue;
+
+    const cleanUrls = extractUrls(text, hrefs).filter(u => !isMirrorUrl(u));
+    const rawIpUrls = extractSuspiciousRawIpUrls(text, rawIpHrefs);
+    const urls = [...cleanUrls, ...rawIpUrls];
+
+    out.push({
+      idStr,
+      postUrl: `https://x.com/${handle}/status/${idStr}`,
+      postedAt,
+      text,
+      urls,
+    });
+  }
+
+  return out;
+}
+
+export async function fetchXTimelineBestEffort(
+  handle: string,
+  rssMirrorBaseOrNowMs?: string | number,
+  nowMsArg?: number,
+): Promise<ParsedXPost[]> {
+  const rssMirrorBase = typeof rssMirrorBaseOrNowMs === 'string' ? rssMirrorBaseOrNowMs : undefined;
+  const nowMs =
+    typeof rssMirrorBaseOrNowMs === 'number' ? rssMirrorBaseOrNowMs : (nowMsArg ?? Date.now());
+  const mirror = parseSafeMirrorBase(rssMirrorBase);
+  if (mirror) {
+    try {
+      let currentUrl = `${mirror.base}/${encodeURIComponent(handle)}/rss`;
+      const mirrorHosts: string[] = [mirror.host];
+      let res: Response | null = null;
+      for (let hop = 0; hop <= MAX_MIRROR_REDIRECTS; hop++) {
+        const candidate = await fetch(currentUrl, {
+          headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml,application/xml,text/xml,*/*' },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(MIRROR_TIMEOUT_MS),
+        });
+        if (candidate.status >= 300 && candidate.status < 400) {
+          const location = candidate.headers.get('location');
+          await candidate.body?.cancel();
+          if (!location || hop === MAX_MIRROR_REDIRECTS) {
+            res = null;
+            break;
+          }
+          const nextTarget = parseSafeMirrorRedirectUrl(location, currentUrl);
+          if (!nextTarget) {
+            res = null;
+            break;
+          }
+          mirrorHosts.push(nextTarget.host);
+          currentUrl = nextTarget.url;
+          continue;
+        }
+        res = candidate;
+        break;
+      }
+      if (res?.ok) {
+        const body = await res.text();
+        if (res.url) {
+          try {
+            const finalHost = new URL(res.url).hostname.toLowerCase();
+            if (finalHost) mirrorHosts.push(finalHost);
+          } catch {
+            // Ignore unparseable res.url
+          }
+        }
+        const parsed = parseXRssTimeline(body, handle, mirrorHosts, nowMs);
+        if (parsed.length > 0) return parsed;
+      } else if (res) {
+        await res.body?.cancel();
+      }
     } catch {
-      // Expected failure on X syndication endpoints; try next or degrade cleanly
+      // Optional RSS mirror unavailable; fall through to syndication
     }
   }
+
+  // Only syndication.twitter.com is attempted (cdn.syndication.twimg.com returns
+  // 200 with empty 0B body and was removed to avoid wasted subrequests).
+  const syndicationUrl = `https://syndication.twitter.com/srv/timeline-profile/screen-name/${encodeURIComponent(handle)}`;
+  try {
+    const res = await fetch(syndicationUrl, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const body = await res.text();
+      if (body.trim()) {
+        const parsed = parseNextDataTimeline(body, handle, nowMs);
+        if (parsed.length > 0) return parsed;
+      }
+    } else {
+      await res.body?.cancel();
+    }
+  } catch {
+    // Expected failure on X syndication endpoint; degrade cleanly
+  }
+
   throw new Error(`X endpoints unavailable for @${handle}`);
 }
 
@@ -258,10 +475,15 @@ async function pollSingleXSource(
       surfByTicker: surfIndex.byTicker,
     };
 
+    let capped = false;
     const orderedPosts = [...newPosts].sort((a, b) => compareSnowflakeIds(a.idStr, b.idStr));
     for (const p of orderedPosts) {
       const parsed = parseDropPost(p.text, p.urls, sourceParseCtx);
       if (parsed.isRelevantDrop) {
+        if (ingestedResults.length >= MAX_POSTS_PER_POLL) {
+          capped = true;
+          break;
+        }
         const res = await ingestPostIntoCluster(
           db,
           {
@@ -288,8 +510,11 @@ async function pollSingleXSource(
       }
     }
 
-    const finalSeen =
-      committedId && (!maxSeen || compareSnowflakeIds(committedId, maxSeen) > 0) ? committedId : maxSeen;
+    const finalSeen = capped
+      ? committedId
+      : committedId && (!maxSeen || compareSnowflakeIds(committedId, maxSeen) > 0)
+        ? committedId
+        : maxSeen;
     await db
       .prepare(
         `UPDATE sources
@@ -347,8 +572,11 @@ export async function pollXBatch(
   batchSize = 3,
   nowMs = Date.now(),
   surfFeed?: AirdropFeed | null,
-  fetcher: (handle: string, nowMs?: number) => Promise<ParsedXPost[]> = fetchXTimelineBestEffort,
+  fetcher?: (handle: string, nowMs?: number) => Promise<ParsedXPost[]>,
+  rssMirrorBase?: string,
 ): Promise<XPollSummary> {
+  const effectiveFetcher =
+    fetcher ?? ((handle: string, ts?: number) => fetchXTimelineBestEffort(handle, rssMirrorBase, ts));
   const res = await db
     .prepare(
       `SELECT id, handle, lang, trust, last_seen_id, fail_count, first_fail_at
@@ -388,7 +616,16 @@ export async function pollXBatch(
     await Promise.all(
       sources.map(async src => {
         try {
-          return await pollSingleXSource(db, src, parseCtx, surfIndex, projectDomains, platformDomains, nowMs, fetcher);
+          return await pollSingleXSource(
+            db,
+            src,
+            parseCtx,
+            surfIndex,
+            projectDomains,
+            platformDomains,
+            nowMs,
+            effectiveFetcher,
+          );
         } catch (err) {
           console.error(`x-poll-error:${src.id}`, err);
           return { insertedPosts: 0, degraded: true, ingestedResults: [] };

@@ -4,11 +4,24 @@ import { applyMigrations, createTestD1, MIGRATION_FILES } from './helpers';
 import { computeClusterId, ingestPostIntoCluster, queryFeed } from '../src/normalize/cluster';
 import {
   cleanUrl,
+  CURATED_AGGREGATOR_DOMAINS,
   extractUrls,
+  isCuratedAggregatorDomain,
   isNewsDomain,
   isPlatformDomain,
   selectFeedLinks,
 } from '../src/normalize/domains';
+import {
+  FORBIDDEN_CJK_RE,
+  isAssoDroppedOrRug,
+  parseAssoBookmarkDate,
+  parseCjkRaiseUsd,
+  stripOrTranslateCjk,
+  translateAssoCost,
+  translateAssoEcosystem,
+  translateAssoInteraction,
+  translateAssoStep,
+} from '../src/normalize/i18n';
 import { parseDropPost } from '../src/normalize/parse';
 import {
   classifyDropRelevance,
@@ -20,7 +33,6 @@ import {
   stripNonEnglishLines,
   truncateAtWordBoundary,
 } from '../src/normalize/text';
-import { FORBIDDEN_CJK_RE, stripOrTranslateCjk } from '../src/normalize/i18n';
 import { DRAINER_RE, evaluateSafety, findLookalikeDomain, reconcileSafetyReasons, URL_SHORTENERS } from '../src/safety';
 import { normalizeSurf } from '../src/sources/surf';
 import { parseTelegramHtml, pollTelegramBatch } from '../src/sources/telegram';
@@ -2977,5 +2989,154 @@ describe('Surf airdrops external URL normalization', () => {
     expect(feed.cards[0].url).toBe('https://t.me/DoodlesUP_bot');
     expect(feed.cards[0].tasks?.[0].url).toBe('https://t.me/DoodlesUP_bot');
     expect(feed.cards[0].tasks?.[1].url).toBeNull();
+  });
+});
+
+describe('Domain classification & i18n ASSO7878 regression fixes', () => {
+  test('thedefinvestor.com lives in CONTENT_HOST_DOMAINS (not NEWS_MEDIA_DOMAINS) so Substack airdrop posts pass relevance', () => {
+    expect(isPlatformDomain('thedefinvestor.com')).toBe(true);
+    expect(isNewsDomain('thedefinvestor.com')).toBe(false);
+    const parsed = parseDropPost(
+      'The Biggest Airdrops to Farm in Q4 — Top points and testnet campaigns',
+      ['https://www.thedefinvestor.com/p/the-biggest-airdrops-2026'],
+    );
+    expect(parsed.isRelevantDrop).toBe(true);
+  });
+
+  test('CURATED_AGGREGATOR_DOMAINS stays out of PLATFORM_DOMAINS and flags third-party Pendle/Merkl cards only', () => {
+    expect(CURATED_AGGREGATOR_DOMAINS.has('pendle.finance')).toBe(true);
+    expect(CURATED_AGGREGATOR_DOMAINS.has('merkl.xyz')).toBe(true);
+    expect(isPlatformDomain('pendle.finance')).toBe(false);
+    expect(isPlatformDomain('merkl.xyz')).toBe(false);
+
+    expect(isCuratedAggregatorDomain('pendle.finance', { n: 'Ethena', source: 'Pendle' })).toBe(true);
+    expect(isCuratedAggregatorDomain('app.pendle.finance', { n: 'EtherFi', source: 'Pendle' })).toBe(true);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Uniswap', source: 'Merkl' })).toBe(true);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Pendle', source: 'Merkl' })).toBe(true);
+    // Merged non-Pendle/Merkl cards inheriting aggregator task URLs must also be skipped regardless of card.source.
+    expect(isCuratedAggregatorDomain('pendle.finance', { n: 'Ethena', source: 'Surf' })).toBe(true);
+    expect(isCuratedAggregatorDomain('app.pendle.finance', { n: 'xStocks', source: 'ASSO7878' })).toBe(true);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Uniswap', source: 'Surf' })).toBe(true);
+
+    // Protocol's own cards (any source) or non-aggregator domains are never treated as aggregator wrappers.
+    expect(isCuratedAggregatorDomain('pendle.finance', { n: 'Pendle', source: 'Pendle' })).toBe(false);
+    expect(isCuratedAggregatorDomain('pendle.finance', { n: 'Pendle Finance', source: 'Pendle' })).toBe(false);
+    expect(isCuratedAggregatorDomain('pendle.finance', { n: 'Pendle', source: 'Surf' })).toBe(false);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Merkl', source: 'Merkl' })).toBe(false);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Merkl XYZ', source: 'Merkl' })).toBe(false);
+    expect(isCuratedAggregatorDomain('merkl.xyz', { n: 'Merkl', source: 'Surf' })).toBe(false);
+    expect(isCuratedAggregatorDomain('ethena.fi', { n: 'Ethena', source: 'Pendle' })).toBe(false);
+  });
+
+  test('getRegistrableDomain fast-path matches WHATWG URL semantics on ports, userinfo, IPs, multipart TLDs, and invalid hosts', () => {
+    const { getRegistrableDomain } = require('../src/normalize/domains') as typeof import('../src/normalize/domains');
+    expect(getRegistrableDomain('https://app.example.co.uk/path?a=1#h')).toBe('example.co.uk');
+    expect(getRegistrableDomain('HTTP://WWW.EXAMPLE.COM/foo')).toBe('example.com');
+    expect(getRegistrableDomain('https://sub.proto.xyz:8443/claim')).toBe('proto.xyz');
+    expect(getRegistrableDomain('https://user:pass@evil.io/claim')).toBe('evil.io');
+    expect(getRegistrableDomain('http://1.1.1.1/')).toBe('1.1.1.1');
+    expect(getRegistrableDomain('https://999.999.999.999/')).toBeUndefined();
+    expect(getRegistrableDomain('https://bad host.com/')).toBeUndefined();
+    expect(getRegistrableDomain('https://bad..host.com/')).toBe('host.com');
+    expect(getRegistrableDomain('https://localhost/test')).toBeUndefined();
+    expect(getRegistrableDomain('not-a-url')).toBeUndefined();
+    expect(getRegistrableDomain('https://1inch.io/swap')).toBe('1inch.io');
+  });
+
+  test('isAssoDroppedOrRug detects dropped col13 and rug/withdrawal-blocked col23 values', () => {
+    expect(isAssoDroppedOrRug('\u653e\u5f03', '')).toBe(true);
+    expect(isAssoDroppedOrRug('\u9879\u76ee\u8dd1\u8def', '')).toBe(true);
+    expect(isAssoDroppedOrRug('\u5728\u53c2\u4e0e', '\u9879\u76ee\u8dd1\u8def')).toBe(true);
+    expect(isAssoDroppedOrRug('\u5728\u53c2\u4e0e', '\u9879\u76ee\u65b9\u4e0d\u8ba9\u63d0\u5e01')).toBe(true);
+    expect(isAssoDroppedOrRug('\u5728\u53c2\u4e0e', 'TBA')).toBe(false);
+    expect(isAssoDroppedOrRug(undefined, undefined)).toBe(false);
+  });
+
+  test('translateAssoStep spaces adjacent tokens, preserves non-list digits, handles testnet and mixed case', () => {
+    const warns: unknown[][] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warns.push(args);
+    try {
+      expect(translateAssoStep('1.\u4e3b\u7f51\u4ea4\u4e92')).toBe('Mainnet On-chain interaction');
+      expect(translateAssoStep('2.\u751f\u6001\u4efb\u52a1')).toBe('Ecosystem Complete quests');
+      expect(translateAssoStep('3.NFT\u94f8\u9020')).toBe('NFT Mint');
+      expect(translateAssoStep('1.\u8d28\u62bc\u5b58\u6b3e')).toBe('Stake Deposit');
+      expect(translateAssoStep('1.\u6d4b\u8bd5\u7f51\u4ea4\u4e92')).toBe('Testnet On-chain interaction');
+      expect(translateAssoStep('100U\u8d28\u62bc')).toBe('100U Stake');
+      expect(translateAssoStep('24h\u7b7e\u5230')).toBe('24h Check-in');
+      expect(translateAssoStep('1) \u90e8\u7f72nft + \u6bcf\u65e5gm')).toBe('Deploy NFT + Daily GM');
+      expect(translateAssoStep('2\u3001\u9886\u6c34+\u4ea4\u6613')).toBe('Claim faucet + Trade');
+      expect(translateAssoStep('Complete quiz + Swap')).toBe('Complete quiz + Swap');
+      expect(translateAssoStep('Connect\u2192Swap')).toBe('Connect Swap');
+      expect(translateAssoStep('Connect\u27A1\uFE0FSwap')).toBe('Connect Swap');
+      expect(translateAssoStep('A\uFE0FB')).toBe('AB');
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(warns).toEqual([]);
+  });
+
+  test('stripOrTranslateCjk folds fullwidth digits and strips all forbidden CJK scripts in one pass', () => {
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      expect(stripOrTranslateCjk('Galxe\u4efb\u52a1Zealy')).toBe('Galxe Zealy');
+      expect(stripOrTranslateCjk('\uff13\uff10\uff10\u4e07')).toBe('300');
+      expect(stripOrTranslateCjk('Alpha\u3042\u30ab\ud55c\u3105\u3001Beta')).toBe('Alpha Beta');
+      expect(stripOrTranslateCjk('\uff21\uff22\uff23\u6d4b\u8bd5')).toBe('');
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  test('parseCjkRaiseUsd, translateAssoEcosystem, translateAssoInteraction, and translateAssoCost handle edge cases', () => {
+    expect(parseCjkRaiseUsd('$10 million')).toBe(10_000_000);
+    expect(parseCjkRaiseUsd('$2.5 billion')).toBe(2_500_000_000);
+    expect(parseCjkRaiseUsd('1000\u4e07\u7f8e\u5143')).toBe(10_000_000);
+    expect(parseCjkRaiseUsd('500\u4e07\uff08\u79cd\u5b50\u8f6e\uff09')).toBe(5_000_000);
+    expect(parseCjkRaiseUsd('2.5\u4ebf\u7f8e\u5143\uff08A\u8f6e\uff09')).toBe(250_000_000);
+    expect(parseCjkRaiseUsd('~$4.5M (seed, reported)')).toBe(4_500_000);
+    expect(parseCjkRaiseUsd('$4.50')).toBe(5);
+    expect(parseCjkRaiseUsd('$10,000')).toBe(10_000);
+    expect(parseCjkRaiseUsd('$4.5XYZ')).toBe(0);
+    expect(parseCjkRaiseUsd('$4.5.6')).toBe(0);
+    expect(parseCjkRaiseUsd('$4XYZ')).toBe(0);
+
+    // Non-existent rolled-over bookmark dates fall back without timestamp; valid leap day stays valid.
+    expect(parseAssoBookmarkDate('2.29', 2026)).toEqual({ label: '2.29' });
+    expect(parseAssoBookmarkDate('4.31', 2026)).toEqual({ label: '4.31' });
+    expect(parseAssoBookmarkDate('2.29', 2028)).toEqual({
+      label: '2028-02-29',
+      updatedTs: Math.floor(Date.UTC(2028, 1, 29) / 1000),
+    });
+
+    expect(translateAssoEcosystem('\u9884\u6d4b\uff0c\u6c38\u7eed')).toBe('Prediction / Perps');
+
+    expect(translateAssoInteraction('1.\u8d28\u62bc')).toEqual({
+      taskType: 'stake',
+      cardType: 'staking',
+      label: 'Staking',
+    });
+    const origWarn = console.warn;
+    console.warn = () => {};
+    try {
+      expect(translateAssoInteraction('1.\u672a\u77e5\u64cd\u4f5c')).toEqual({
+        taskType: 'other',
+        cardType: 'other',
+        label: 'On-chain task',
+      });
+      expect(translateAssoCost('\u9ad8\u6d88\u8017')).toEqual({
+        label: 'Variable',
+        costNum: 0,
+        isZero: false,
+      });
+    } finally {
+      console.warn = origWarn;
+    }
+    expect(translateAssoCost('')).toEqual({
+      label: 'Free',
+      costNum: 0,
+      isZero: true,
+    });
   });
 });

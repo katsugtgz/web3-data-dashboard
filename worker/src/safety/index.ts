@@ -6,6 +6,7 @@ import {
   extractSuspiciousRawIpUrls,
   getRegistrableDomain,
   isAlwaysHttpsDomain,
+  isCuratedAggregatorDomain,
   isPlatformDomain,
   isRawIpHost,
   PLATFORM_DOMAINS,
@@ -395,19 +396,34 @@ export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResul
 export interface KnownDomainEntry {
   domain: string;
   project: string;
-  origin: 'surf' | 'defi' | 'platform';
+  origin: 'surf' | 'curated' | 'defi' | 'platform';
+}
+
+const UNTRUSTED_SHEET_SOURCES = new Set<string>(['asso7878', 'arndxt']);
+
+function hasPunycodeOrMixedHost(rawUrl: string, regDomain: string): boolean {
+  if (isPunycodeOrMixedScript(regDomain)) return true;
+  try {
+    return isPunycodeOrMixedScript(new URL(rawUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Extracts the trusted registrable project domain for a non-risk Surf card.
- * Only `card.url` (and task links sharing its exact registrable domain) may
- * represent the card; third-party task links, platform hosts, and shorteners
- * are never trusted.
+ * Extracts the trusted registrable project domain for a non-risk curated/Surf card.
+ * Only `card.url` may represent the card; third-party task links, platform hosts,
+ * curated aggregators (for non-self cards), punycode/IDN, and shorteners are never trusted.
  */
-export function getTrustedSurfCardDomain(card: Pick<Card, 'b' | 'url' | 'tasks'>): string | undefined {
+export function getTrustedSurfCardDomain(
+  card: Pick<Card, 'b' | 'url' | 'tasks'> & { n?: string; source?: string },
+): string | undefined {
   if (card.b?.includes('risk')) return undefined;
-  const cardDom = card.url ? getRegistrableDomain(card.url) : undefined;
+  if (!card.url) return undefined;
+  const cardDom = getRegistrableDomain(card.url);
   if (!cardDom || isPlatformDomain(cardDom) || URL_SHORTENERS[cardDom]) return undefined;
+  if (isCuratedAggregatorDomain(cardDom, { n: card.n ?? '', source: card.source })) return undefined;
+  if (hasPunycodeOrMixedHost(card.url, cardDom)) return undefined;
   return cardDom;
 }
 
@@ -421,8 +437,10 @@ export function collectKnownDomainEntries(
     map.set(domain, { domain, project, origin: 'platform' });
   }
 
+  // Pass 1: Verified registries (platform, Surf non-risk cards, DefiLlama DeFi).
   if (surfFeed) {
     for (const card of surfFeed.cards) {
+      if (card.source && card.source !== 'Surf') continue;
       const dom = getTrustedSurfCardDomain(card);
       if (!dom) continue;
       if (!map.has(dom)) map.set(dom, { domain: dom, project: card.n, origin: 'surf' });
@@ -434,11 +452,53 @@ export function collectKnownDomainEntries(
       if (!row.href) continue;
       const dom = getRegistrableDomain(row.href);
       if (!dom || isPlatformDomain(dom) || URL_SHORTENERS[dom]) continue;
+      if (hasPunycodeOrMixedHost(row.href, dom)) continue;
       if (!map.has(dom)) map.set(dom, { domain: dom, project: row.cells[0] ?? dom, origin: 'defi' });
     }
   }
 
+  const verifiedBaseline = new Map<string, string>();
+  for (const [dom, entry] of map) {
+    verifiedBaseline.set(dom, entry.project);
+  }
+
+  // Pass 2: Curated non-sheet sources (e.g. DefiLlama tokenless, Pendle/Merkl own protocol).
+  // Editable third-party sheets (ASSO7878, arndxt), risk-badged cards, aggregator wrappers,
+  // third-party task links, punycode/IDN domains, and lookalikes of verified domains are strictly excluded.
+  if (surfFeed) {
+    for (const card of surfFeed.cards) {
+      if (card.b.includes('risk')) continue;
+      if (!card.source || card.source === 'Surf') continue;
+      if (UNTRUSTED_SHEET_SOURCES.has(card.source.trim().toLowerCase())) continue;
+      const dom = getTrustedSurfCardDomain(card);
+      if (!dom || map.has(dom)) continue;
+      if (findLookalikeDomain(dom, verifiedBaseline)) continue;
+      map.set(dom, { domain: dom, project: card.n, origin: 'curated' });
+    }
+  }
+
   return [...map.values()];
+}
+
+const knownDomainSeedQueues = new WeakMap<D1Database, Promise<void>>();
+
+async function withKnownDomainSeedLock<T>(db: D1Database, fn: () => Promise<T>): Promise<T> {
+  const prev = knownDomainSeedQueues.get(db) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const chained = prev.then(() => gate, () => gate);
+  knownDomainSeedQueues.set(db, chained);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (knownDomainSeedQueues.get(db) === chained) {
+      knownDomainSeedQueues.delete(db);
+    }
+  }
 }
 
 export async function seedKnownDomains(
@@ -449,76 +509,110 @@ export async function seedKnownDomains(
   const entries = collectKnownDomainEntries(surfFeed, defiSection);
   if (entries.length === 0) return 0;
 
-  const blockedHostsJson = JSON.stringify([...PLATFORM_DOMAINS, ...Object.keys(URL_SHORTENERS)]);
-  const platformDomainsJson = JSON.stringify(KNOWN_QUEST_PLATFORMS.map(([domain]) => domain));
+  // Serialize per-DB seed calls and execute prunes + multi-row upserts in one
+  // atomic D1 batch transaction so no concurrent seed can interleave a prune
+  // over fresh rows. Multi-row upserts (30 rows * 3 params = 90) stay under
+  // D1's 100-param statement cap.
+  const UPSERT_ROWS_PER_STMT = 30;
+  return withKnownDomainSeedLock(db, async () => {
+    const blockedHostsJson = JSON.stringify([...PLATFORM_DOMAINS, ...Object.keys(URL_SHORTENERS)]);
+    const platformDomainsJson = JSON.stringify(KNOWN_QUEST_PLATFORMS.map(([domain]) => domain));
 
-  const pruneStmts: D1PreparedStatement[] = [
-    db
-      .prepare(
-        `DELETE FROM known_domains
-         WHERE origin != 'platform'
-           AND (
-             lower(domain) IN (SELECT value FROM json_each(?1))
-             OR EXISTS (
-               SELECT 1 FROM json_each(?1) AS b
-               WHERE substr(lower(known_domains.domain), -length(b.value) - 1) = '.' || b.value
-             )
-           )`,
-      )
-      .bind(blockedHostsJson),
-    db
-      .prepare(
-        `DELETE FROM known_domains
-         WHERE origin = 'platform'
-           AND domain NOT IN (SELECT value FROM json_each(?1))`,
-      )
-      .bind(platformDomainsJson),
-  ];
-
-  if (surfFeed?.cards.length) {
-    const surfDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'surf').map(e => e.domain));
-    pruneStmts.push(
+    const pruneStmts: D1PreparedStatement[] = [
       db
         .prepare(
           `DELETE FROM known_domains
-           WHERE origin = 'surf'
-             AND domain NOT IN (SELECT value FROM json_each(?1))`,
+           WHERE origin != 'platform'
+             AND (
+               lower(domain) IN (SELECT value FROM json_each(?1))
+               OR EXISTS (
+                 SELECT 1 FROM json_each(?1) AS b
+                 WHERE substr(lower(known_domains.domain), -length(b.value) - 1) = '.' || b.value
+               )
+             )`,
         )
-        .bind(surfDomainsJson),
-    );
-  }
-
-  if (defiSection?.rows.length) {
-    const defiDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'defi').map(e => e.domain));
-    pruneStmts.push(
+        .bind(blockedHostsJson),
       db
         .prepare(
           `DELETE FROM known_domains
-           WHERE origin = 'defi'
+           WHERE origin = 'platform'
              AND domain NOT IN (SELECT value FROM json_each(?1))`,
         )
-        .bind(defiDomainsJson),
-    );
-  }
+        .bind(platformDomainsJson),
+    ];
 
-  const upsertStmts = entries.map(e =>
-    db
-      .prepare(
-        `INSERT INTO known_domains (domain, project, origin) VALUES (?1, ?2, ?3)
-         ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin
-         WHERE known_domains.project IS NOT excluded.project
-            OR known_domains.origin IS NOT excluded.origin`,
-      )
-      .bind(e.domain, e.project, e.origin),
-  );
+    if (surfFeed?.cards.some(c => !c.source || c.source === 'Surf')) {
+      const surfDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'surf').map(e => e.domain.toLowerCase()));
+      pruneStmts.push(
+        db
+          .prepare(
+            `DELETE FROM known_domains
+             WHERE origin = 'surf'
+               AND lower(domain) NOT IN (SELECT value FROM json_each(?1))`,
+          )
+          .bind(surfDomainsJson),
+      );
+    }
 
-  try {
-    await db.batch([...pruneStmts, ...upsertStmts]);
-  } finally {
-    knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
-    knownDomainsCache.delete(db);
-  }
-  return entries.length;
+    if (defiSection?.rows.length) {
+      const defiDomainsJson = JSON.stringify(entries.filter(e => e.origin === 'defi').map(e => e.domain.toLowerCase()));
+      pruneStmts.push(
+        db
+          .prepare(
+            `DELETE FROM known_domains
+             WHERE origin = 'defi'
+               AND lower(domain) NOT IN (SELECT value FROM json_each(?1))`,
+          )
+          .bind(defiDomainsJson),
+      );
+    }
+
+    if (surfFeed != null) {
+      const curatedDomainsJson = JSON.stringify(
+        entries.filter(e => e.origin === 'curated').map(e => e.domain.toLowerCase()),
+      );
+      pruneStmts.push(
+        db
+          .prepare(
+            `DELETE FROM known_domains
+             WHERE origin = 'curated'
+               AND lower(domain) NOT IN (SELECT value FROM json_each(?1))`,
+          )
+          .bind(curatedDomainsJson),
+      );
+    }
+
+    const upsertStmts: D1PreparedStatement[] = [];
+    for (let i = 0; i < entries.length; i += UPSERT_ROWS_PER_STMT) {
+      const slice = entries.slice(i, i + UPSERT_ROWS_PER_STMT);
+      const placeholders = slice
+        .map((_, idx) => `(?${idx * 3 + 1}, ?${idx * 3 + 2}, ?${idx * 3 + 3})`)
+        .join(', ');
+      const binds: string[] = [];
+      for (const e of slice) {
+        binds.push(e.domain, e.project, e.origin);
+      }
+      upsertStmts.push(
+        db
+          .prepare(
+            `INSERT INTO known_domains (domain, project, origin) VALUES ${placeholders}
+             ON CONFLICT(domain) DO UPDATE SET project = excluded.project, origin = excluded.origin
+             WHERE (known_domains.project IS NOT excluded.project
+                    OR known_domains.origin IS NOT excluded.origin)
+               AND NOT (excluded.origin = 'curated' AND known_domains.origin IN ('defi', 'surf', 'platform'))`,
+          )
+          .bind(...binds),
+      );
+    }
+
+    try {
+      await db.batch([...pruneStmts, ...upsertStmts]);
+    } finally {
+      knownDomainsGen.set(db, (knownDomainsGen.get(db) ?? 0) + 1);
+      knownDomainsCache.delete(db);
+    }
+    return entries.length;
+  });
 }
 
 export interface KnownDomainsLoaded {

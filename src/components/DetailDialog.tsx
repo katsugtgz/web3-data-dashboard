@@ -55,6 +55,7 @@ function buildDetailRows(card: Card, chains: string[], fit: Record<FitKey, strin
     { label: 'Updated', value: card.u === 'today' ? 'Today' : card.u },
     { label: 'Best for', value: card.fit.map(f => fit[f]).join(', ') || '—' },
     ...(card.x ? [{ label: 'Code', value: card.x, mono: true }] : []),
+    ...(card.source ? [{ label: 'Source', value: card.source, mono: true }] : []),
     { label: 'Status flags', value: flags || '—' },
   ];
 }

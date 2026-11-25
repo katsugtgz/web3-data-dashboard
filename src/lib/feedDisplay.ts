@@ -1,4 +1,5 @@
-import type { FeedItem } from '../../shared/types';
+import type { FeedItem, SourceHealth } from '../../shared/types';
+import { normalizeExternalUrl } from './format';
 
 export interface DisplayLink {
   url: string;
@@ -74,14 +75,23 @@ const TRACKING_PARAMS = new Set([
   'ref_src',
   'ref_url',
   'referral',
+  'referralcode',
+  'referral_code',
+  'refcode',
+  'ref_code',
   'referrer',
   'invite',
   'invitecode',
   'invite_code',
+  'inviter',
   'aff',
+  'aff_id',
   'affiliate',
+  'via',
   'fbclid',
   'gclid',
+  'igshid',
+  'si',
   'mc_cid',
   'mc_eid',
   'boost',
@@ -158,7 +168,7 @@ export function dedupeFeedSources(sources: FeedItem['sources']): FeedItem['sourc
   const seen = new Set<string>();
   const out: FeedItem['sources'] = [];
   for (const src of sources) {
-    const url = src.postUrl.trim();
+    const url = normalizeExternalUrl(src.postUrl);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     out.push(url === src.postUrl ? src : { ...src, postUrl: url });
@@ -198,9 +208,16 @@ function sanitizeFeedUrl(raw: string): { url: URL; hadBoostParam: boolean } | nu
 
   const hadBoostParam = parsed.searchParams.has('boost');
   const isXHost = host === 'x.com' || host === 'twitter.com';
+  const isSubstackHost = hostMatchesDomain(host, 'substack.com');
   for (const key of [...parsed.searchParams.keys()]) {
     const lk = key.toLowerCase();
-    if (lk.startsWith('utm_') || TRACKING_PARAMS.has(lk) || (isXHost && X_SHARE_PARAMS.has(lk))) {
+    if (
+      lk.startsWith('utm_') ||
+      lk.startsWith('ref_') ||
+      TRACKING_PARAMS.has(lk) ||
+      (isXHost && X_SHARE_PARAMS.has(lk)) ||
+      (isSubstackHost && lk === 'r')
+    ) {
       parsed.searchParams.delete(key);
     }
   }
@@ -333,6 +350,229 @@ function formatBotLabelWithSuffix(handle: string, suffix: string, maxLen: number
   return `t.me/${handle.slice(0, handleChars)}\u2026${safeSuffix}`;
 }
 
+function buildSameHostSuffix(url: URL, sameHostUrls: URL[]): string {
+  const cleanSegs = meaningfulPathSegments(url);
+  if (cleanSegs.length === 0) {
+    return MEANINGFUL_HASH_RE.test(url.hash) ? `/${url.hash}` : '';
+  }
+
+  // If peer URLs on this host share the exact first two segments, show the trailing pair so labels diverge.
+  const firstTwo = cleanSegs.slice(0, 2).join('/');
+  const collidesOnFirstTwo =
+    cleanSegs.length >= 3 &&
+    sameHostUrls.some(peer => peer !== url && meaningfulPathSegments(peer).slice(0, 2).join('/') === firstTwo);
+
+  const subPath = collidesOnFirstTwo ? cleanSegs.slice(-2).join('/') : cleanSegs.slice(0, 2).join('/');
+  const pathCollidesWithPeer = sameHostUrls.some(
+    peer => peer !== url && meaningfulPathSegments(peer).join('/') === cleanSegs.join('/'),
+  );
+  if (pathCollidesWithPeer) {
+    const firstParam = [...url.searchParams.entries()][0];
+    if (firstParam) {
+      return `/${subPath}?${firstParam[0]}=${firstParam[1]}`;
+    }
+  }
+  return `/${subPath}`;
+}
+
+function tailTruncateSuffix(suffix: string, maxLen: number): string {
+  if (suffix.length <= maxLen) return suffix;
+  const keep = Math.max(1, maxLen - 2);
+  const tail = suffix.slice(-keep).replace(/^[-/_]+/, '');
+  return `/\u2026${tail || suffix.slice(-keep)}`;
+}
+
+function maxCommonPrefixIndex(value: string, peers: string[]): number {
+  let diffIdx = 0;
+  for (const peer of peers) {
+    if (peer === value) continue;
+    let i = 0;
+    const limit = Math.min(value.length, peer.length);
+    while (i < limit && value[i] === peer[i]) i += 1;
+    if (i > diffIdx) diffIdx = i;
+  }
+  return diffIdx;
+}
+
+function diffWindowSuffix(suffix: string, peers: string[], maxLen: number): string {
+  const diffIdx = maxCommonPrefixIndex(suffix, peers);
+  const innerBudget = Math.max(1, maxLen - 3);
+  const start = Math.max(0, Math.min(diffIdx, Math.max(0, suffix.length - innerBudget)));
+  const end = start + innerBudget;
+  const chunk = suffix.slice(start, end).replace(/^[-/_]+/, '').replace(/[-/_]+$/, '') || suffix.slice(start, end);
+  return end >= suffix.length ? `/\u2026${chunk}` : `/\u2026${chunk}\u2026`;
+}
+
+function hostPrefixAndBudget(host: string, maxLen: number): { hostPrefix: string; suffixBudget: number } {
+  if (host.length <= maxLen - 12) {
+    return { hostPrefix: host, suffixBudget: maxLen - host.length };
+  }
+  const minHostChars = Math.min(host.length, 10);
+  const trimmedHost = host.slice(0, minHostChars).replace(/[-._/]+$/, '') || host.slice(0, minHostChars);
+  const hostPrefix = `${trimmedHost}\u2026`;
+  return { hostPrefix, suffixBudget: maxLen - hostPrefix.length };
+}
+
+function dualDiffWindowSuffix(
+  fullKey: string,
+  subDiffIdx: number,
+  outerDiffIdx: number,
+  maxLen: number,
+): string {
+  if (maxLen <= 5) return truncateLabel(fullKey, maxLen);
+  const lo = Math.min(subDiffIdx, outerDiffIdx);
+  const hi = Math.max(subDiffIdx, outerDiffIdx);
+  // If both diff indices fit in one window, use a single window starting at `lo`.
+  const singleBudget = Math.max(1, maxLen - 3);
+  if (hi - lo < singleBudget - 2) {
+    const start = lo <= 2 ? 0 : Math.max(0, Math.min(lo, Math.max(0, fullKey.length - singleBudget)));
+    const end = start + singleBudget;
+    const chunk = fullKey.slice(start, end);
+    const prefix = start === 0 ? '' : '/\u2026';
+    const trailer = end >= fullKey.length ? '' : '\u2026';
+    return `${prefix}${chunk}${trailer}`.slice(0, maxLen);
+  }
+
+  // Split budget across both distinguishing positions (leading window + ellipsis + second window).
+  const firstStart = lo <= 3 ? 0 : lo;
+  const firstPrefix = firstStart === 0 ? '' : '/\u2026';
+  const available = maxLen - firstPrefix.length - 1; // reserve 1 char for middle ellipsis
+  if (available < 4) return truncateLabel(fullKey, maxLen);
+  const leftLen = Math.max(2, Math.floor(available / 2));
+  const rightBudget = available - leftLen;
+  const leftChunk = fullKey.slice(firstStart, firstStart + leftLen);
+  const rightStart = Math.max(firstStart + leftLen, Math.min(hi, Math.max(0, fullKey.length - Math.max(1, rightBudget - 1))));
+  const needsTailEllipsis = rightStart + rightBudget < fullKey.length;
+  const rightLen = Math.max(1, rightBudget - (needsTailEllipsis ? 1 : 0));
+  const rightChunk = fullKey.slice(rightStart, rightStart + rightLen);
+  return `${firstPrefix}${leftChunk}\u2026${rightChunk}${needsTailEllipsis ? '\u2026' : ''}`;
+}
+
+function appendOrdinalDisambiguator(baseLabel: string, usedLower: Set<string>, maxLen: number): string {
+  for (let n = 2; n < 1000; n += 1) {
+    const tag = ` #${n}`;
+    const trimmedBase = truncateLabel(baseLabel, Math.max(1, maxLen - tag.length));
+    const candidate = `${trimmedBase}${tag}`;
+    if (!usedLower.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  return baseLabel;
+}
+
+function disambiguateSelectedLabels(
+  selected: LinkCandidate[],
+  initialLabels: string[],
+  byHost: Map<string, URL[]>,
+): string[] {
+  const labels = [...initialLabels];
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < labels.length; i += 1) {
+    const key = labels[i].toLowerCase();
+    const list = groups.get(key) ?? [];
+    list.push(i);
+    groups.set(key, list);
+  }
+  if (groups.size === labels.length) return labels;
+
+  const usedLower = new Set<string>();
+  for (const [key, indices] of groups) {
+    if (indices.length === 1) usedLower.add(key);
+  }
+
+  for (const indices of groups.values()) {
+    if (indices.length <= 1) continue;
+
+    // Stage 1: for same-host collisions, compute subgroup + global diff windows over full path+query+hash.
+    const host = selected[indices[0]].bareHost;
+    const sameHostGroup = indices.every(idx => selected[idx].bareHost === host);
+    if (sameHostGroup) {
+      const { hostPrefix, suffixBudget } = hostPrefixAndBudget(host, MAX_LINK_LABEL_LEN);
+      const sameHostKeys = (byHost.get(host) ?? []).map(u => `${u.pathname}${u.search}${u.hash}` || '/');
+      const groupKeys = indices.map(idx => {
+        const u = selected[idx].url;
+        return `${u.pathname}${u.search}${u.hash}` || '/';
+      });
+
+      const candidates = indices.map((_, pos) => {
+        const key = groupKeys[pos];
+        const subPeers = groupKeys.filter((_, p) => p !== pos);
+        const outerPeers = sameHostKeys.filter(k => k !== key);
+        const subDiff = maxCommonPrefixIndex(key, subPeers);
+        const outerDiff = maxCommonPrefixIndex(key, outerPeers);
+        const suffix = dualDiffWindowSuffix(key, subDiff, outerDiff, suffixBudget);
+        return `${hostPrefix}${suffix}`;
+      });
+
+      const candLower = candidates.map(c => c.toLowerCase());
+      const allDistinct =
+        new Set(candLower).size === candidates.length &&
+        candLower.every(c => !usedLower.has(c)) &&
+        candidates.every(c => c.length <= MAX_LINK_LABEL_LEN);
+      if (allDistinct) {
+        for (let pos = 0; pos < indices.length; pos += 1) {
+          labels[indices[pos]] = candidates[pos];
+          usedLower.add(candLower[pos]);
+        }
+        continue;
+      }
+    }
+
+    // Stage 2: guaranteed collision-free backstop within MAX_LINK_LABEL_LEN (never drop selected links).
+    for (let pos = 0; pos < indices.length; pos += 1) {
+      const idx = indices[pos];
+      const base = labels[idx];
+      if (!usedLower.has(base.toLowerCase())) {
+        usedLower.add(base.toLowerCase());
+      } else {
+        const unique = appendOrdinalDisambiguator(base, usedLower, MAX_LINK_LABEL_LEN);
+        labels[idx] = unique;
+        usedLower.add(unique.toLowerCase());
+      }
+    }
+  }
+
+  return labels;
+}
+
+function formatDisambiguatedHostLabel(
+  host: string,
+  suffix: string,
+  peerSuffixes: string[],
+  maxLen: number,
+): string {
+  const keepFullHost = host.length <= maxLen - 12;
+  let hostPrefix: string;
+  let suffixBudget: number;
+
+  if (keepFullHost) {
+    hostPrefix = host;
+    suffixBudget = maxLen - host.length;
+  } else {
+    const minHostChars = Math.min(host.length, 10);
+    const maxSuffixBudget = maxLen - minHostChars - 1;
+    if (suffix.length <= maxSuffixBudget) {
+      const hostChars = maxLen - 1 - suffix.length;
+      const trimmedHost = host.slice(0, hostChars).replace(/[-._/]+$/, '') || host.slice(0, hostChars);
+      return `${trimmedHost}\u2026${suffix}`;
+    }
+    const trimmedHost = host.slice(0, minHostChars).replace(/[-._/]+$/, '') || host.slice(0, minHostChars);
+    hostPrefix = `${trimmedHost}\u2026`;
+    suffixBudget = maxLen - hostPrefix.length;
+  }
+
+  const distinctPeers = peerSuffixes.filter(p => p && p !== suffix);
+  const head = truncateLabel(suffix, suffixBudget);
+  const headCollides = distinctPeers.some(p => truncateLabel(p, suffixBudget).toLowerCase() === head.toLowerCase());
+  if (!headCollides) return `${hostPrefix}${head}`;
+
+  const tail = tailTruncateSuffix(suffix, suffixBudget);
+  const tailCollides = distinctPeers.some(p => tailTruncateSuffix(p, suffixBudget).toLowerCase() === tail.toLowerCase());
+  if (!tailCollides) return `${hostPrefix}${tail}`;
+
+  return `${hostPrefix}${diffWindowSuffix(suffix, distinctPeers, suffixBudget)}`;
+}
+
 function formatLinkLabel(url: URL, sameHostUrls: URL[]): string {
   const host = bareHostname(url.hostname);
   const segs = url.pathname.split('/').filter(Boolean);
@@ -378,31 +618,24 @@ function formatLinkLabel(url: URL, sameHostUrls: URL[]): string {
 
   if (sameHostUrls.length <= 1) return host;
 
-  const cleanSegs = meaningfulPathSegments(url);
-  if (cleanSegs.length === 0) {
-    if (MEANINGFUL_HASH_RE.test(url.hash)) {
-      return truncateLabel(`${host}/${url.hash}`, MAX_LINK_LABEL_LEN);
-    }
-    return host;
-  }
+  const suffix = buildSameHostSuffix(url, sameHostUrls);
+  if (!suffix) return host;
 
-  // If peer URLs on this host share the exact first two segments, show the trailing pair so labels diverge.
-  const firstTwo = cleanSegs.slice(0, 2).join('/');
-  const collidesOnFirstTwo =
-    cleanSegs.length >= 3 &&
-    sameHostUrls.some(peer => peer !== url && meaningfulPathSegments(peer).slice(0, 2).join('/') === firstTwo);
+  const full = `${host}${suffix}`;
+  if (full.length <= MAX_LINK_LABEL_LEN) return full;
 
-  const subPath = collidesOnFirstTwo ? cleanSegs.slice(-2).join('/') : cleanSegs.slice(0, 2).join('/');
-  const pathCollidesWithPeer = sameHostUrls.some(
-    peer => peer !== url && meaningfulPathSegments(peer).join('/') === cleanSegs.join('/'),
+  const simple = truncateLabel(full, MAX_LINK_LABEL_LEN);
+  const peerSuffixes = sameHostUrls
+    .filter(peer => peer !== url)
+    .map(peer => buildSameHostSuffix(peer, sameHostUrls));
+  const simpleCollides = peerSuffixes.some(
+    ps => ps && truncateLabel(`${host}${ps}`, MAX_LINK_LABEL_LEN).toLowerCase() === simple.toLowerCase(),
   );
-  if (pathCollidesWithPeer) {
-    const firstParam = [...url.searchParams.entries()][0];
-    if (firstParam) {
-      return truncateLabel(`${host}/${subPath}?${firstParam[0]}=${firstParam[1]}`, MAX_LINK_LABEL_LEN);
-    }
+  if (!simpleCollides && host.length <= MAX_LINK_LABEL_LEN - 12) {
+    return simple;
   }
-  return truncateLabel(`${host}/${subPath}`, MAX_LINK_LABEL_LEN);
+
+  return formatDisambiguatedHostLabel(host, suffix, peerSuffixes, MAX_LINK_LABEL_LEN);
 }
 
 function selectBalancedCandidates(candidates: LinkCandidate[], max: number): LinkCandidate[] {
@@ -525,17 +758,9 @@ export function prepareFeedLinks(
     byHost.set(c.bareHost, list);
   }
 
-  const seenLabels = new Set<string>();
-  const out: DisplayLink[] = [];
-  for (const c of selected) {
-    const label = formatLinkLabel(c.url, byHost.get(c.bareHost) ?? [c.url]);
-    const labelKey = label.toLowerCase();
-    if (seenLabels.has(labelKey)) continue;
-    seenLabels.add(labelKey);
-    out.push({ url: c.href, label, known: c.known });
-  }
-
-  return out;
+  const initialLabels = selected.map(c => formatLinkLabel(c.url, byHost.get(c.bareHost) ?? [c.url]));
+  const labels = disambiguateSelectedLabels(selected, initialLabels, byHost);
+  return selected.map((c, idx) => ({ url: c.href, label: labels[idx], known: c.known }));
 }
 
 export function formatRiskReasons(item: Pick<FeedItem, 'risk' | 'links' | 'domain'>): DisplayRiskNote[] {
@@ -849,4 +1074,59 @@ export function formatFeedSummary(summary: string, project?: string): FormattedS
 
   const lead = stripRedundantProjectPrefix(cleaned, project);
   return { lead, bullets: [], text: lead };
+}
+
+const SOCIAL_SOURCE_PLATFORMS = new Set(['telegram', 'x']);
+
+const PLATFORM_SUMMARY_ORDER = ['telegram', 'x', 'sheet', 'feed', 'surf'] as const;
+
+const PLATFORM_SUMMARY_LABEL: Record<string, string> = {
+  telegram: 'TG',
+  x: 'X',
+  sheet: 'Sheets',
+  feed: 'Feeds',
+  surf: 'Surf',
+};
+
+export function formatSourceHandle(platform: string, handle: string): string {
+  const trimmed = handle.trim();
+  if (!trimmed) return '';
+  if (SOCIAL_SOURCE_PLATFORMS.has(platform.trim().toLowerCase())) {
+    const clean = trimmed.replace(/^@+/, '');
+    return clean ? `@${clean}` : '';
+  }
+  return trimmed;
+}
+
+export function formatSourcesSummary(sources: Pick<SourceHealth, 'platform' | 'status'>[]): string {
+  const counts = new Map<string, number>();
+  let okCount = 0;
+  let degradedCount = 0;
+  let downCount = 0;
+
+  for (const src of sources) {
+    const key = src.platform.trim().toLowerCase() || 'other';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (src.status === 'ok') okCount += 1;
+    else if (src.status === 'degraded') degradedCount += 1;
+    else if (src.status === 'down') downCount += 1;
+  }
+
+  const parts: string[] = [];
+  const emitted = new Set<string>();
+  for (const platform of PLATFORM_SUMMARY_ORDER) {
+    const count = counts.get(platform);
+    if (!count) continue;
+    parts.push(`${PLATFORM_SUMMARY_LABEL[platform]} ${count}`);
+    emitted.add(platform);
+  }
+  const extraPlatforms = [...counts.keys()].filter(p => !emitted.has(p)).sort();
+  for (const platform of extraPlatforms) {
+    const count = counts.get(platform)!;
+    const label = platform[0].toUpperCase() + platform.slice(1);
+    parts.push(`${label} ${count}`);
+  }
+
+  const platformSummary = parts.length > 0 ? parts.join(' · ') : '0 sources';
+  return `${platformSummary} — ${okCount} ok · ${degradedCount} degraded · ${downCount} down`;
 }

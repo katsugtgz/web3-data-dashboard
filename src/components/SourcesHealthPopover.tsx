@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { SourceHealth } from '../../shared/types';
 import { usePopoverDismiss } from '../hooks/usePopoverDismiss';
+import { formatSourceHandle, formatSourcesSummary } from '../lib/feedDisplay';
 import { formatRelativeTime } from '../lib/format';
 import { ActivityIcon, XIcon } from './Icons';
 
@@ -22,16 +23,11 @@ function summarizeSources(
   let okCount = 0;
   let degradedCount = 0;
   let downCount = 0;
-  let tgCount = 0;
-  let xCount = 0;
 
   for (const s of sources) {
     if (s.status === 'ok') okCount += 1;
     else if (s.status === 'degraded') degradedCount += 1;
     else downCount += 1;
-
-    if (s.platform === 'telegram') tgCount += 1;
-    else if (s.platform === 'x') xCount += 1;
   }
 
   const issueCount = degradedCount + downCount;
@@ -51,7 +47,15 @@ function summarizeSources(
     label = loading ? 'Checking sources…' : 'Sources unavailable';
   }
 
-  return { okCount, degradedCount, downCount, issueCount, tgCount, xCount, overallDot, label };
+  return {
+    okCount,
+    degradedCount,
+    downCount,
+    issueCount,
+    overallDot,
+    label,
+    summaryText: formatSourcesSummary(sources),
+  };
 }
 
 function SourcesPopoverBody({
@@ -98,7 +102,7 @@ function SourcesPopoverBody({
           <li key={src.id} className="source-item">
             <span className="source-item-main">
               <span className={`status-dot status-dot-${src.status}`} aria-hidden="true" />
-              <span className="mono source-item-handle">@{src.handle}</span>
+              <span className="mono source-item-handle">{formatSourceHandle(src.platform, src.handle) || src.id}</span>
               <span className="note">({src.platform})</span>
             </span>
             <span className="source-item-meta">
@@ -143,9 +147,7 @@ export function SourcesHealthPopover({ sources, loading, isLiveApi, failed }: Pr
       {open && (
         <div className="sources-popover" role="region" aria-label="Configured feed sources health">
           <div className="sources-popover-head">
-            <strong>
-              TG {summary.tgCount} · X {summary.xCount} — {summary.okCount} ok · {summary.degradedCount} degraded · {summary.downCount} down
-            </strong>
+            <strong>{summary.summaryText}</strong>
             <button
               type="button"
               className="iconbtn"

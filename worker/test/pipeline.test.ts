@@ -1330,6 +1330,261 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
     expect(remaining.results.map(r => r.id)).toEqual(['c-fresh']);
   });
 
+  test('collectKnownDomainEntries, seedKnownDomains, and buildSurfIndex enforce trust boundaries and prune stale rows', async () => {
+    const makeCard = (overrides: Record<string, unknown>) => ({
+      r: 1,
+      n: 'Proto',
+      t: null,
+      g: 'A' as Grade,
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 70,
+      sub: [7, 7, null],
+      url: null,
+      ...overrides,
+    });
+
+    const defiSection: MarketSection = {
+      id: 'defi',
+      title: 'DeFi',
+      blurb: 'DeFi',
+      cols: ['Project'],
+      rows: [{ cells: ['Arbitrum'], href: 'https://arbitrum.io/' }],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: 1000,
+      stale: false,
+    };
+
+    const feed = {
+      cards: [
+        makeCard({ n: 'SurfGood', t: 'SGOOD', source: 'Surf', url: 'https://surfgood.xyz/' }),
+        makeCard({ n: 'SurfRisk', t: 'SRISK', source: 'Surf', b: ['live', 'risk'], url: 'https://surfrisk.xyz/' }),
+        makeCard({ n: 'AssoSheet', source: 'ASSO7878', url: 'https://assosheet.io/' }),
+        makeCard({ n: 'ArndxtSheet', source: 'arndxt', url: 'https://arndxtsheet.io/' }),
+        makeCard({ n: 'Ethena', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0x1' }),
+        makeCard({ n: 'Pendle', source: 'Pendle', url: 'https://pendle.finance/' }),
+        makeCard({ n: 'Uniswap', source: 'Merkl', url: 'https://app.merkl.xyz/opportunities/1' }),
+        makeCard({ n: 'DefiGood', source: 'DefiLlama', url: 'https://defigood.fi/' }),
+        makeCard({ n: 'DefiRisk', source: 'DefiLlama', b: ['risk'], url: 'https://defirisk.fi/' }),
+        makeCard({ n: 'PunyBad', source: 'DefiLlama', url: 'https://xn--arbitrm-91a.io/' }),
+        makeCard({ n: 'LookalikeDefi', source: 'DefiLlama', url: 'https://arbitrurn.io/' }),
+        makeCard({ n: 'LookalikePlatform', source: 'DefiLlama', url: 'https://zea1y.io/' }),
+      ],
+      tge: [],
+      counts: { active: 12, preToken: 12 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    const entries = collectKnownDomainEntries(feed, defiSection);
+    const byDom = new Map(entries.map(e => [e.domain, e]));
+
+    expect(byDom.get('surfgood.xyz')?.origin).toBe('surf');
+    expect(byDom.get('arbitrum.io')?.origin).toBe('defi');
+    expect(byDom.get('defigood.fi')?.origin).toBe('curated');
+    expect(byDom.get('pendle.finance')?.project).toBe('Pendle');
+    expect(byDom.get('pendle.finance')?.origin).toBe('curated');
+
+    // Excluded: risk cards, editable sheets, aggregator hosts for 3rd-party cards, punycode, lookalikes.
+    expect(byDom.has('surfrisk.xyz')).toBe(false);
+    expect(byDom.has('defirisk.fi')).toBe(false);
+    expect(byDom.has('assosheet.io')).toBe(false);
+    expect(byDom.has('arndxtsheet.io')).toBe(false);
+    expect(byDom.has('merkl.xyz')).toBe(false);
+    expect(byDom.has('xn--arbitrm-91a.io')).toBe(false);
+    expect(byDom.has('arbitrurn.io')).toBe(false);
+    expect(byDom.has('zea1y.io')).toBe(false);
+
+    // buildSurfIndex skips risk cards and curated aggregator domains for 3rd-party cards.
+    const surfIndex = buildSurfIndex(feed);
+    expect(surfIndex.byDomain.get('surfgood.xyz')?.name).toBe('SurfGood');
+    expect(surfIndex.byTicker.get('SGOOD')?.name).toBe('SurfGood');
+    expect(surfIndex.byDomain.has('surfrisk.xyz')).toBe(false);
+    expect(surfIndex.byTicker.has('SRISK')).toBe(false);
+    expect(surfIndex.byDomain.get('pendle.finance')?.name).toBe('Pendle');
+    expect(surfIndex.byDomain.has('merkl.xyz')).toBe(false);
+
+    // seedKnownDomains prunes stale curated/surf/defi rows when authoritative feeds are supplied
+    // while retaining active curated/surf/defi/platform entries.
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('stale-curated.io', 'OldCurated', 'curated'),
+                ('stale-surf-removed.io', 'OldSurf', 'surf'),
+                ('stale-defi-removed.io', 'OldDefi', 'defi')`,
+      )
+      .run();
+
+    await seedKnownDomains(db, feed, defiSection);
+    const rows = await db
+      .prepare('SELECT domain, origin FROM known_domains ORDER BY domain ASC')
+      .all<{ domain: string; origin: string }>();
+    const domSet = new Set(rows.results.map(r => r.domain));
+    expect(domSet.has('stale-curated.io')).toBe(false);
+    expect(domSet.has('stale-surf-removed.io')).toBe(false);
+    expect(domSet.has('stale-defi-removed.io')).toBe(false);
+    expect(domSet.has('defigood.fi')).toBe(true);
+    expect(domSet.has('surfgood.xyz')).toBe(true);
+    expect(domSet.has('arbitrum.io')).toBe(true);
+    expect(domSet.has('galxe.com')).toBe(true);
+
+    // Merged Surf + Pendle and ASSO7878 + Pendle cards must never poison known_domains or surfIndex with pendle.finance/merkl.xyz.
+    const mergedAggFeed = {
+      cards: [
+        makeCard({
+          n: 'Ethena',
+          source: 'Surf',
+          url: 'https://ethena.fi/',
+          tasks: [
+            { title: 'Stake USDe', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://ethena.fi/stake' },
+            { title: 'Pendle YT USDe', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.pendle.finance/trade/markets/0x1' },
+            { title: 'Merkl USDe', type: 'liquidity', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.merkl.xyz/opportunities/1' },
+          ],
+        }),
+        makeCard({
+          n: 'xStocks',
+          source: 'ASSO7878',
+          url: null,
+          tasks: [
+            { title: 'Pendle YT xStocks', type: 'staking', status: 'OPEN', cost: 100, timeMinutes: null, url: 'https://app.pendle.finance/trade/markets/0x2' },
+          ],
+        }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    const mergedKnown = new Map(collectKnownDomainEntries(mergedAggFeed, null).map(e => [e.domain, e]));
+    expect(mergedKnown.get('ethena.fi')?.origin).toBe('surf');
+    expect(mergedKnown.has('pendle.finance')).toBe(false);
+    expect(mergedKnown.has('merkl.xyz')).toBe(false);
+
+    const mergedSurfIdx = buildSurfIndex(mergedAggFeed);
+    expect(mergedSurfIdx.byDomain.get('ethena.fi')?.name).toBe('Ethena');
+    expect(mergedSurfIdx.byDomain.has('pendle.finance')).toBe(false);
+    expect(mergedSurfIdx.byDomain.has('merkl.xyz')).toBe(false);
+  });
+
+  test('seedKnownDomains preserves stored defi/surf/platform identities when defi input is absent and serializes concurrent curated upserts and prunes', async () => {
+    const makeCard = (n: string, source: string, url: string) => ({
+      r: 1,
+      n,
+      t: null,
+      g: 'A' as Grade,
+      b: ['live'],
+      x: null,
+      img: '',
+      f: '—',
+      tk: '1/1',
+      h: 10,
+      u: 'today',
+      fit: ['zero'],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5m' },
+      sc: 70,
+      sub: [7, 7, null],
+      url,
+      source,
+    });
+
+    const { db } = createTestD1();
+    await db
+      .prepare(
+        `INSERT INTO known_domains (domain, project, origin)
+         VALUES ('aave.com', 'Aave', 'defi'),
+                ('surfkeep.xyz', 'SurfKeep', 'surf'),
+                ('oldcurated.fi', 'OldCurated', 'curated')`,
+      )
+      .run();
+
+    // Reseed with defiSection = null while curated DefiLlama cards contain the same domains under different names.
+    const curatedCollisionFeed = {
+      cards: [
+        makeCard('CuratedAaveAlias', 'DefiLlama', 'https://aave.com/'),
+        makeCard('CuratedSurfAlias', 'DefiLlama', 'https://surfkeep.xyz/'),
+        makeCard('FreshCurated', 'DefiLlama', 'https://freshcurated.fi/'),
+      ],
+      tge: [],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: 1000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    await seedKnownDomains(db, curatedCollisionFeed, null);
+    const aaveRow = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'aave.com'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    const surfRow = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'surfkeep.xyz'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    expect(aaveRow).toEqual({ domain: 'aave.com', project: 'Aave', origin: 'defi' });
+    expect(surfRow).toEqual({ domain: 'surfkeep.xyz', project: 'SurfKeep', origin: 'surf' });
+
+    // Later reseed without aave.com must still preserve stored defi/surf rows while pruning stale curated rows.
+    const emptyFeed = {
+      cards: [],
+      tge: [],
+      counts: { active: 0, preToken: 0 },
+      fetchedAt: 2000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+    await seedKnownDomains(db, emptyFeed, null);
+    const aaveAfter = await db
+      .prepare(`SELECT domain, project, origin FROM known_domains WHERE domain = 'aave.com'`)
+      .first<{ domain: string; project: string; origin: string }>();
+    const freshAfter = await db
+      .prepare(`SELECT domain FROM known_domains WHERE domain = 'freshcurated.fi'`)
+      .first<{ domain: string }>();
+    expect(aaveAfter).toEqual({ domain: 'aave.com', project: 'Aave', origin: 'defi' });
+    expect(freshAfter).toBeNull();
+
+    // Concurrent seed calls: an earlier seed's prune must never delete a curated row upserted by a newer seed.
+    const feedOld = {
+      cards: [makeCard('KeepOld', 'DefiLlama', 'https://keepold.fi/')],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: 3000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+    const feedNew = {
+      cards: [
+        makeCard('KeepOld', 'DefiLlama', 'https://keepold.fi/'),
+        makeCard('BrandNew', 'DefiLlama', 'https://brandnew.fi/'),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: 4000,
+    } as unknown as import('../../shared/types').AirdropFeed;
+
+    // Seed brandnew.fi first, then race feedOld against feedNew so feedOld runs first and feedNew second;
+    // with per-db serialization + atomic batch, feedOld cannot read stale rows and delete feedNew's upsert afterwards.
+    let delayFirstBatch = true;
+    const delayedDb = {
+      ...db,
+      prepare(sql: string) {
+        return db.prepare(sql);
+      },
+      async batch(stmts: D1PreparedStatement[]) {
+        if (delayFirstBatch) {
+          delayFirstBatch = false;
+          await new Promise(r => setTimeout(r, 15));
+        }
+        return db.batch(stmts);
+      },
+    } as unknown as D1Database;
+
+    await Promise.all([seedKnownDomains(delayedDb, feedOld, null), seedKnownDomains(delayedDb, feedNew, null)]);
+    const brandNewRow = await db
+      .prepare(`SELECT domain, origin FROM known_domains WHERE domain = 'brandnew.fi'`)
+      .first<{ domain: string; origin: string }>();
+    expect(brandNewRow).toEqual({ domain: 'brandnew.fi', origin: 'curated' });
+  });
+
   test('M-38/M-39a/M-41a: concurrent ON CONFLICT coalesces metadata & recomputes risk/score, fallback_windows advances on re-ingest, and risk updates apply current computeScore', async () => {
     const { db } = createTestD1();
     const now = 1_795_364_909_000;
