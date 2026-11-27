@@ -86,19 +86,87 @@ describe('createScheduler', () => {
   });
 
   test('start() runs each job on its interval without overlap, with the schedule stamped by now()', async () => {
-    const c = counters();
-    const scheduler = createScheduler([c.job('tick', 10, 35)], { now: () => NOW });
+    const ticks: (() => void)[] = [];
+    let cleared = 0;
+    let runs = 0;
+    let running = 0;
+    let maxRunning = 0;
+    let release!: () => void;
+    const scheduler = createScheduler(
+      [
+        {
+          name: 'tick',
+          everyMs: 10,
+          run: async () => {
+            runs++;
+            running++;
+            maxRunning = Math.max(maxRunning, running);
+            await new Promise<void>(resolve => {
+              release = resolve;
+            });
+            running--;
+          },
+        },
+      ],
+      {
+        now: () => NOW,
+        setIntervalFn: fn => {
+          ticks.push(fn);
+          return ticks.length as unknown as ReturnType<typeof setInterval>;
+        },
+        clearIntervalFn: () => {
+          cleared++;
+        },
+      },
+    );
     scheduler.start();
-    await sleep(220);
     expect(scheduler.status()).toMatchObject({ running: true, startedAt: NOW });
-    await scheduler.stop();
-    const { runs, maxRunning } = c.state;
-    // A tick is skipped while the previous 35 ms run is still going, so runs stay
-    // far below the 22 ticks the interval fires in that window.
-    expect(runs).toBeGreaterThanOrEqual(3);
-    expect(runs).toBeLessThanOrEqual(8);
+    expect(ticks).toHaveLength(1);
+
+    // First tick starts the job; a second tick while it is pending must be skipped.
+    ticks[0]!();
+    expect(runs).toBe(1);
+    expect(scheduler.status().jobs.tick?.inFlight).toBe(true);
+    ticks[0]!();
+    expect(runs).toBe(1);
     expect(maxRunning).toBe(1);
-    expect(scheduler.status().jobs.tick).toMatchObject({ inFlight: false, lastStartedAt: NOW, lastDurationMs: 0 });
+
+    // Completing the first run lets the next tick start cleanly.
+    release();
+    await scheduler.whenIdle();
+    expect(scheduler.status().jobs.tick?.inFlight).toBe(false);
+
+    ticks[0]!();
+    expect(runs).toBe(2);
+    release();
+    await scheduler.stop();
+    expect(cleared).toBe(1);
+    expect(maxRunning).toBe(1);
+    expect(scheduler.status().jobs.tick).toMatchObject({ inFlight: false, runs: 2, lastStartedAt: NOW, lastDurationMs: 0 });
+  });
+
+  test('reserves the job slot before invoking job.run so synchronous re-entry cannot overlap', async () => {
+    const nested: { result: Promise<boolean> | null } = { result: null };
+    let runs = 0;
+    const scheduler = createScheduler([
+      {
+        name: 'reentrant',
+        everyMs: MINUTE,
+        run: async () => {
+          runs++;
+          if (runs === 1) {
+            nested.result = scheduler.run('reentrant');
+          }
+          await sleep(10);
+        },
+      },
+    ]);
+    expect(await scheduler.run('reentrant')).toBe(true);
+    expect(await nested.result).toBe(false);
+    expect(runs).toBe(1);
+    // Once settled, a subsequent manual run succeeds.
+    expect(await scheduler.run('reentrant')).toBe(true);
+    expect(runs).toBe(2);
   });
 
   test('start(warmup) runs the named jobs sequentially in the given order', async () => {
@@ -272,6 +340,25 @@ describe('runHeavyIngest', () => {
     expect(len).toBeGreaterThan(1_000_000);
     db.close();
   });
+
+  test('a domain-seed failure does not block yields or sheet snapshots and is reported in failed', async () => {
+    const db = openDb(':memory:');
+    const result = await runHeavyIngest(db.d1, {}, {
+      ...sheets,
+      fetchJson: payloadJson,
+      seedDomains: async () => {
+        throw new Error('domain seed lock');
+      },
+      nowMs: NOW,
+      log: () => {},
+    });
+    expect(result.ok).toEqual(['markets:defi', 'airdrops:defillama', 'markets:yields', 'airdrops:asso7878', 'airdrops:arndxt']);
+    expect(result.failed).toEqual([{ key: 'domain_meta:defillama', error: 'domain seed lock' }]);
+    expect(result.seededDomains).toBe(0);
+    expect(db.sqlite.query("SELECT ok FROM snapshots WHERE key = 'markets:yields'").get()).toEqual({ ok: 1 });
+    expect(db.sqlite.query("SELECT ok FROM snapshots WHERE key = 'airdrops:asso7878'").get()).toEqual({ ok: 1 });
+    db.close();
+  });
 });
 
 describe('createRadarScheduler', () => {
@@ -318,6 +405,104 @@ describe('createRadarScheduler', () => {
     expect(scheduler.status().jobs[JOB.twoMin]).toMatchObject({ errors: 0 });
     const sources = db.sqlite.query('SELECT count(*) AS n FROM sources').get();
     expect((sources as { n: number }).n).toBeGreaterThan(10);
+    db.close();
+  });
+
+  test('enrich waits for both branches to settle before releasing the job and shares one fetch per domain', async () => {
+    const db = openDb(':memory:');
+    let cardsSettled = false;
+    let releaseCards!: () => void;
+    const scheduler = createRadarScheduler(db.d1, {}, {
+      enrichClusters: async () => {
+        throw new Error('clusters failed');
+      },
+      enrichCards: async () => {
+        await new Promise<void>(resolve => {
+          releaseCards = resolve;
+        });
+        cardsSettled = true;
+        return { enriched: 0, fetched: 0, errors: 0 };
+      },
+      log: () => {},
+    });
+
+    const running = scheduler.run(JOB.enrich);
+    await sleep(10);
+    // Even though clusters already rejected, the job stays inFlight until cards settles.
+    expect(scheduler.status().jobs[JOB.enrich]?.inFlight).toBe(true);
+    expect(cardsSettled).toBe(false);
+    releaseCards();
+    await running;
+    expect(cardsSettled).toBe(true);
+    expect(scheduler.status().jobs[JOB.enrich]).toMatchObject({ inFlight: false, errors: 1, lastError: 'clusters: clusters failed' });
+
+    // Shared domain across a cluster and an airdrop card is fetched once and never overwritten by a second failing fetch.
+    db.sqlite
+      .prepare(
+        `INSERT INTO clusters (id, project, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons,
+           score, source_count, first_seen, last_seen)
+         VALUES ('c-shared', 'Shared', 'shared.example', '[]', '[]', 's', 'rule', 'ok', '[]', 90, 1, ?1, ?1)`,
+      )
+      .run(NOW);
+    const sharedFeed: AirdropFeed = {
+      cards: [
+        {
+          r: 1,
+          n: 'Shared',
+          id: 'asso:shared',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          img: '',
+          f: '$1M',
+          tk: '1/1',
+          h: 1,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Use', ty: 'other', c: '$0', m: '—' },
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://shared.example/app',
+          source: 'ASSO7878',
+        },
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW - 1000,
+    };
+    await upsertSnapshot(db.d1, 'airdrops', sharedFeed, NOW - 1000);
+
+    let fetchCount = 0;
+    const sharedScheduler = createRadarScheduler(db.d1, {}, {
+      now: () => NOW,
+      log: () => {},
+      enrichOpts: {
+        lookup: async () => ['93.184.216.34'],
+        request: async () => {
+          fetchCount++;
+          await sleep(10);
+          if (fetchCount > 1) throw new Error('second fetch would overwrite good metadata');
+          return {
+            status: 200,
+            html: '<html><head><meta property="og:image" content="/og.png"><meta property="og:description" content="Shared desc"></head></html>',
+          };
+        },
+      },
+    });
+    expect(await sharedScheduler.run(JOB.enrich)).toBe(true);
+    expect(fetchCount).toBe(1);
+    expect(db.sqlite.query("SELECT og_image, error FROM domain_meta WHERE domain = 'shared.example'").get()).toEqual({
+      og_image: 'https://shared.example/og.png',
+      error: null,
+    });
+    expect(db.sqlite.query("SELECT og_image FROM clusters WHERE id = 'c-shared'").get()).toEqual({
+      og_image: 'https://shared.example/og.png',
+    });
+    const storedAirdrops = JSON.parse(
+      (db.sqlite.query("SELECT body FROM snapshots WHERE key = 'airdrops'").get() as { body: string }).body,
+    ) as AirdropFeed;
+    expect(storedAirdrops.cards[0]?.ogImage).toBe('https://shared.example/og.png');
+    expect(storedAirdrops.cards[0]?.description).toBe('Shared desc');
     db.close();
   });
 });

@@ -9,10 +9,10 @@ import {
 } from '../lib/viz';
 
 /** Inline SVG line chart of a short daily series. Decorative: the label carries the meaning. */
-export function KpiSparkline({ values, label }: { values: readonly number[]; label: string }) {
+export function KpiSparkline({ values, label, id }: { values: readonly number[]; label: string; id?: string }) {
   const points = sparklinePoints(values);
   return (
-    <span className="kpi-sparkline">
+    <span id={id} className="kpi-sparkline">
       <svg
         viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
         preserveAspectRatio="none"
@@ -32,16 +32,17 @@ interface MiniBarsProps {
   segments: readonly BarSegment[];
   /** Describes the whole bar for screen readers, e.g. "Tiers: S 15, A 57". */
   label: string;
+  id?: string;
 }
 
 /** One stacked bar with a legend. Segments with a zero count are left out. */
-export function MiniBars({ segments, label }: MiniBarsProps) {
+export function MiniBars({ segments, label, id }: MiniBarsProps) {
   const visible = segments.filter(segment => segment.value > 0);
   const total = visible.reduce((sum, segment) => sum + segment.value, 0);
   if (visible.length === 0 || total === 0) return null;
 
   return (
-    <span className="kpi-dist" role="img" aria-label={label}>
+    <span id={id} className="kpi-dist" role="img" aria-label={label}>
       <span className="kpi-dist-bar" aria-hidden="true">
         {visible.map(segment => (
           <span
@@ -65,12 +66,12 @@ export function MiniBars({ segments, label }: MiniBarsProps) {
 }
 
 /** Seven-day activity line (ms timestamps in, newest bucket last). */
-export function KpiActivity({ timestamps, label }: { timestamps: readonly number[]; label: string }) {
+export function KpiActivity({ timestamps, label, id }: { timestamps: readonly number[]; label: string; id?: string }) {
   const buckets = bucketDaily(timestamps, Date.now());
   const caption = describeBuckets(buckets);
   return (
     <>
-      <KpiSparkline values={buckets} label={`${label}: ${caption}`} />
+      <KpiSparkline id={id} values={buckets} label={`${label}: ${caption}`} />
       <span className="kpi-viz-note" aria-hidden="true">
         {caption}
       </span>

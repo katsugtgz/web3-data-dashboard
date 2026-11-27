@@ -1290,7 +1290,8 @@ export function formatSourcesSummary(sources: Pick<SourceHealth, 'platform' | 's
 const META_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 const META_PLACEHOLDER_RE = /^[\s\-–—·•\u2026]+$/;
 const STEP_ENUMERATOR_RE = /^\s*(?:(?:step|#)\s*)?\d{1,3}\s*[.):\-–—]\s*|^\s*step\s+\d{1,3}\s*[\-–—:]\s*/i;
-const ISO_DEADLINE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+const ISO_DEADLINE_RE =
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|([+-])(\d{2}):?(\d{2}))?)?$/;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
@@ -1386,25 +1387,36 @@ export function describeDeadline(raw: string | null | undefined, now = Date.now(
   const match = text.match(ISO_DEADLINE_RE);
   if (!match) return { text, state: 'unknown', countdown: null };
 
-  const [year, month, day, hour, minute, second] = match
-    .slice(1)
-    .map(part => (part === undefined ? Number.NaN : Number(part)));
-  const dateOnly = Number.isNaN(hour);
-  const deadline = new Date(
-    Date.UTC(
-      year,
-      month - 1,
-      day,
-      dateOnly ? 23 : hour,
-      dateOnly ? 59 : minute,
-      dateOnly ? 59 : second,
-      dateOnly ? 999 : 0,
-    ),
-  );
-  // Reject rolled-over calendar dates such as 2026-02-30.
-  if (deadline.getUTCFullYear() !== year || deadline.getUTCMonth() !== month - 1 || deadline.getUTCDate() !== day) {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const dateOnly = match[4] === undefined;
+  const hour = dateOnly ? 23 : Number(match[4]);
+  const minute = dateOnly ? 59 : Number(match[5]);
+  const second = dateOnly ? 59 : match[6] === undefined ? 0 : Number(match[6]);
+  const ms = dateOnly ? 999 : 0;
+
+  if (!dateOnly && (hour > 23 || minute > 59 || second > 59)) {
     return { text, state: 'unknown', countdown: null };
   }
+
+  const baseMs = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const check = new Date(baseMs);
+  // Reject rolled-over calendar dates such as 2026-02-30.
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) {
+    return { text, state: 'unknown', countdown: null };
+  }
+
+  let offsetMs = 0;
+  if (!dateOnly && match[8]) {
+    const offHour = Number(match[9]);
+    const offMin = Number(match[10]);
+    if (offHour > 23 || offMin > 59) return { text, state: 'unknown', countdown: null };
+    const sign = match[8] === '+' ? 1 : -1;
+    // Offset is local minus UTC, so subtract it to recover the UTC instant.
+    offsetMs = sign * (offHour * 60 + offMin) * 60_000;
+  }
+  const deadlineMs = baseMs - offsetMs;
 
   const label = `${match[1]}-${match[2]}-${match[3]}`;
   if (dateOnly) {
@@ -1416,7 +1428,7 @@ export function describeDeadline(raw: string | null | undefined, now = Date.now(
     return { text: label, state: 'upcoming', countdown: `in ~${Math.round(days / 30)} mo` };
   }
 
-  const hours = (deadline.getTime() - now) / HOUR_MS;
+  const hours = (deadlineMs - now) / HOUR_MS;
   if (hours < 0) {
     const late = Math.ceil(-hours);
     return { text: label, state: 'past', countdown: late < 24 ? `${late}h ago` : `${Math.ceil(late / 24)}d ago` };
@@ -1444,6 +1456,23 @@ export function cleanFeedSteps(steps: readonly string[] | null | undefined, max 
     out.push(cleaned);
   }
   return out;
+}
+
+function normalizeStepKey(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Keeps summary bullets that do not repeat one of the structured task steps. */
+export function filterUncoveredSummaryBullets(
+  bullets: readonly string[],
+  steps: readonly string[],
+): string[] {
+  if (steps.length === 0) return [...bullets];
+  const covered = new Set(cleanFeedSteps(steps).map(normalizeStepKey).filter(Boolean));
+  return bullets.filter(bullet => {
+    const key = normalizeStepKey(bullet);
+    return !key || !covered.has(key);
+  });
 }
 
 export interface FeedTimelineEntry {

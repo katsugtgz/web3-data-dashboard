@@ -234,6 +234,34 @@ describe('D1 adapter', () => {
     db.close();
   });
 
+  test('batch() and run() preserve rows returned by SELECT and INSERT ... RETURNING', async () => {
+    const db = freshDb();
+    const batch = await db.d1.batch([
+      db.d1.prepare('INSERT INTO items (name, n) VALUES (?1, ?2) RETURNING id, name, n').bind('alpha', 10),
+      db.d1.prepare('SELECT id, name, n FROM items WHERE name = ?1').bind('alpha'),
+      db.d1.prepare('SELECT 1 AS n'),
+    ]);
+    expect(batch[0]).toMatchObject({
+      success: true,
+      results: [{ id: 1, name: 'alpha', n: 10 }],
+      meta: { changes: 1, last_row_id: 1 },
+    });
+    expect(batch[1]).toMatchObject({
+      success: true,
+      results: [{ id: 1, name: 'alpha', n: 10 }],
+      meta: { changes: 0 },
+    });
+    expect(batch[2]).toMatchObject({
+      success: true,
+      results: [{ n: 1 }],
+      meta: { changes: 0 },
+    });
+
+    const direct = await db.d1.prepare('SELECT 2 AS n').run();
+    expect(direct).toMatchObject({ success: true, results: [{ n: 2 }], meta: { changes: 0 } });
+    db.close();
+  });
+
   test('concurrent batches never lose an update or interleave with each other', async () => {
     const db = freshDb();
     await db.d1.prepare('INSERT INTO items (name, n) VALUES (?1, 0)').bind('counter').run();

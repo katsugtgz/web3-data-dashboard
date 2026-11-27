@@ -177,6 +177,20 @@ describe('DropsDetailDialog', () => {
     expect(html).toContain('Download .md');
   });
 
+  test('renders formatted item.summary even when OG metadata and structured steps are absent', () => {
+    const html = renderDropDialog({
+      ...PLAIN_ITEM,
+      summary: 'Season 2 opens Friday · US residents excluded · Snapshot at block 999',
+    });
+
+    expect(html).toContain('dlg-summary');
+    expect(html).toContain('Season 2 opens Friday');
+    expect(html).toContain('US residents excluded');
+    expect(html).toContain('Snapshot at block 999');
+    expect(html).not.toContain('og-card');
+    expect(html.indexOf('dlg-summary')).toBeLessThan(html.indexOf('Offer details'));
+  });
+
   test('replaces the brief actions with the guardrail notice for a RISK drop and hides unmatched radar links', () => {
     const html = renderDropDialog({ ...RICH_ITEM, risk: { level: 'risk', reasons: ['Drainer phrasing'] }, radarId: 'nope' });
 
@@ -208,6 +222,20 @@ describe('FeedCard', () => {
     // Structured steps replace the bullets picked out of the summary text.
     expect(html).not.toContain('feed-bullets');
     expect(html).toContain('aria-label="Details for Acme"');
+  });
+
+  test('keeps uncovered summary bullets alongside structured steps without duplicating covered steps', () => {
+    const html = renderCard({
+      ...RICH_ITEM,
+      summary: 'Season 2 live · US residents excluded · Connect wallet',
+      steps: ['Connect wallet', 'Bridge funds'],
+    });
+
+    expect(html).toContain('feed-steps');
+    expect(html).toContain('feed-bullets');
+    expect(html).toContain('US residents excluded');
+    // "Connect wallet" appears only once (in structured steps), not duplicated in summary bullets.
+    expect(html.match(/Connect wallet/g)).toHaveLength(1);
   });
 
   test('keeps the plain layout for a drop without the new fields', () => {

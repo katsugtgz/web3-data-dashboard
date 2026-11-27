@@ -57,6 +57,13 @@ export interface BarSegment {
   tone: string;
 }
 
+/** Formats a screen-reader label for a distribution bar, e.g. "Projects by tier: S 2, A 8". */
+export function formatMiniBarsLabel(prefix: string, segments: readonly BarSegment[]): string {
+  const visible = segments.filter(segment => segment.value > 0);
+  if (visible.length === 0) return prefix;
+  return `${prefix}: ${visible.map(segment => `${segment.label} ${segment.value}`).join(', ')}`;
+}
+
 const SOURCE_TONES = ['accent', 'info', 'success', 'warning'] as const;
 const MAX_NAMED_SOURCES = SOURCE_TONES.length;
 

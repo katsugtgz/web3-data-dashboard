@@ -8,6 +8,7 @@ import {
   describeDeadline,
   dedupeFeedSources,
   dedupeStrings,
+  filterUncoveredSummaryBullets,
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
@@ -1049,9 +1050,47 @@ describe('describeDeadline', () => {
     expect(describeDeadline('2027-03-01', now)).toEqual({ text: '2027-03-01', state: 'upcoming', countdown: 'in ~3 mo' });
   });
 
+  test('applies ISO timezone offsets and handles omitted seconds without rejecting valid timestamps', () => {
+    // 2026-11-27T14:00:00+03:00 === 2026-11-27T11:00:00Z, which is 1h before now (12:00:00Z).
+    expect(describeDeadline('2026-11-27T14:00:00+03:00', now)).toEqual({
+      text: '2026-11-27',
+      state: 'past',
+      countdown: '1h ago',
+    });
+    // Negative offset: 2026-11-27T10:00-05:00 === 2026-11-27T15:00:00Z (3h after now).
+    expect(describeDeadline('2026-11-27T10:00-05:00', now)).toEqual({
+      text: '2026-11-27',
+      state: 'soon',
+      countdown: 'in 3h',
+    });
+    // Omitted seconds in UTC.
+    expect(describeDeadline('2026-11-28T09:00Z', now)).toEqual({
+      text: '2026-11-28',
+      state: 'soon',
+      countdown: 'in 21h',
+    });
+    // Invalid calendar date stays unknown instead of rolling over.
+    expect(describeDeadline('2026-02-30T12:00:00Z', now)).toEqual({
+      text: '2026-02-30T12:00:00Z',
+      state: 'unknown',
+      countdown: null,
+    });
+  });
+
   test('passes free text through without guessing', () => {
     expect(describeDeadline('TBA', now)).toEqual({ text: 'TBA', state: 'unknown', countdown: null });
     expect(describeDeadline('End of Q4', now)).toEqual({ text: 'End of Q4', state: 'unknown', countdown: null });
+  });
+});
+
+describe('filterUncoveredSummaryBullets', () => {
+  test('drops bullets already covered by structured steps while keeping distinct notes', () => {
+    expect(
+      filterUncoveredSummaryBullets(
+        ['Connect wallet', 'US residents excluded', 'Follow @acme'],
+        ['1. Connect wallet', 'Follow @acme', 'Bridge funds'],
+      ),
+    ).toEqual(['US residents excluded']);
   });
 });
 

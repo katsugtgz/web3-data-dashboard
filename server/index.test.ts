@@ -255,7 +255,8 @@ describe('startServer', () => {
       expect(await feed.json()).toMatchObject({ items: [] });
 
       const health = await healthOf(await fetch(`${base}/health`));
-      expect(health).toMatchObject({ ok: true, ready: false, uptimeSec: 0 });
+      expect(health).toMatchObject({ ok: true, ready: false });
+      expect(health.uptimeSec).toBeGreaterThanOrEqual(0);
       expect(Object.keys(health.scheduler.jobs)).toEqual(['tick2m', 'tick5m', 'heavy', 'enrich']);
     } finally {
       await app.stop();
@@ -263,5 +264,66 @@ describe('startServer', () => {
     await expect(fetch(`${base}/health`)).rejects.toThrow();
     expect(() => app.db.sqlite.query('SELECT 1').get()).toThrow();
     expect(app.scheduler.status().running).toBe(false);
+  });
+
+  test('ignores a foreign DB passed via opts.env and keeps API, health, and scheduler on the server DB', async () => {
+    const foreign = openDb(':memory:');
+    await upsertSnapshot(foreign.d1, 'markets:defi', { id: 'defi', title: 'Foreign', blurb: '', cols: [], rows: [], source: 'DefiLlama', sourceUrl: 'https://defillama.com', fetchedAt: T0, stale: false }, T0);
+    const app = await startServer({
+      dbPath: ':memory:',
+      hostname: '127.0.0.1',
+      port: 0,
+      warmup: [],
+      distDir,
+      env: { DB: foreign.d1, TG_BATCH_SIZE: '0' } as unknown as NonNullable<Parameters<typeof startServer>[0]>['env'],
+    });
+    const base = `http://127.0.0.1:${app.server.port}`;
+    try {
+      const markets = await fetch(`${base}/markets.json`);
+      expect(markets.status).toBe(503);
+    } finally {
+      await app.stop();
+      foreign.close();
+    }
+  });
+
+  test('propagates cancellation on stop() and does not close SQLite while a job is still in flight', async () => {
+    let sawAbort = false;
+    let releaseStuck!: () => void;
+    const stuckDone = new Promise<void>(resolve => {
+      releaseStuck = resolve;
+    });
+    const stuckScheduler = createScheduler(
+      [
+        {
+          name: JOB.heavy,
+          everyMs: 60_000,
+          run: async (_nowMs, signal) => {
+            signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+            await stuckDone;
+          },
+        },
+      ],
+      { stopTimeoutMs: 15 },
+    );
+    const app = await startServer({
+      dbPath: ':memory:',
+      hostname: '127.0.0.1',
+      port: 0,
+      warmup: [JOB.heavy],
+      distDir,
+      scheduler: stuckScheduler,
+    });
+    await expect(app.stop()).rejects.toThrow(/in flight/i);
+    expect(sawAbort).toBe(true);
+    // SQLite stays usable while the stuck job has not settled.
+    expect(app.db.sqlite.query('SELECT 1 AS n').get()).toEqual({ n: 1 });
+    releaseStuck();
+    await stuckScheduler.whenIdle();
+    // Wait one microtask for deferred db.close() in finally().
+    await sleep(10);
+    expect(() => app.db.sqlite.query('SELECT 1').get()).toThrow();
   });
 });

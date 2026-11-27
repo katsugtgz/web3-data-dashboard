@@ -521,8 +521,6 @@
     --color-surface-sheen: light-dark(var(--color-surface-sheen-light), var(--color-surface-sheen-dark));
     --color-border-accent: light-dark(var(--color-border-accent-light), var(--color-border-accent-dark));
     --color-segment-neutral: light-dark(var(--color-segment-neutral-light), var(--color-segment-neutral-dark));
-    --shadow-card: light-dark(var(--shadow-card-light), var(--shadow-card-dark));
-    --shadow-card-hover: light-dark(var(--shadow-card-hover-light), var(--shadow-card-hover-dark));
   }
 }
 

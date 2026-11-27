@@ -15,7 +15,7 @@ import {
   GALXE_GRAPHQL_URL,
   MERKL_OPPORTUNITIES_URL,
   PENDLE_POINTS_URL,
-  fetchAirdropAlertAirdrops,
+  fetchAirdropAlertAirdropsParts,
   fetchGalxeCampaignsToAirdropFeed,
   fetchMerklOpportunities,
   fetchPendlePoints,
@@ -226,7 +226,6 @@ const STRUCTURED_CARD_FIELDS = [
   'rewardPool',
   'description',
   'ogImage',
-  'verifiedDomain',
 ] as const;
 
 function fillMissingFrom<K extends keyof Card>(target: Card, source: Card, key: K): void {
@@ -303,6 +302,14 @@ function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
   // and never from editable public sheets.
   if (!secondaryIsUntrustedSheet) {
     for (const field of STRUCTURED_CARD_FIELDS) fillMissingFrom(merged, secondary, field);
+    // Keep domain verification attached to the URL it actually verified.
+    if (merged.verifiedDomain == null && secondary.verifiedDomain != null && merged.url && secondary.url) {
+      const mergedDom = getRegistrableDomain(merged.url)?.toLowerCase();
+      const secDom = getRegistrableDomain(secondary.url)?.toLowerCase();
+      if (mergedDom && mergedDom === secDom) {
+        merged.verifiedDomain = secondary.verifiedDomain;
+      }
+    }
   }
 
   const badgeSet = new Set(merged.b);
@@ -363,17 +370,21 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
   const mergedCards: Card[] = [];
   const byDomain = new Map<string, number>();
   const byName = new Map<string, number>();
+  const byGalxeId = new Map<string, number>();
 
   for (const feed of feeds) {
     for (const card of feed.cards) {
       const dom = canonicalProjectDomain(card);
       const nameKey = normalizeProjectKey(card.n);
+      const galxeId = card.id?.startsWith('galxe:') ? card.id : undefined;
 
       let matchIdx: number | undefined;
       if (dom && byDomain.has(dom)) {
         matchIdx = byDomain.get(dom);
       } else if (nameKey.length >= 3 && byName.has(nameKey)) {
         matchIdx = byName.get(nameKey);
+      } else if (galxeId && byGalxeId.has(galxeId)) {
+        matchIdx = byGalxeId.get(galxeId);
       }
 
       if (matchIdx !== undefined) {
@@ -383,6 +394,7 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
           if (!byDomain.has(mergedDom)) byDomain.set(mergedDom, matchIdx);
         }
         if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, matchIdx);
+        if (galxeId && !byGalxeId.has(galxeId)) byGalxeId.set(galxeId, matchIdx);
         continue;
       }
 
@@ -393,6 +405,7 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
         if (!byDomain.has(cardDom)) byDomain.set(cardDom, nextIdx);
       }
       if (nameKey.length >= 3) byName.set(nameKey, nextIdx);
+      if (galxeId && !byGalxeId.has(galxeId)) byGalxeId.set(galxeId, nextIdx);
     }
   }
 
@@ -691,6 +704,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
   // enabled flag, ignore its next_poll_at (the drops poll's TTL, which is not phase-locked to
   // curated refreshes and would defer the job forever), and report outcomes without sourceId
   // so cursor and health stay with pollFeedBatch.
+  const airdropAlertState: { partial: { calendarFailed: boolean; eventsFailed: boolean } | null } = { partial: null };
   const jobs: {
     name: string;
     sourceId?: string;
@@ -761,12 +775,17 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
       trailing: true,
       run:
         opts.fetchers?.airdropalert ??
-        (() =>
-          fetchAirdropAlertAirdrops(
+        (async () => {
+          const parts = await fetchAirdropAlertAirdropsParts(
             resolveCuratedSourceUrl(opts.airdropAlertUrl, 'feed:airdropalert_calendar', AIRDROPALERT_CALENDAR_URL, reg),
             nowMs,
             opts.airdropAlertEventsUrl,
-          )),
+          );
+          if (parts.calendarFailed || parts.eventsFailed) {
+            airdropAlertState.partial = { calendarFailed: parts.calendarFailed, eventsFailed: parts.eventsFailed };
+          }
+          return parts.feed;
+        }),
     },
     {
       // High-signal verified trending campaigns.
@@ -854,13 +873,28 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     const res = settledByJobIdx.get(i)!;
     if (res.status === 'fulfilled') {
       liveFulfilledCount++;
-      target.push(res.value);
+      let feedVal = res.value;
+      if (job.name === 'AirdropAlert' && airdropAlertState.partial) {
+        const partial = airdropAlertState.partial;
+        const prior = slicePrevFeedForSource(opts.prevFeed, job.name, excludedTaskSources);
+        if (prior) {
+          const cards = partial.eventsFailed ? prior.cards : feedVal.cards;
+          const tge = partial.calendarFailed ? prior.tge : feedVal.tge;
+          feedVal = {
+            ...feedVal,
+            cards,
+            tge,
+            counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
+          };
+        }
+      }
+      target.push(feedVal);
       outcomes.push({
         sourceId: outcomeSourceId,
         name: job.name,
         ok: true,
-        cards: res.value.cards.length,
-        tge: res.value.tge.length,
+        cards: feedVal.cards.length,
+        tge: feedVal.tge.length,
       });
     } else {
       outcomes.push({
@@ -892,7 +926,8 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     await opts.onOutcomes(outcomes);
   }
 
-  if (liveFulfilledCount === 0 && !(liveIndices.length === 0 && deferredCount > 0)) {
+  const nonSharedLiveCount = liveIndices.filter(idx => !jobs[idx].sharedSourceRow).length;
+  if (liveFulfilledCount === 0 && !(nonSharedLiveCount === 0 && deferredCount > 0)) {
     throw new Error('All curated airdrop sources failed');
   }
 

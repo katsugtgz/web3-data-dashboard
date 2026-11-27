@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { FIT, TYPE_MAP } from '../shared/constants';
 import type { Card, FeedItem, Tge } from '../shared/types';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
@@ -13,7 +13,7 @@ import { useAirdropFilters } from './hooks/useAirdropFilters';
 import { useCopyBriefController } from './hooks/useCopyBriefController';
 import { useDashboardDerived } from './hooks/useDashboardDerived';
 import { getTabGroupMeta, useDashboardTabs } from './hooks/useDashboardTabs';
-import { useDetailSelection } from './hooks/useDetailSelection';
+import { useDetailSelection, useDropsDetailSelection } from './hooks/useDetailSelection';
 import { useDropsFilters } from './hooks/useDropsFilters';
 import { useFeed } from './hooks/useFeed';
 import { useMarkets } from './hooks/useMarkets';
@@ -30,23 +30,21 @@ const DropsDetailDialog = lazy(() =>
 const EMPTY_CARDS: Card[] = [];
 const EMPTY_TGE: Tge[] = [];
 
-/** The selected drop, looked up in the live feed. Null when nothing is selected or the drop left the feed. */
-function resolveDropsDetail(items: readonly FeedItem[], id: string | null): FeedItem | null {
-  if (id === null) return null;
-  return items.find(item => item.id === id) ?? null;
-}
-
 export default function App() {
   const reconcileCardsRef = useRef<((nextCards: readonly Card[]) => void) | null>(null);
   const handleAirdropCardsChange = useCallback((nextCards: readonly Card[]) => {
     reconcileCardsRef.current?.(nextCards);
   }, []);
 
-  const drops = useFeed();
+  const reconcileDropsRef = useRef<((nextItems: readonly FeedItem[]) => void) | null>(null);
+  const handleFeedItemsChange = useCallback((nextItems: readonly FeedItem[]) => {
+    reconcileDropsRef.current?.(nextItems);
+  }, []);
+
+  const drops = useFeed(handleFeedItemsChange);
   const airdrops = useAirdropFeed(handleAirdropCardsChange);
   const cards = airdrops.feed?.cards ?? EMPTY_CARDS;
   const radarIndex = useMemo(() => indexRadarCards(cards), [cards]);
-  const [dropsDetailId, setDropsDetailId] = useState<string | null>(null);
   const {
     markets,
     loading: marketsLoading,
@@ -76,19 +74,17 @@ export default function App() {
   });
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
 
-  // Resolved against the live feed on every render: a refresh updates the open drawer, a removal closes it.
-  const dropsDetail = resolveDropsDetail(drops.items, dropsDetailId);
-  const handleSelectDropsDetail = useCallback(
-    (item: FeedItem) => {
-      clearCopyStatus();
-      setDropsDetailId(item.id);
-    },
-    [clearCopyStatus],
-  );
-  const handleCloseDropsDetail = useCallback(() => {
-    clearCopyStatus();
-    setDropsDetailId(null);
-  }, [clearCopyStatus]);
+  // Resolved against the live feed on every render: a refresh updates the open drawer, and removal clears the ID.
+  const {
+    detail: dropsDetail,
+    handleSelectDetail: handleSelectDropsDetail,
+    handleCloseDetail: handleCloseDropsDetail,
+    reconcileItems: reconcileDropsItems,
+  } = useDropsDetailSelection(drops.items, clearCopyStatus);
+
+  useEffect(() => {
+    reconcileDropsRef.current = reconcileDropsItems;
+  }, [reconcileDropsItems]);
 
   const tgeItems = airdrops.feed?.tge ?? EMPTY_TGE;
   const projectLogoIndex = useMemo(
@@ -148,11 +144,11 @@ export default function App() {
   /** Radar cross-link: leave the drawer, switch to the Airdrops tab, and open the matched curated card. */
   const handleOpenRadar = useCallback(
     (card: Card) => {
-      setDropsDetailId(null);
+      handleCloseDropsDetail();
       handleSelectTab('airdrops');
       handleSelectDetail(card);
     },
-    [handleSelectTab, handleSelectDetail],
+    [handleCloseDropsDetail, handleSelectTab, handleSelectDetail],
   );
 
   const {

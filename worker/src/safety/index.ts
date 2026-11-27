@@ -350,9 +350,7 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
 export interface ReconcileSafetyInput {
   level: RiskLevel;
   reasons: string[];
-  domain?: string;
   cleanedLinks: string[];
-  knownDomains: ReadonlySet<string>;
 }
 
 /** Lowercase prefix of the retired unverified-registry warning still stored on legacy D1 rows. */
@@ -363,13 +361,12 @@ export function isUnverifiedRegistryReason(reason: string): boolean {
 }
 
 /**
- * Reconciles stored cluster safety reasons against the live `known_domains`
- * registry and cleaned links (handles legacy D1 rows where bare-domain
- * `http://` twins were stored previously). The retired unverified-registry
- * warning is always stripped and the level drops to `'ok'` when no real warn
- * reason remains. Never downgrades `'risk'` to `'warn'` or `'ok'`, and
- * preserves URL shortener warnings even when shorteners are not shown in
- * `cleanedLinks`.
+ * Reconciles stored cluster safety reasons against `cleanedLinks` (handles
+ * legacy D1 rows where bare-domain `http://` twins were stored previously) and
+ * strips the retired unverified-registry warning, dropping `'warn'` to `'ok'`
+ * when no real warn reason remains. Never downgrades `'risk'` to `'warn'` or
+ * `'ok'`, and preserves URL shortener warnings even when shorteners are not
+ * shown in `cleanedLinks`.
  */
 export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResult {
   const httpsKeys = new Set<string>();

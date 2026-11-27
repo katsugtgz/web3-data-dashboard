@@ -6,6 +6,7 @@ import { CompactProjectsTable } from './CompactProjectRow';
 import { DomainPill } from './DomainPill';
 import { FeedStepsPreview } from './FeedStepsPreview';
 import { KpiSparkline, MiniBars } from './KpiSparkline';
+import { KpiStrip } from './KpiStrip';
 import { MetaPills } from './MetaPills';
 import { OgPreview } from './OgPreview';
 import { RiskBadge } from './RiskBadge';
@@ -230,6 +231,72 @@ describe('KPI micro-charts', () => {
         />,
       ),
     ).toBe('');
+  });
+
+  test('KpiStrip exposes KPI status, activity, and distribution segment counts via aria-describedby', () => {
+    const html = render(
+      <KpiStrip
+        counts={{ total: 10, pre: 4, sTier: 2, savedMatch: 1 }}
+        mix={{
+          updated: [Date.now()],
+          tiers: [
+            { id: 's', label: 'S', value: 2, tone: 's' },
+            { id: 'a', label: 'A', value: 8, tone: 'a' },
+            { id: 'b', label: 'B', value: 0, tone: 'b' },
+          ],
+          sources: [
+            { id: 'galxe', label: 'Galxe', value: 6, tone: 'src-1' },
+            { id: 'merkl', label: 'Merkl', value: 4, tone: 'src-2' },
+          ],
+        }}
+        tgeCount={3}
+        isLive={false}
+        failed={true}
+        status="all"
+        grade="All"
+        onSelectAll={noop}
+        onTogglePre={noop}
+        onToggleSTier={noop}
+        onJumpTge={noop}
+        onToggleSaved={noop}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Projects by tier: S 2, A 8"');
+    expect(html).toContain('aria-label="Projects by source: Galxe 6, Merkl 4"');
+    expect(html).toContain('Last available data');
+
+    // Every aria-describedby token on the buttons must match an existing id in the rendered markup.
+    const describedByMatches = [...html.matchAll(/aria-describedby="([^"]+)"/g)];
+    expect(describedByMatches).toHaveLength(2);
+    for (const [, refs] of describedByMatches) {
+      for (const id of refs.split(/\s+/)) {
+        expect(html).toContain(`id="${id}"`);
+      }
+    }
+
+    // When distributions are empty, aria-describedby omits the unrendered MiniBars ids.
+    const emptyHtml = render(
+      <KpiStrip
+        counts={{ total: 0, pre: 0, sTier: 0, savedMatch: 0 }}
+        mix={{ updated: [], tiers: [], sources: [] }}
+        tgeCount={0}
+        isLive={true}
+        failed={false}
+        status="all"
+        grade="All"
+        onSelectAll={noop}
+        onTogglePre={noop}
+        onToggleSTier={noop}
+        onJumpTge={noop}
+        onToggleSaved={noop}
+      />,
+    );
+    for (const [, refs] of emptyHtml.matchAll(/aria-describedby="([^"]+)"/g)) {
+      for (const id of refs.split(/\s+/)) {
+        expect(emptyHtml).toContain(`id="${id}"`);
+      }
+    }
   });
 });
 

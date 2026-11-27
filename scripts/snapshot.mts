@@ -550,9 +550,7 @@ export function finalizeSnapshotCluster(
   const safety = reconcileSafetyReasons({
     level: rawSafety.level,
     reasons: rawSafety.reasons,
-    domain: acc.domain,
     cleanedLinks,
-    knownDomains: ctx.allKnownDomains,
   });
   const taskTypes = acc.taskTypes.size > 1
     ? [...acc.taskTypes].sort((a, b) => a.localeCompare(b)).filter(t => t !== 'other')

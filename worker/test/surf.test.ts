@@ -290,8 +290,10 @@ describe('surf normalizer + i18n', () => {
   test('a hanging Surf upstream costs at most timeoutMs in total, not timeoutMs per attempt', async () => {
     const prevFetch = globalThis.fetch;
     let attempts = 0;
+    const abortedAtStart: boolean[] = [];
     globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
       attempts++;
+      abortedAtStart.push(Boolean(init?.signal?.aborted));
       return new Promise<Response>((_resolve, reject) => {
         // Real fetch rejects immediately when handed an already-aborted signal.
         if (init?.signal?.aborted) {
@@ -308,8 +310,9 @@ describe('surf normalizer + i18n', () => {
       const elapsed = Date.now() - started;
       expect(elapsed).toBeGreaterThanOrEqual(30);
       expect(elapsed).toBeLessThan(1_000);
-      // The retry still runs, but against the same expired deadline.
+      // The retry still runs, but starts with the already-expired deadline signal.
       expect(attempts).toBe(2);
+      expect(abortedAtStart).toEqual([false, true]);
     } finally {
       globalThis.fetch = prevFetch;
     }

@@ -615,6 +615,7 @@ describe('Drop relevance classifier — real production live & snapshot regressi
       { text: 'kapan klaim airdropnya?', taskTypes: ['other'] },
       { text: 'ada yg punya link testnet nya?', taskTypes: ['other'] },
       { text: 'Is the testnet live yet?', taskTypes: ['other'] },
+      { text: 'Anyone know when Nova testnet goes live?', taskTypes: ['testnet'] },
       { text: 'testnet kapan launch bro?', taskTypes: ['other'] },
     ];
     for (const stub of stubs) {
@@ -636,6 +637,8 @@ describe('Drop relevance classifier — real production live & snapshot regressi
       'Update garapan baru nih, langsung klaim poin harian',
       'Kaito leaderboard rewards are live for top contributors',
       'Nova testnet is live. Claim your rewards.',
+      'Nova testnet goes live Friday',
+      'For the airdrop, join our Discord and submit proof.',
       'GenLayer Tokenomics is Live! Genesis Supply: 4.2B GEN Allocation details announced',
     ]) {
       expect(parseDropPost(text).isRelevantDrop).toBe(true);
@@ -770,6 +773,10 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
     expect(cleanSummaryText('Nova quest • Join our Telegram channel • Done')).toBe(
       'Nova quest · Join our Telegram channel · Done',
     );
+    // Promo removal stops at the next bullet so following task steps survive.
+    expect(cleanSummaryText('Nova quest is live. Subscribe to our channel • Submit proof.')).toBe(
+      'Nova quest is live. · Submit proof.',
+    );
 
     // Noisy leading emoji prefixes are dropped; emoji inside the text are untouched.
     expect(cleanSummaryText('\u{1F680} Nova testnet is live')).toBe('Nova testnet is live');
@@ -836,11 +843,15 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
     expect(pool('Testnet rewards worth 50,000 USDC')).toBe('50,000 USDC');
     expect(pool('$500K prize pool for the trading competition')).toBe('$500K');
     expect(pool('Nova raised $12M. Testnet is live')).toBeUndefined();
+    expect(pool('Airdrop is live. Raised $12M.')).toBeUndefined();
+    expect(pool('Reward pool: $500K')).toBe('$500K');
     expect(pool('Nova token trades at $1.20. Testnet is live')).toBeUndefined();
 
     // Deadline: absolute dates and durations as written, relative ones with their keyword.
     const deadline = (text: string) => extractRichMetadata(text).deadline;
     expect(deadline('Testnet campaign ends May 30')).toBe('May 30');
+    expect(deadline('Rewards announced by May 30. Quest ends June 5.')).toBe('June 5');
+    expect(deadline('Register by May 30')).toBe('May 30');
     expect(deadline('Quest ends 2026-06-01. Claim rewards')).toBe('2026-06-01');
     expect(deadline('Testnet live, ends in 48h')).toBe('48h');
     expect(deadline('Points program ends Friday')).toBe('Ends Friday');
@@ -850,6 +861,8 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
     const cost = (text: string) => extractRichMetadata(text).cost;
     expect(cost('Mint is live and free to join')).toBe('Free');
     expect(cost('Cost: $0. Quest live')).toBe('$0');
+    expect(cost('Cost: $0.5 ETH')).toBe('$0.5 ETH');
+    expect(cost('Cost: $0.5 ETH. Quest live')).toBe('$0.5 ETH');
     expect(cost('Free mint, gas only')).toBe('Gas only');
     expect(cost('Stake $100+ to earn points')).toBe('Stake $100+');
     expect(cost('Deposit 0.5 ETH to join the testnet')).toBe('Deposit 0.5 ETH');
@@ -1014,9 +1027,7 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     const reconciled = reconcileSafetyReasons({
       level: 'warn',
       reasons: ['URL shortener used: t.co', 'Domain not in verified registry: jrny.club'],
-      domain: 'jrny.club',
       cleanedLinks: ['https://jrny.club/token-hub/claim'],
-      knownDomains: new Set(['jrny.club']),
     });
     expect(reconciled.level).toBe('warn');
     expect(reconciled.reasons).toEqual(['URL shortener used: t.co']);
@@ -1030,7 +1041,6 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
         'Insecure transport (plain http): http://still-shown.xyz/claim',
       ],
       cleanedLinks: ['http://still-shown.xyz/claim'],
-      knownDomains: new Set(),
     });
     expect(droppedStaleHttp.level).toBe('warn');
     expect(droppedStaleHttp.reasons).toEqual(['Insecure transport (plain http): http://still-shown.xyz/claim']);
@@ -1252,28 +1262,20 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
   });
 
   test('reconcileSafetyReasons strips the retired registry warning from legacy warn rows and downgrades to ok', () => {
-    const legacy = (knownDomains: Set<string>) =>
+    expect(
       reconcileSafetyReasons({
         level: 'warn',
         reasons: ['Domain not in verified registry: magicblock.app'],
-        domain: 'magicblock.app',
         cleanedLinks: ['https://magicblock.app/quests'],
-        knownDomains,
-      });
-
-    // Domain still unknown: no real warn reason remains, so the row is served as ok.
-    expect(legacy(new Set())).toEqual({ level: 'ok', reasons: [] });
-    // Domain seeded later: same outcome.
-    expect(legacy(new Set(['magicblock.app']))).toEqual({ level: 'ok', reasons: [] });
+      }),
+    ).toEqual({ level: 'ok', reasons: [] });
 
     // A real warn reason next to the retired one survives at warn.
     expect(
       reconcileSafetyReasons({
         level: 'warn',
         reasons: ['Domain not in verified registry: magicblock.app', 'URL shortener used: t.co'],
-        domain: 'magicblock.app',
         cleanedLinks: ['https://magicblock.app/quests'],
-        knownDomains: new Set(),
       }),
     ).toEqual({ level: 'warn', reasons: ['URL shortener used: t.co'] });
 
@@ -1282,9 +1284,7 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
       reconcileSafetyReasons({
         level: 'risk',
         reasons: ['Domain not in verified registry: magicblock.app', 'Raw IP link: 45.33.12.9'],
-        domain: 'magicblock.app',
         cleanedLinks: [],
-        knownDomains: new Set(),
       }),
     ).toEqual({ level: 'risk', reasons: ['Raw IP link: 45.33.12.9'] });
   });
@@ -1874,6 +1874,154 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     expect(viaDefi.tvlUsd).toBe(42_000_000);
     expect(viaDefi.logo).toBe('https://icons.llama.fi/buzzchain.png');
     expect(viaDefi.radarId).toBeUndefined();
+
+    // Radar card with funding but no TVL keeps its id & funding while inheriting exact-domain TVL from DefiLlama.
+    const combinedIndex = buildFeedLogoIndex(
+      {
+        cards: [radarCard('surf-buzz', 'Buzzchain', 'https://buzzchain.io/', '$8M', undefined)],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: now,
+      },
+      {
+        id: 'defi',
+        title: 'DeFi TVL',
+        blurb: '',
+        cols: ['Protocol', 'Category', 'Chains', 'TVL', '1d', '7d'],
+        rows: [
+          {
+            cells: ['Buzzchain', 'Dex', 'Ethereum', '$42.0M', '+1%', '+2%'],
+            sortValues: ['Buzzchain', 'Dex', 'Ethereum', 42_000_000, 0.01, 0.02],
+            href: 'https://buzzchain.io/',
+            icon: 'https://icons.llama.fi/buzzchain.png',
+          },
+        ],
+        source: 'DefiLlama',
+        sourceUrl: 'https://defillama.com',
+        fetchedAt: now,
+        stale: false,
+      },
+    );
+    await db.prepare(`DELETE FROM domain_meta WHERE domain = 'buzzchain.io'`).run();
+    const viaCombined = (await queryFeed(db, new Set(), { logoIndex: combinedIndex, risk: 'include' })).items.find(i => i.id === 'unverified')!;
+    expect(viaCombined.radarId).toBe('surf-buzz');
+    expect(viaCombined.funding).toBe('$8M');
+    expect(viaCombined.tvlUsd).toBe(42_000_000);
+
+    // Order deadline updates by post time rather than ingest order: replaying an older post must not overwrite a newer deadline.
+    const deadlineDb = createTestD1().db;
+    await deadlineDb
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const knownDl = new Map([['extproto.xyz', 'ExtProto']]);
+    const newerRes = await ingestPostIntoCluster(
+      deadlineDb,
+      {
+        postId: 'telegram:ch1:dl_new',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/dl_new',
+        postedAt: now - 10_000,
+        text: 'ExtProto quest extended, ends June 5 https://extproto.xyz/quest',
+      },
+      { knownDomains: knownDl },
+      { byDomain: new Map(), byTicker: new Map() },
+      knownDl,
+      new Set(),
+      now,
+    );
+    // Older post replayed later must not roll deadline back to May 30.
+    await ingestPostIntoCluster(
+      deadlineDb,
+      {
+        postId: 'telegram:ch1:dl_old',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/dl_old',
+        postedAt: now - 100_000,
+        text: 'ExtProto quest ends May 30 https://extproto.xyz/quest',
+      },
+      { knownDomains: knownDl },
+      { byDomain: new Map(), byTicker: new Map() },
+      knownDl,
+      new Set(),
+      now,
+    );
+    const dlAfterReplay = await deadlineDb
+      .prepare('SELECT deadline FROM clusters WHERE id = ?1')
+      .bind(newerRes.clusterId)
+      .first<{ deadline: string }>();
+    expect(dlAfterReplay?.deadline).toBe('June 5');
+    // A still-newer post can extend the deadline further.
+    await ingestPostIntoCluster(
+      deadlineDb,
+      {
+        postId: 'telegram:ch1:dl_newer',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/dl_newer',
+        postedAt: now - 1_000,
+        text: 'ExtProto quest extended again, ends June 12 https://extproto.xyz/quest',
+      },
+      { knownDomains: knownDl },
+      { byDomain: new Map(), byTicker: new Map() },
+      knownDl,
+      new Set(),
+      now,
+    );
+    const dlAfterExtend = await deadlineDb
+      .prepare('SELECT deadline FROM clusters WHERE id = ?1')
+      .bind(newerRes.clusterId)
+      .first<{ deadline: string }>();
+    expect(dlAfterExtend?.deadline).toBe('June 12');
+
+    // loadDomainMeta chunks 100 distinct domains within D1's 100-bind limit (99 domains + 1 expiry cutoff).
+    const chunkedDb = createTestD1();
+    await chunkedDb.db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const origPrepare = chunkedDb.db.prepare.bind(chunkedDb.db);
+    const boundedDb = {
+      ...chunkedDb.db,
+      prepare(sql: string) {
+        const stmt = origPrepare(sql);
+        return {
+          ...stmt,
+          bind(...args: unknown[]) {
+            if (args.length > 100) throw new Error(`D1_ERROR: too many bind parameters (${args.length})`);
+            return stmt.bind(...args);
+          },
+        };
+      },
+    } as unknown as D1Database;
+    for (let i = 0; i < 100; i++) {
+      const id = `c_dm_${String(i).padStart(3, '0')}`;
+      const dom = `d${i}.example`;
+      await chunkedDb.db
+        .prepare(
+          `INSERT INTO clusters (id, project, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+           VALUES (?1, ?2, ?3, '[]', '["quest"]', 'Quest live', 'rule', 'ok', '[]', ?4, 1, ?5, ?5, 1)`,
+        )
+        .bind(id, `Proj${i}`, dom, 100 - i * 0.01, now)
+        .run();
+      await chunkedDb.db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:ch1', ?2, ?3, 'Quest live', '[]', ?4, ?3)`,
+        )
+        .bind(`p_${id}`, `https://t.me/ch1/${i}`, now, id)
+        .run();
+      await chunkedDb.db
+        .prepare(
+          `INSERT INTO domain_meta (domain, logo_url, og_image, og_title, og_description, tvl_usd, source, fetched_at, expires_at)
+           VALUES (?1, ?2, ?3, 'Title', 'Desc', 1000000, 'html', ?4, ?5)`,
+        )
+        .bind(dom, `https://${dom}/logo.png`, `https://${dom}/og.png`, now, Date.now() + 3_600_000)
+        .run();
+    }
+    const hundredFeed = await queryFeed(boundedDb, new Set(), { limit: 100, risk: 'include' });
+    expect(hundredFeed.items).toHaveLength(100);
+    expect(hundredFeed.items.every(item => Boolean(item.ogImage))).toBe(true);
 
     // A pre-0009 database (no rich columns, no domain_meta table) still serves the feed.
     const legacy = createTestD1(MIGRATION_FILES.slice(0, 8));

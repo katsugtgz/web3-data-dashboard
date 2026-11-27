@@ -1508,5 +1508,151 @@ describe('curated multi-source airdrop aggregator', () => {
         fetchers: { ...ALL_EMPTY_FETCHERS, galxe: liveGalxe },
       }),
     ).rejects.toThrow(/zero cards/);
+
+    // When all non-shared live sources are disabled or deferred, a Galxe failure must not reject usable deferred slices.
+    const deferredWithFailedGalxe = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed: {
+        cards: [makeCard({ r: 1, n: 'DeferredPendle', id: 'pendle:def', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 70 })],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: NOW - 60_000,
+      },
+      disabledSourceIds: new Set(['surf', 'sheet:asso7878_sheet', 'sheet:arndxt_sheet', 'feed:merkl_opportunities', 'feed:airdropalert_calendar']),
+      deferredSourceIds: new Set(['feed:pendle_points']),
+      fetchers: { ...ALL_EMPTY_FETCHERS, galxe: mustNotRun('galxe') },
+    });
+    expect(deferredWithFailedGalxe.feed.cards.map(c => c.n)).toEqual(['DeferredPendle']);
+  });
+
+  test('merge keeps verifiedDomain attached to the verified URL and folds short-name Galxe space cards by stable ID', () => {
+    // Different domains sharing a project name must NOT copy verifiedDomain across URLs.
+    const surfAlpha = makeCard({ n: 'Alpha', id: 'surf-alpha', source: 'Surf', url: 'https://alpha.xyz', sc: 85 });
+    const galxeAlpha = makeCard({ n: 'Alpha', id: 'galxe:55', source: 'Galxe', url: 'https://alpha.org', verifiedDomain: true, sc: 55 });
+    // Same registrable domain retains verification.
+    const surfBeta = makeCard({ n: 'Beta', id: 'surf-beta', source: 'Surf', url: 'https://app.beta.org/farm', sc: 85 });
+    const galxeBeta = makeCard({ n: 'Beta', id: 'galxe:56', source: 'Galxe', url: 'https://beta.org', verifiedDomain: true, sc: 55 });
+    // Missing primary URL adopts secondary URL and its verification.
+    const surfGamma = makeCard({ n: 'Gamma', id: 'surf-gamma', source: 'Surf', url: null, sc: 85 });
+    const galxeGamma = makeCard({ n: 'Gamma', id: 'galxe:57', source: 'Galxe', url: 'https://gamma.org', verifiedDomain: true, sc: 55 });
+    // Short-name homepage-less Galxe space with two campaigns merges into one card by galxe:<spaceId>.
+    const galxeAb1 = makeCard({
+      n: 'AB',
+      id: 'galxe:12',
+      source: 'Galxe',
+      url: 'https://app.galxe.com/quest/AB/GC1',
+      tasks: [{ title: 'Quest 1', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://app.galxe.com/quest/AB/GC1' }],
+      tk: '1/1',
+      sc: 54,
+    });
+    const galxeAb2 = makeCard({
+      n: 'AB',
+      id: 'galxe:12',
+      source: 'Galxe',
+      url: 'https://app.galxe.com/quest/AB/GC2',
+      tasks: [{ title: 'Quest 2', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://app.galxe.com/quest/AB/GC2' }],
+      tk: '1/1',
+      sc: 48,
+    });
+
+    const merged = mergeCuratedAirdropFeeds(
+      [
+        { cards: [surfAlpha, surfBeta, surfGamma], tge: [], counts: { active: 3, preToken: 3 }, fetchedAt: NOW },
+        { cards: [galxeAlpha, galxeBeta, galxeGamma, galxeAb1, galxeAb2], tge: [], counts: { active: 5, preToken: 5 }, fetchedAt: NOW },
+      ],
+      NOW,
+    );
+
+    const alpha = merged.cards.find(c => c.n === 'Alpha')!;
+    expect(alpha.url).toBe('https://alpha.xyz');
+    expect(alpha.verifiedDomain).toBeUndefined();
+
+    const beta = merged.cards.find(c => c.n === 'Beta')!;
+    expect(beta.url).toBe('https://app.beta.org/farm');
+    expect(beta.verifiedDomain).toBe(true);
+
+    const gamma = merged.cards.find(c => c.n === 'Gamma')!;
+    expect(gamma.url).toBe('https://gamma.org');
+    expect(gamma.verifiedDomain).toBe(true);
+
+    const abCards = merged.cards.filter(c => c.id === 'galxe:12');
+    expect(abCards).toHaveLength(1);
+    expect(abCards[0].tasks?.map(t => t.title)).toEqual(['Quest 1', 'Quest 2']);
+    expect(abCards[0].tk).toBe('2/2');
+  });
+
+  test('AirdropAlert reuses prior listings when only the events request fails, and clears them on an explicit empty list', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevFeed: AirdropFeed = {
+      cards: [makeCard({ r: 1, n: 'PriorAlertCard', id: 'airdropalert:10', source: 'AirdropAlert', url: null, sc: 56 })],
+      tge: [{ n: 'PriorAlertTge', t: '', s: 'Upcoming', d: '2026-12-01', source: 'AirdropAlert' }],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW - 60_000,
+    };
+    const calendarPayload = [
+      {
+        id: 330576,
+        date_gmt: '2026-11-16T15:28:13',
+        title: { rendered: 'Fresh Calendar Event' },
+        content: { rendered: '<p>Claim window.</p>' },
+        link: 'https://airdropalert.com/?aa_calendar_event=fresh',
+      },
+    ];
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      // 1. Events 503 + Calendar 200 -> keeps prior AirdropAlert card while updating TGE.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ error: 'down' }, 503) : json(calendarPayload)) as unknown as typeof fetch;
+      const partialFail = await buildCuratedAirdropFeed({
+        nowMs: NOW,
+        prevFeed,
+        airdropAlertUrl: 'https://aa.test/calendar',
+        airdropAlertEventsUrl: 'https://aa.test/events',
+        fetchers: {
+          surf: emptyFeed,
+          asso7878: emptyFeed,
+          arndxt: emptyFeed,
+          pendle: async () => ({
+            cards: [makeCard({ r: 1, n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 80 })],
+            tge: [],
+            counts: { active: 1, preToken: 1 },
+            fetchedAt: NOW,
+          }),
+          merkl: emptyFeed,
+          galxe: emptyFeed,
+        },
+      });
+      expect(partialFail.feed.cards.map(c => c.n)).toEqual(['LivePendle', 'PriorAlertCard']);
+      expect(partialFail.feed.tge.map(t => t.n)).toEqual(['Fresh Calendar Event']);
+
+      // 2. Events 200 with empty array -> clears prior AirdropAlert listings.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ events: [] }) : json(calendarPayload)) as unknown as typeof fetch;
+      const validEmpty = await buildCuratedAirdropFeed({
+        nowMs: NOW,
+        prevFeed,
+        airdropAlertUrl: 'https://aa.test/calendar',
+        airdropAlertEventsUrl: 'https://aa.test/events',
+        fetchers: {
+          surf: emptyFeed,
+          asso7878: emptyFeed,
+          arndxt: emptyFeed,
+          pendle: async () => ({
+            cards: [makeCard({ r: 1, n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 80 })],
+            tge: [],
+            counts: { active: 1, preToken: 1 },
+            fetchedAt: NOW,
+          }),
+          merkl: emptyFeed,
+          galxe: emptyFeed,
+        },
+      });
+      expect(validEmpty.feed.cards.map(c => c.n)).toEqual(['LivePendle']);
+      expect(validEmpty.feed.tge.map(t => t.n)).toEqual(['Fresh Calendar Event']);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 });

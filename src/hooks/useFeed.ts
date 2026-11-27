@@ -31,7 +31,7 @@ function countUnseenPending(items: FeedItem[], pendingItems: FeedItem[]): number
   return pendingItems.reduce((acc, it) => (visibleIds.has(it.id) ? acc : acc + 1), 0);
 }
 
-export function useFeed(): FeedState {
+export function useFeed(onItemsChange?: (nextItems: readonly FeedItem[]) => void): FeedState {
   const [initial] = useState<FeedResponse | null>(() => getInitialFeed());
   const [items, setItems] = useState<FeedItem[]>(() => initial?.items ?? []);
   const [pendingItems, setPendingItems] = useState<FeedItem[]>([]);
@@ -45,6 +45,10 @@ export function useFeed(): FeedState {
   const [initialKnownIds] = useState(() => new Set((initial?.items ?? []).map(it => it.id)));
   const knownIdsRef = useRef<Set<string>>(initialKnownIds);
   const hasLiveRef = useRef(false);
+  const onItemsChangeRef = useRef(onItemsChange);
+  useEffect(() => {
+    onItemsChangeRef.current = onItemsChange;
+  }, [onItemsChange]);
 
   // Mirrors of state for stable callbacks (no re-creation per render).
   const pendingItemsRef = useRef<FeedItem[]>([]);
@@ -86,6 +90,7 @@ export function useFeed(): FeedState {
             pendingItemsRef.current = update.pending ?? [];
             setItems(update.items);
             setPendingItems(update.pending ?? []);
+            onItemsChangeRef.current?.(update.items);
           }
         }
         poll.settle(true);
@@ -115,6 +120,7 @@ export function useFeed(): FeedState {
     knownIdsRef.current = new Set(pending.map(it => it.id));
     setItems(pending);
     setPendingItems([]);
+    onItemsChangeRef.current?.(pending);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 

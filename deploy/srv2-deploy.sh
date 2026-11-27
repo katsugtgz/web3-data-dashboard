@@ -42,6 +42,11 @@ else
   cd "$APP_DIR"
 fi
 
+current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+if [ "$current_branch" != "$BRANCH" ]; then
+  die "checkout at $APP_DIR is on '${current_branch:-detached HEAD}', expected '$BRANCH'"
+fi
+
 log "updating $BRANCH"
 git pull --ff-only origin "$BRANCH"
 
@@ -61,7 +66,8 @@ log "building and starting the stack"
 if grep -qE '^CLOUDFLARE_TUNNEL_TOKEN=[^[:space:]#]+' .env; then
   docker compose up -d --build --remove-orphans
 else
-  log "CLOUDFLARE_TUNNEL_TOKEN is empty in .env; starting web3-radar, rsshub, and redis only"
+  log "CLOUDFLARE_TUNNEL_TOKEN is empty in .env; stopping cloudflared and starting web3-radar, rsshub, and redis only"
+  docker compose rm -sf cloudflared
   docker compose up -d --build --remove-orphans web3-radar rsshub redis
 fi
 

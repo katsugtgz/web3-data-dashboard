@@ -149,7 +149,7 @@ export function createApp(deps: AppDeps): (request: Request) => Promise<Response
 
 export interface ServerOptions {
   dbPath?: string;
-  env?: Env;
+  env?: Omit<Env, 'DB'>;
   distDir?: string;
   port?: number;
   hostname?: string;
@@ -162,13 +162,14 @@ export interface RadarServer {
   server: ReturnType<typeof Bun.serve>;
   db: RadarDb;
   scheduler: Scheduler;
-  /** Idempotent: stops the schedule, drains requests, closes SQLite. */
+  /** Idempotent: stops the schedule, drains requests, closes SQLite once jobs cannot issue queries. */
   stop(): Promise<void>;
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<RadarServer> {
   const db = openDb(opts.dbPath);
-  const env = opts.env ?? buildEnv(db.d1);
+  // Server-owned SQLite always backs the API, health checks, and scheduler together.
+  const env: Env = opts.env ? { ...opts.env, DB: db.d1 } : buildEnv(db.d1);
   const scheduler = opts.scheduler ?? createRadarScheduler(db.d1, env);
   const server = Bun.serve({
     port: opts.port ?? (Number(process.env.PORT) || 3000),
@@ -184,6 +185,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<RadarServer
     (stopping ??= (async () => {
       await scheduler.stop();
       await server.stop();
+      const stillInFlight = Object.values(scheduler.status().jobs).some(job => job.inFlight);
+      if (stillInFlight) {
+        // Keep SQLite open until running jobs finish so they never hit a closed handle,
+        // and fail shutdown explicitly rather than exiting cleanly mid-run.
+        void scheduler.whenIdle().finally(() => db.close());
+        throw new Error('Shutdown timed out while scheduled jobs are still in flight');
+      }
       db.close();
     })());
   return { server, db, scheduler, stop };

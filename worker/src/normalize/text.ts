@@ -236,7 +236,7 @@ function stripTrailingLinkCaptions(text: string): string {
 // Channel-growth promos appended to a post: `Subscribe to our channel`,
 // `Join our Telegram channel`, `Follow us on X`, `Turn on notifications`.
 const CHANNEL_PROMO_RE = new RegExp(
-  String.raw`(^|[.!?…·]|\n|\d[.)])\s*(?:${EMOJI_RUN}\s*)?(?:subscrib(?:e|ed)\b|join\s+(?:our|the|us)\b[^.!?\n]{0,30}\b(?:telegram|tg|channel|group)\b|follow\s+us\b[^.!?\n]{0,20}\b(?:x|twitter|telegram|tg|channel)\b|(?:turn\s+on|enable)\s+(?:the\s+|post\s+)?notifications?\b)[^\n]*?(?:[.!?](?=\s|$)|(?=\n)|$)`,
+  String.raw`(^|[.!?…·]|\n|\d[.)])\s*(?:${EMOJI_RUN}\s*)?(?:subscrib(?:e|ed)\b|join\s+(?:our|the|us)\b[^.!?·\n]{0,30}\b(?:telegram|tg|channel|group)\b|follow\s+us\b[^.!?·\n]{0,20}\b(?:x|twitter|telegram|tg|channel)\b|(?:turn\s+on|enable)\s+(?:the\s+|post\s+)?notifications?\b)[^\n·]*?(?:[.!?](?=\s|$)|(?=\n|·)|$)`,
   'giu',
 );
 
@@ -469,6 +469,9 @@ const BANTER_MARKER_RE =
 // Phrasing that turns a short line into an announcement rather than a question.
 const LIVE_CUE_RE =
   /\b(?:is|are|now|goes|went)\s+live\b|\bclaim\s+(?:now|your|here|at|free)\b|\bout\s+now\b|\bdown\s+now\b|\bsekarang\b|\blangsung\b/i;
+// Concrete participation action that distinguishes an instruction from a thin social repost.
+const SOCIAL_ACTION_RE =
+  /\b(?:submit|register|apply|claim|verify|complete|connect|fill|sign\s+up|check-?in|upload|redeem|bind|provide|proof|form|quiz|address|wallet)\b/i;
 
 /**
  * A linkless post that carries no action a reader can take: a bare status update,
@@ -490,13 +493,22 @@ function isLinklessStub(text: string, taskTypes: TaskType[]): boolean {
   if (words.length === 0) return true;
   if (words.length > 10) return false;
 
+  const isSingleSentence = plain.split(/[.!?]+/).filter(s => s.trim()).length <= 1;
+  if (words.length <= 9 && isSingleSentence && /\?/.test(plain)) {
+    return true;
+  }
   const isAnnouncement = LIVE_CUE_RE.test(plain);
-  if (!isAnnouncement && !taskTypes.some(t => t !== 'other' && t !== 'social') && taskTypes.includes('social')) {
+  if (
+    !isAnnouncement &&
+    !SOCIAL_ACTION_RE.test(plain) &&
+    !taskTypes.some(t => t !== 'other' && t !== 'social') &&
+    taskTypes.includes('social')
+  ) {
     return true;
   }
   if (isAnnouncement || words.length > 9) return false;
-  if (plain.split(/[.!?]+/).filter(s => s.trim()).length > 1) return false;
-  return /\?/.test(plain) || BANTER_OPENER_RE.test(plain) || BANTER_MARKER_RE.test(plain);
+  if (!isSingleSentence) return false;
+  return BANTER_OPENER_RE.test(plain) || BANTER_MARKER_RE.test(plain);
 }
 
 export interface DropRelevanceInput {

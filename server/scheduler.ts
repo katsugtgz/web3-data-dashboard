@@ -1,4 +1,4 @@
-import type { AirdropFeed, MarketSection } from '../shared/types';
+import type { AirdropFeed, DomainMeta, MarketSection } from '../shared/types';
 import workerApp, { type Env } from '../worker/src/index';
 import { markSnapshotError, upsertSnapshot } from '../worker/src/lib/db';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
@@ -6,7 +6,7 @@ import { extractDefiLlamaTokenlessAirdrops } from '../worker/src/sources/curated
 import { normalizeDefiProtocols, normalizeDefiYields } from '../worker/src/sources/markets';
 import { resolveCuratedSourceUrl } from '../worker/src/sources/registry';
 import { ARNDXT_SHEET_URL, ASSO7878_SHEET_URL, fetchArndxtSheet, fetchAsso7878Sheet } from '../worker/src/sources/sheets';
-import { enrichActiveClusters, enrichAirdropsSnapshot, seedDefiLlamaDomains } from './enricher';
+import { enrichActiveClusters, enrichAirdropsSnapshot, seedDefiLlamaDomains, type EnrichOptions } from './enricher';
 
 const MINUTE = 60_000;
 const DEFAULT_STOP_TIMEOUT_MS = 8_000;
@@ -25,7 +25,7 @@ export const WARMUP_JOBS: readonly string[] = [JOB.heavy, JOB.fiveMin, JOB.twoMi
 export interface SchedulerJob {
   name: string;
   everyMs: number;
-  run: (nowMs: number) => Promise<unknown> | unknown;
+  run: (nowMs: number, signal: AbortSignal) => Promise<unknown> | unknown;
 }
 
 export interface JobStatus {
@@ -50,8 +50,10 @@ export interface Scheduler {
   run(name: string): Promise<boolean>;
   /** Starts every job on its interval and runs `warmup` jobs once, without waiting for them. */
   start(warmup?: readonly string[]): void;
-  /** Cancels all timers and waits (at most `stopTimeoutMs`) for jobs in flight. */
+  /** Cancels timers, signals running jobs to abort, and waits (at most `stopTimeoutMs`) for them. */
   stop(): Promise<void>;
+  /** Resolves once every currently in-flight job has settled (never times out). */
+  whenIdle(): Promise<void>;
   status(): SchedulerStatus;
 }
 
@@ -59,6 +61,8 @@ export interface SchedulerOptions {
   log?: (message: string) => void;
   now?: () => number;
   stopTimeoutMs?: number;
+  setIntervalFn?: (fn: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearIntervalFn?: (timer: ReturnType<typeof setInterval>) => void;
 }
 
 function errorText(err: unknown): string {
@@ -69,6 +73,8 @@ function errorText(err: unknown): string {
 export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {}): Scheduler {
   const now = opts.now ?? Date.now;
   const log = opts.log ?? (message => console.error(message));
+  const scheduleInterval = opts.setIntervalFn ?? ((fn, ms) => setInterval(fn, ms));
+  const cancelInterval = opts.clearIntervalFn ?? (timer => clearInterval(timer));
   const byName = new Map(jobs.map(job => [job.name, job]));
   const state = new Map<string, JobStatus>(
     jobs.map(job => [
@@ -79,15 +85,16 @@ export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {
   const timers: ReturnType<typeof setInterval>[] = [];
   const inFlight = new Map<string, Promise<void>>();
   let startedAt: number | null = null;
+  let stopController = new AbortController();
 
-  async function execute(job: SchedulerJob): Promise<void> {
+  async function execute(job: SchedulerJob, signal: AbortSignal): Promise<void> {
     const status = state.get(job.name)!;
     const started = now();
     status.inFlight = true;
     status.runs++;
     status.lastStartedAt = started;
     try {
-      await job.run(started);
+      await job.run(started, signal);
       status.lastError = null;
     } catch (err) {
       status.errors++;
@@ -103,17 +110,26 @@ export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {
   function run(name: string): Promise<boolean> {
     const job = byName.get(name);
     if (!job || inFlight.has(name)) return Promise.resolve(false);
-    const done = execute(job).finally(() => inFlight.delete(name));
-    inFlight.set(name, done);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    // Reserve the slot before execute() synchronously invokes job.run().
+    inFlight.set(name, gate);
+    const done = execute(job, stopController.signal).finally(() => {
+      inFlight.delete(name);
+      release();
+    });
     return done.then(() => true);
   }
 
   function start(warmup: readonly string[] = []): void {
     if (startedAt !== null) return;
+    if (stopController.signal.aborted) stopController = new AbortController();
     startedAt = now();
     for (const job of jobs) {
-      const timer = setInterval(() => void run(job.name), job.everyMs);
-      (timer as { unref?: () => void }).unref?.();
+      const timer = scheduleInterval(() => void run(job.name), job.everyMs);
+      (timer as { unref?: () => void } | undefined)?.unref?.();
       timers.push(timer);
     }
     const queue = warmup.filter(name => byName.has(name));
@@ -127,16 +143,32 @@ export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {
     }
   }
 
+  async function whenIdle(): Promise<void> {
+    while (inFlight.size > 0) {
+      await Promise.all([...inFlight.values()]);
+    }
+  }
+
   async function stop(): Promise<void> {
     startedAt = null;
-    for (const timer of timers) clearInterval(timer);
+    for (const timer of timers) cancelInterval(timer);
     timers.length = 0;
+    if (!stopController.signal.aborted) {
+      stopController.abort(new Error('scheduler stopped'));
+    }
     const pending = [...inFlight.values()];
     if (pending.length === 0) return;
-    await Promise.race([
-      Promise.all(pending),
-      new Promise<void>(resolve => setTimeout(resolve, opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS)),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(pending),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, opts.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   function status(): SchedulerStatus {
@@ -147,7 +179,7 @@ export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {
     };
   }
 
-  return { run, start, stop, status };
+  return { run, start, stop, whenIdle, status };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,10 +189,12 @@ export function createScheduler(jobs: SchedulerJob[], opts: SchedulerOptions = {
 export type HeavyEnv = Pick<Env, 'ASSO7878_SHEET_URL' | 'ARNDXT_SHEET_URL'>;
 
 export interface HeavyIngestDeps {
-  fetchJson?: (url: string) => Promise<unknown>;
+  fetchJson?: (url: string, signal?: AbortSignal) => Promise<unknown>;
   fetchAsso7878?: (url: string, nowMs: number) => Promise<AirdropFeed>;
   fetchArndxt?: (url: string, nowMs: number) => Promise<AirdropFeed>;
+  seedDomains?: (db: D1Database, protocolsRaw: unknown, nowMs: number) => Promise<number>;
   nowMs?: number;
+  signal?: AbortSignal;
   log?: (message: string) => void;
 }
 
@@ -170,10 +204,18 @@ export interface HeavyIngestResult {
   seededDomains: number;
 }
 
-async function fetchJson(url: string): Promise<unknown> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error('job aborted');
+  }
+}
+
+async function fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS * 2);
+  const combined = signal ? AbortSignal.any([timeout, signal]) : timeout;
   const res = await fetch(url, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS * 2),
+    signal: combined,
   });
   if (!res.ok) {
     await res.body?.cancel();
@@ -190,16 +232,20 @@ async function fetchJson(url: string): Promise<unknown> {
  */
 export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyIngestDeps = {}): Promise<HeavyIngestResult> {
   const nowMs = deps.nowMs ?? Date.now();
+  const signal = deps.signal;
   const log = deps.log ?? (message => console.log(message));
   const getJson = deps.fetchJson ?? fetchJson;
   const fetchAsso = deps.fetchAsso7878 ?? fetchAsso7878Sheet;
   const fetchArndxt = deps.fetchArndxt ?? fetchArndxtSheet;
+  const seedDomains = deps.seedDomains ?? seedDefiLlamaDomains;
+  throwIfAborted(signal);
   const [protocols, pools, asso, arndxt] = await Promise.allSettled([
-    getJson(DEFILLAMA_PROTOCOLS_URL),
-    getJson(DEFILLAMA_YIELDS_URL),
+    getJson(DEFILLAMA_PROTOCOLS_URL, signal),
+    getJson(DEFILLAMA_YIELDS_URL, signal),
     fetchAsso(resolveCuratedSourceUrl(env.ASSO7878_SHEET_URL, 'sheet:asso7878_sheet', ASSO7878_SHEET_URL), nowMs),
     fetchArndxt(resolveCuratedSourceUrl(env.ARNDXT_SHEET_URL, 'sheet:arndxt_sheet', ARNDXT_SHEET_URL), nowMs),
   ]);
+  throwIfAborted(signal);
 
   const result: HeavyIngestResult = { ok: [], failed: [], seededDomains: 0 };
   const section = async (
@@ -208,6 +254,7 @@ export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyI
     outcome: PromiseSettledResult<unknown>,
     normalize: (raw: unknown, nowMs: number) => MarketSection,
   ): Promise<unknown | null> => {
+    throwIfAborted(signal);
     try {
       if (outcome.status === 'rejected') throw outcome.reason;
       const normalized = normalize(outcome.value, nowMs);
@@ -216,6 +263,7 @@ export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyI
       result.ok.push(key);
       return outcome.value;
     } catch (err) {
+      throwIfAborted(signal);
       const error = errorText(err);
       result.failed.push({ key, error });
       await markSnapshotError(db, key, err, nowMs);
@@ -225,12 +273,21 @@ export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyI
 
   const rawProtocols = await section('markets:defi', 'DeFi', protocols, normalizeDefiProtocols);
   if (rawProtocols !== null) {
+    throwIfAborted(signal);
     const tokenless = extractDefiLlamaTokenlessAirdrops(rawProtocols, nowMs);
     if (tokenless.cards.length > 0) {
       await upsertSnapshot(db, 'airdrops:defillama', tokenless, nowMs);
       result.ok.push('airdrops:defillama');
     }
-    result.seededDomains = await seedDefiLlamaDomains(db, rawProtocols, nowMs);
+    try {
+      throwIfAborted(signal);
+      result.seededDomains = await seedDomains(db, rawProtocols, nowMs);
+    } catch (err) {
+      throwIfAborted(signal);
+      const error = errorText(err);
+      result.failed.push({ key: 'domain_meta:defillama', error });
+      log(`heavy-ingest: domain_meta seed failed: ${error}`);
+    }
   }
   await section('markets:yields', 'Yields', pools, normalizeDefiYields);
 
@@ -247,6 +304,7 @@ export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyI
     if (outcome.value.cards.length === 0 && outcome.value.tge.length === 0) continue;
     validSheets.push([key, outcome.value]);
   }
+  throwIfAborted(signal);
   await Promise.all(validSheets.map(([key, feed]) => upsertSnapshot(db, key, feed, nowMs)));
   for (const [key] of validSheets) result.ok.push(key);
   return result;
@@ -258,10 +316,14 @@ export async function runHeavyIngest(db: D1Database, env: HeavyEnv, deps: HeavyI
 
 export interface RadarDeps extends HeavyIngestDeps {
   /** Worker `scheduled` handler; the default calls `workerApp.scheduled` with the given cron string. */
-  scheduled?: (cron: string, nowMs: number) => Promise<void>;
-  heavyIngest?: (nowMs: number) => Promise<unknown>;
-  enrich?: (nowMs: number) => Promise<unknown>;
+  scheduled?: (cron: string, nowMs: number, signal: AbortSignal) => Promise<void>;
+  heavyIngest?: (nowMs: number, signal: AbortSignal) => Promise<unknown>;
+  enrich?: (nowMs: number, signal: AbortSignal) => Promise<unknown>;
+  enrichClusters?: typeof enrichActiveClusters;
+  enrichCards?: typeof enrichAirdropsSnapshot;
+  enrichOpts?: EnrichOptions;
   now?: () => number;
+  stopTimeoutMs?: number;
 }
 
 /** The four production jobs: 2 and 5 minute worker crons, 30 minute heavy ingest, 60 minute enricher. */
@@ -276,32 +338,50 @@ export function createRadarScheduler(db: D1Database, env: Omit<Env, 'DB'> = {}, 
       workerApp.scheduled({ cron, scheduledTime: nowMs } as ScheduledController, workerEnv, ctx));
   const heavyIngest =
     deps.heavyIngest ??
-    (async (nowMs: number) => {
-      const result = await runHeavyIngest(db, workerEnv, { ...deps, nowMs });
+    (async (nowMs: number, signal: AbortSignal) => {
+      const result = await runHeavyIngest(db, workerEnv, { ...deps, nowMs, signal });
       log(`heavy-ingest ok=${result.ok.length} failed=${result.failed.length} seededDomains=${result.seededDomains}`);
       if (result.failed.length > 0) {
         throw new Error(result.failed.map(f => `${f.key}: ${f.error}`).join('; '));
       }
     });
+  const runClusterEnrich = deps.enrichClusters ?? enrichActiveClusters;
+  const runCardEnrich = deps.enrichCards ?? enrichAirdropsSnapshot;
   const enrich =
     deps.enrich ??
-    (async (nowMs: number) => {
-      const [clusters, cards] = await Promise.all([
-        enrichActiveClusters(db, nowMs, ENRICH_LIMIT),
-        enrichAirdropsSnapshot(db, nowMs, ENRICH_CARDS_LIMIT),
+    (async (nowMs: number, signal: AbortSignal) => {
+      const inFlight = new Map<string, Promise<DomainMeta>>();
+      const sharedOpts: EnrichOptions = { ...deps.enrichOpts, inFlight, signal };
+      const [clustersOutcome, cardsOutcome] = await Promise.allSettled([
+        runClusterEnrich(db, nowMs, ENRICH_LIMIT, sharedOpts),
+        runCardEnrich(db, nowMs, ENRICH_CARDS_LIMIT, sharedOpts),
       ]);
-      log(
-        `enrich clusters=${clusters.selected} clusterErrors=${clusters.errors} cardsEnriched=${cards.enriched} cardsFetched=${cards.fetched}`,
-      );
+      const errors: string[] = [];
+      const clusters =
+        clustersOutcome.status === 'fulfilled'
+          ? clustersOutcome.value
+          : (errors.push(`clusters: ${errorText(clustersOutcome.reason)}`), null);
+      const cards =
+        cardsOutcome.status === 'fulfilled'
+          ? cardsOutcome.value
+          : (errors.push(`cards: ${errorText(cardsOutcome.reason)}`), null);
+      if (clusters && cards) {
+        log(
+          `enrich clusters=${clusters.selected} clusterErrors=${clusters.errors} cardsEnriched=${cards.enriched} cardsFetched=${cards.fetched}`,
+        );
+      }
+      if (errors.length > 0) {
+        throw new Error(errors.join('; '));
+      }
     });
 
   return createScheduler(
     [
-      { name: JOB.twoMin, everyMs: 2 * MINUTE, run: nowMs => scheduled(CRON_TWO_MIN, nowMs) },
-      { name: JOB.fiveMin, everyMs: 5 * MINUTE, run: nowMs => scheduled(CRON_FIVE_MIN, nowMs) },
+      { name: JOB.twoMin, everyMs: 2 * MINUTE, run: (nowMs, signal) => scheduled(CRON_TWO_MIN, nowMs, signal) },
+      { name: JOB.fiveMin, everyMs: 5 * MINUTE, run: (nowMs, signal) => scheduled(CRON_FIVE_MIN, nowMs, signal) },
       { name: JOB.heavy, everyMs: 30 * MINUTE, run: heavyIngest },
       { name: JOB.enrich, everyMs: 60 * MINUTE, run: enrich },
     ],
-    { log, now: deps.now },
+    { log, now: deps.now, stopTimeoutMs: deps.stopTimeoutMs },
   );
 }

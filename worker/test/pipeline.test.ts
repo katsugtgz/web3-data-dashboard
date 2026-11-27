@@ -160,6 +160,11 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       now,
     );
     expect(res.riskLevel).toBe('ok');
+    const stored = await db
+      .prepare('SELECT risk_level, risk_reasons FROM clusters WHERE id = ?1')
+      .bind(res.clusterId)
+      .first<{ risk_level: string; risk_reasons: string }>();
+    expect(stored).toEqual({ risk_level: 'ok', risk_reasons: '[]' });
     const feed = await queryFeed(db, new Set(['arbitrum.io']));
     expect(feed.items[0].risk).toEqual({ level: 'ok', reasons: [] });
   });

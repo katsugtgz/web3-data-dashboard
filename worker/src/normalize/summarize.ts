@@ -213,7 +213,7 @@ export function unsafeContentRe(s: string): boolean {
 function isSafeAiText(raw: unknown, maxLen: number, kind: 'prose' | 'step' = 'prose'): string | undefined {
   if (typeof raw !== 'string') return undefined;
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(raw)) return undefined;
-  const text = raw.replace(/\s+/g, ' ').trim();
+  const text = raw.replace(DEFANG_CHARS_RE, '').replace(/\s+/g, ' ').trim();
   if (!text || text.length > maxLen) return undefined;
   if (HAN_RE.test(text) || FORBIDDEN_CJK_RE.test(text) || NON_LATIN_RE.test(text)) return undefined;
   if (unsafeContentRe(text)) return undefined;
@@ -238,7 +238,7 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
   try {
     const parsed = JSON.parse(rawText.slice(start, end + 1)) as Record<string, unknown>;
     if (typeof parsed.summary !== 'string') return null;
-    const summary = parsed.summary.replace(/\s+/g, ' ').trim();
+    const summary = parsed.summary.replace(DEFANG_CHARS_RE, '').replace(/\s+/g, ' ').trim();
     if (!summary || summary.length > 180) return null;
     if (HAN_RE.test(summary) || FORBIDDEN_CJK_RE.test(summary) || NON_LATIN_RE.test(summary)) return null;
     // The model sees untrusted post text. A crafted post can steer the summary
@@ -266,7 +266,8 @@ export function parseAndValidateAiJson(rawText: string): AiSummaryPayload | null
     const steps = Array.isArray(parsed.steps)
       ? parsed.steps.map(step => isSafeAiText(step, AI_FIELD_LIMITS.step, 'step')).filter((s): s is string => s !== undefined)
       : [];
-    if (steps.length > 0) rich.steps = steps.slice(0, MAX_AI_STEPS);
+    const distinctSteps = [...new Set(steps)];
+    if (distinctSteps.length > 0) rich.steps = distinctSteps.slice(0, MAX_AI_STEPS);
     const rewardPool = isSafeAiText(parsed.rewardPool, AI_FIELD_LIMITS.rewardPool);
     const deadline = isSafeAiText(parsed.deadline, AI_FIELD_LIMITS.deadline);
     const cost = isSafeAiText(parsed.cost, AI_FIELD_LIMITS.cost);

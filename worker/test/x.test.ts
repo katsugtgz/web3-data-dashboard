@@ -852,6 +852,19 @@ describe('X best-effort syndication parser & backoff', () => {
     const downstreamRawIp = parseDropPost(rawIpFallbackPost.text, rawIpFallbackPost.urls);
     expect(downstreamRawIp.rawIpUrls).toContain('http://185.220.101.9/claim');
     expect(downstreamRawIp.urls.some(isMirrorHost)).toBe(false);
+
+    // Loopback mirror URL in both description-only and fallback title must stay filtered while keeping unrelated raw-IP URLs.
+    const loopbackXml = `<?xml version="1.0"?><rss version="2.0"><channel>
+      <item>
+        <title>Loopback fallback http://127.0.0.1:1200/media/1.png and http://185.220.101.9/claim</title>
+        <link>http://127.0.0.1:1200/DefiIgnas/status/212500109</link>
+        <pubDate>Mon, 23 Nov 2026 12:12:00 GMT</pubDate>
+        <description><![CDATA[http://127.0.0.1:1200/DefiIgnas/status/212500109]]></description>
+      </item>
+    </channel></rss>`;
+    const loopbackPosts = parseXRssTimeline(loopbackXml, 'DefiIgnas', ['127.0.0.1'], now);
+    expect(loopbackPosts).toHaveLength(1);
+    expect(loopbackPosts[0].urls).toEqual(['http://185.220.101.9/claim']);
   });
 
   test('fetchXTimelineBestEffort falls through to syndication when mirror only returns stale (>14d) posts and accepts fresh mirror posts immediately', async () => {

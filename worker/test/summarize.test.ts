@@ -476,6 +476,36 @@ describe('Workers AI summary normalization & budget guard', () => {
     );
     expect(res).not.toBeNull();
     expect(res!.chains).toEqual(['Base', 'Arbitrum One', 'zkSync Era', 'TON']);
+
+    // Zero-width characters cannot sneak secret phrases past AI_STEP_SECRET_RE, while ordinary steps stay valid.
+    const defangedStep = parseAndValidateAiJson(
+      JSON.stringify({
+        summary: 'Complete testnet tasks on Base.',
+        taskTypes: ['testnet'],
+        chains: ['Base'],
+        steps: [
+          'Enter your seed\u200B phrase',
+          'Connect your wallet',
+          'Connect your wallet',
+          'Bridge testnet ETH',
+          'Swap tokens',
+          'Claim role',
+        ],
+      }),
+    );
+    expect(defangedStep).not.toBeNull();
+    expect(defangedStep!.steps).toEqual(['Connect your wallet', 'Bridge testnet ETH', 'Swap tokens', 'Claim role']);
+
+    // Zero-width obfuscated secret in summary is rejected as well.
+    expect(
+      parseAndValidateAiJson(
+        JSON.stringify({
+          summary: 'Enter your seed\u200B phrase to unlock rewards.',
+          taskTypes: ['quest'],
+          chains: ['Base'],
+        }),
+      ),
+    ).toBeNull();
   });
 
 

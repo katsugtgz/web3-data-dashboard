@@ -508,11 +508,21 @@ const REWARD_CONTEXT_BEFORE_RE =
 const REWARD_CONTEXT_AFTER_RE =
   /^\s*(?:usd|usdc|usdt|tokens?|points?)?\s*(?:in\s+)?(?:reward|prize|airdrop|trading|liquidity|mining|staking)\s+pool\b|^\s*(?:in\s+)?rewards?\b|^\s+(?:airdrop|giveaway|prizes?|grand\s+prize)\b|^\s+supply\b/i;
 
+function trimToClauseBefore(raw: string): string {
+  const parts = raw.split(/[\n;!?·•|]|\.(?=\s)/);
+  return parts[parts.length - 1] ?? '';
+}
+
+function trimToClauseAfter(raw: string): string {
+  const parts = raw.split(/[\n;!?·•|]|\.(?=\s|$)/);
+  return parts[0] ?? '';
+}
+
 function extractRewardPool(text: string): string | undefined {
   for (const match of text.matchAll(REWARD_AMOUNT_RE)) {
     const start = match.index ?? 0;
-    const before = text.slice(Math.max(0, start - 32), start);
-    const after = text.slice(start + match[0].length, start + match[0].length + 24);
+    const before = trimToClauseBefore(text.slice(Math.max(0, start - 32), start));
+    const after = trimToClauseAfter(text.slice(start + match[0].length, start + match[0].length + 24));
     if (!REWARD_CONTEXT_BEFORE_RE.test(before) && !REWARD_CONTEXT_AFTER_RE.test(after)) continue;
 
     const percent = match[0].match(/(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:total\s+|token\s+|genesis\s+)?supply$/i);
@@ -538,8 +548,13 @@ const DEADLINE_RE = new RegExp(
   `\\b(end\\s+date|closing\\s+date|deadline|last\\s+call|last\\s+chance|last\\s+day|final\\s+day|time\\s+left|cut\\s*-\\s*off|cutoff|runs\\s+until|ending|ends?|closing|closes?|expiring|expires?|lasting|lasts?|until|till|before|within|through|hurry|due|only|by)\\b` +
     `(?:\\s*(?:[:=]|\\b(?:in|on|at|by|until|before|the|this|of|around)\\b))?\\s*` +
     `(\\d{4}-\\d{2}-\\d{2}|${MONTH_SRC}\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}\\s+${MONTH_SRC}(?:,?\\s+\\d{4})?|${MONTH_SRC}\\s+20\\d{2}|\\d{1,3}\\s*-\\s*\\d{1,3}\\s*h|\\d{1,3}\\s*(?:h|hr|hrs)\\b|(?:\\d+|a|an|one|two|three|few|several|couple\\s+of)\\s+(?:hours?|hrs?|days?|weeks?)\\b|today|tonight|tomorrow|tmrw|eod|eof|end\\s+of\\s+(?:day|week|month|year|quarter)|this\\s+(?:week|month|year|${WEEKDAY_SRC})|next\\s+(?:week|month|year|${WEEKDAY_SRC})|${WEEKDAY_SRC}|q[1-4](?:\\s*20\\d{2})?)`,
-  'i',
+  'gi',
 );
+const EXPLICIT_DEADLINE_KEYWORDS = new Set([
+  'end date', 'closing date', 'deadline', 'last call', 'last chance', 'last day', 'final day',
+  'time left', 'cutoff', 'cut-off', 'runs until', 'ending', 'end', 'ends', 'closing', 'close',
+  'closes', 'expiring', 'expire', 'expires', 'due',
+]);
 const DEADLINE_KEYWORD_CANON: Record<string, string> = {
   'end date': 'End date', 'closing date': 'Closing date', deadline: 'Deadline', 'last call': 'Last call',
   'last chance': 'Last chance', 'last day': 'Last day', 'final day': 'Final day', 'time left': 'Time left',
@@ -550,10 +565,18 @@ const DEADLINE_KEYWORD_CANON: Record<string, string> = {
 };
 
 function extractDeadline(text: string): string | undefined {
-  const match = text.match(DEADLINE_RE);
-  if (!match) return undefined;
-  const keyword = (match[1] ?? '').toLowerCase();
-  const value = (match[2] ?? '').replace(/\s+/g, ' ').trim();
+  let chosen: RegExpMatchArray | null = null;
+  for (const match of text.matchAll(DEADLINE_RE)) {
+    if (!chosen) chosen = match;
+    const kw = (match[1] ?? '').toLowerCase().replace(/\s+/g, ' ');
+    if (EXPLICIT_DEADLINE_KEYWORDS.has(kw)) {
+      chosen = match;
+      break;
+    }
+  }
+  if (!chosen) return undefined;
+  const keyword = (chosen[1] ?? '').toLowerCase().replace(/\s+/g, ' ');
+  const value = (chosen[2] ?? '').replace(/\s+/g, ' ').trim();
   if (RELATIVE_DEADLINE_VALUE_RE.test(value)) {
     const label =
       DEADLINE_KEYWORD_CANON[keyword] ?? keyword.charAt(0).toUpperCase() + keyword.slice(1);
@@ -565,7 +588,7 @@ function extractDeadline(text: string): string | undefined {
 // Costs, most specific first: an explicit price label, a stake/deposit requirement,
 // gas-only wording, free entry, and a zero price. No wording means no cost field.
 const COST_LABEL_RE =
-  /\b(?:cost|price|fee|entry(?:\s+fee)?|mint\s+(?:price|cost))\s*[:=→]\s*(\S.{0,15}?)(?=\s+(?:to|for|until|and|if|when|per)\b|[.,;\n]|$)/i;
+  /\b(?:cost|price|fee|entry(?:\s+fee)?|mint\s+(?:price|cost))\s*[:=→]\s*(\S.{0,15}?)(?=\s+(?:to|for|until|and|if|when|per)\b|[;\n]|[.,](?!\d)|$)/i;
 const STAKE_COST_RE =
   /\b(?:stake|deposit|hold|lock|pay|spend|swap|bridge|buy|bond)(?:\s+(?:at\s+least|min(?:imum)?(?:\s+of)?))?\s+(\$\s?[\d.,]+[kmb]?\+?|[\d.,]+[kmb]?\+?\s*\$?[a-z]{2,6}\+?)(?=\s|[.,;]|$)/i;
 const GAS_ONLY_RE = /\b(?:gas\s*(?:fees?\s*)?only|only\s+gas|just\s+gas|\+\s*gas|excluding\s+gas)\b/i;

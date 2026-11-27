@@ -981,9 +981,10 @@ function galxePlainDescription(campaign: GalxeCampaign): string | undefined {
 }
 
 function galxeReward(campaign: GalxeCampaign): string | undefined {
-  const rewardName = stripOrTranslateCjk((campaign.rewardName ?? '').trim());
+  const rewardName = typeof campaign.rewardName === 'string' ? stripOrTranslateCjk(campaign.rewardName.trim()) : '';
   if (rewardName) return truncateText(rewardName, 60);
-  const symbol = stripOrTranslateCjk((campaign.tokenReward?.tokenSymbol ?? '').trim().toUpperCase());
+  const rawSymbol = campaign.tokenReward?.tokenSymbol;
+  const symbol = typeof rawSymbol === 'string' ? stripOrTranslateCjk(rawSymbol.trim().toUpperCase()) : '';
   if (GALXE_REWARD_SYMBOL_RE.test(symbol)) return `${symbol} rewards`;
   return campaign.type === 'Points' ? 'Points' : undefined;
 }
@@ -1507,7 +1508,7 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         tasks: g.tasks,
         sc,
         sub: [7, 7, null],
-        url: g.primaryUrl,
+        url: g.protocolSite ?? g.primaryUrl,
         source: 'Merkl',
         ...(g.tvl > 0 ? { tvlUsd: g.tvl } : {}),
         ...(g.maxApr > 0 ? { apy: `${g.maxApr.toFixed(1)}% APR` } : {}),
@@ -1601,34 +1602,76 @@ export async function fetchGalxeCampaignsToAirdropFeed(url = GALXE_GRAPHQL_URL, 
   return parseGalxeCampaignsToAirdropFeed(await fetchGalxeTrendingRaw(url), nowMs);
 }
 
+export interface AirdropAlertFetchParts {
+  feed: AirdropFeed;
+  calendarFailed: boolean;
+  eventsFailed: boolean;
+}
+
 /**
- * Calendar rail (strict: must return events) plus active airdrop cards from the
- * events endpoint (best-effort). A joined event also replaces the calendar
- * publish time with the real event date.
+ * Fetches AirdropAlert calendar TGEs and active event listings independently so
+ * a failure in one endpoint never discards valid data from the other, and callers
+ * can distinguish an events failure from a legitimate empty events list.
+ */
+export async function fetchAirdropAlertAirdropsParts(
+  calendarUrl = AIRDROPALERT_CALENDAR_URL,
+  nowMs = Date.now(),
+  eventsUrl = buildAirdropAlertEventsUrl(nowMs),
+): Promise<AirdropAlertFetchParts> {
+  const [calendar, events] = await Promise.allSettled([
+    fetchJsonWithTimeout(calendarUrl),
+    fetchJsonWithTimeout(eventsUrl),
+  ]);
+  const eventsRaw = events.status === 'fulfilled' ? events.value : null;
+  const hasEventsList =
+    eventsRaw != null && typeof eventsRaw === 'object' && Array.isArray((eventsRaw as { events?: unknown }).events);
+  const eventsFailed = !hasEventsList;
+  const { cards, eventDateByPostId } = hasEventsList
+    ? collectAirdropAlertActiveListings(eventsRaw, nowMs)
+    : { cards: [], eventDateByPostId: new Map<string, string>() };
+
+  let tge: Tge[] = [];
+  let calendarFailed = false;
+  let calendarErr: unknown = null;
+  if (calendar.status === 'rejected') {
+    calendarFailed = true;
+    calendarErr = calendar.reason;
+  } else {
+    const calFeed = parseWpCalendarToAirdropFeed(calendar.value, nowMs, eventDateByPostId);
+    if (calFeed.tge.length === 0) {
+      calendarFailed = true;
+      calendarErr = new Error('Empty AirdropAlert calendar payload');
+    } else {
+      tge = calFeed.tge;
+    }
+  }
+
+  if (calendarFailed && cards.length === 0) {
+    throw calendarErr instanceof Error ? calendarErr : new Error(String(calendarErr ?? 'AirdropAlert calendar failed'));
+  }
+
+  return {
+    feed: {
+      cards,
+      tge,
+      counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
+      fetchedAt: nowMs,
+    },
+    calendarFailed,
+    eventsFailed,
+  };
+}
+
+/**
+ * Calendar rail plus active airdrop cards from the events endpoint, handled
+ * independently so valid data from either endpoint survives an outage in the other.
  */
 export async function fetchAirdropAlertAirdrops(
   calendarUrl = AIRDROPALERT_CALENDAR_URL,
   nowMs = Date.now(),
   eventsUrl = buildAirdropAlertEventsUrl(nowMs),
 ): Promise<AirdropFeed> {
-  const [calendar, events] = await Promise.allSettled([
-    fetchJsonWithTimeout(calendarUrl),
-    fetchJsonWithTimeout(eventsUrl),
-  ]);
-  if (calendar.status === 'rejected') throw calendar.reason;
-  const { cards, eventDateByPostId } = collectAirdropAlertActiveListings(
-    events.status === 'fulfilled' ? events.value : null,
-    nowMs,
-  );
-  const feed = parseWpCalendarToAirdropFeed(calendar.value, nowMs, eventDateByPostId);
-  if (feed.tge.length === 0) {
-    throw new Error('Empty AirdropAlert calendar payload');
-  }
-  return {
-    ...feed,
-    cards,
-    counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
-  };
+  return (await fetchAirdropAlertAirdropsParts(calendarUrl, nowMs, eventsUrl)).feed;
 }
 
 export async function fetchDropFeedPosts(src: SourceConfig, nowMs = Date.now()): Promise<ParsedFeedPost[]> {

@@ -6,6 +6,8 @@ import {
   cleanFeedSteps,
   dedupeFeedSources,
   dedupeStrings,
+  filterUncoveredSummaryBullets,
+  formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
   matchRadarCard,
@@ -65,6 +67,9 @@ function DropsDetailBody({
 }: BodyProps) {
   const [showBrief, setShowBrief] = useState(false);
   const title = formatProjectTitle(item.project);
+  const steps = cleanFeedSteps(item.steps);
+  const summary = formatFeedSummary(item.summary, title);
+  const summaryBullets = filterUncoveredSummaryBullets(summary.bullets, steps);
   const riskNotes = formatRiskReasons(item);
   const links = prepareFeedLinks(item, { max: 12 });
   const chains = dedupeStrings(item.chains);
@@ -104,8 +109,21 @@ function DropsDetailBody({
 
         {showBrief && renderedBrief && <pre className="brief-preview mono">{renderedBrief}</pre>}
 
+        {(summary.lead || summaryBullets.length > 0) && (
+          <div className="dlg-summary">
+            {summary.lead && <p className="dlg-description">{summary.lead}</p>}
+            {summaryBullets.length > 0 && (
+              <ul className="feed-bullets" aria-label="Summary details">
+                {summaryBullets.map(bullet => (
+                  <li key={bullet}>{bullet}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <DropsDetailMeta item={item} title={title} chains={chains} taskTypes={taskTypes} />
-        <DropsDetailSteps steps={cleanFeedSteps(item.steps)} />
+        <DropsDetailSteps steps={steps} />
         <DropsDetailLinks links={links} />
         <DropsDetailTimeline entries={buildFeedTimeline(item)} />
         <DropsDetailSafety level={item.risk.level} notes={riskNotes} />

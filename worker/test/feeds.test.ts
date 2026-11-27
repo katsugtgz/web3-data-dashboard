@@ -1448,9 +1448,13 @@ describe('structured curated enrichment (Pendle, Merkl, AirdropAlert active aird
     expect(morpho.apy).toBe('12.4% APR');
     expect(morpho.rewardPool).toBe('$8K/day');
     expect(morpho.description).toBe('[Robinhood Users Only] Supply to Steakhouse USDG V2 vault on Morpho (Robinhood Chain)');
-    // Deposit links are action links: only a host matching the protocol name counts as its verified domain.
+    // The verified card URL must be Morpho's qualifying site while the Robinhood deposit link stays on its task.
+    expect(morpho.url).toBe('https://app.morpho.org/vault');
     expect(morpho.verifiedDomain).toBe(true);
-    expect(feed.cards.find(c => c.n === 'Steakhouse')?.verifiedDomain).toBeUndefined();
+    expect(morpho.tasks?.[0]?.url).toBe('https://applink.robinhood.com/u/home');
+    const steakhouse = feed.cards.find(c => c.n === 'Steakhouse')!;
+    expect(steakhouse.url).toBe('https://applink.robinhood.com/u/home');
+    expect(steakhouse.verifiedDomain).toBeUndefined();
     expect(morpho.deadline).toBeUndefined();
 
     // Merkl's own app and quest platforms are aggregators, never a verified project domain.
@@ -1672,9 +1676,16 @@ describe('structured curated enrichment (Pendle, Merkl, AirdropAlert active aird
         expect(calendarOnly.tge.map(t => t.d)).toEqual(['2026-11-09', '2026-11-16']);
       }
 
-      // Calendar endpoint down: the source still fails even when events work, so prior cards are preserved.
+      // Calendar endpoint down while events succeed: active listings still publish.
       globalThis.fetch = (async (input: RequestInfo | URL) =>
         String(input).startsWith('https://aa.test/events') ? json(eventsPayload) : json({ code: 'rest_forbidden' }, 503)) as unknown as typeof fetch;
+      const eventsOnly = await fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events');
+      expect(eventsOnly.cards.map(c => c.n)).toEqual(['StandX']);
+      expect(eventsOnly.tge).toEqual([]);
+
+      // Both endpoints down (or calendar down with empty events): still rejects so prior slices can be reused.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ events: [] }) : json({ code: 'rest_forbidden' }, 503)) as unknown as typeof fetch;
       await expect(fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events')).rejects.toThrow(/HTTP 503/);
     } finally {
       globalThis.fetch = prevFetch;
@@ -1825,10 +1836,26 @@ describe('structured curated enrichment (Pendle, Merkl, AirdropAlert active aird
     expect(asterium.g).toBe('B');
     expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
 
-    // Malformed GraphQL envelopes never throw.
+      // Malformed GraphQL envelopes never throw.
     for (const malformed of [null, undefined, 42, 'x', {}, { data: null }, { data: { campaigns: null } }, { data: { campaigns: { list: 'x' } } }]) {
       expect(parseGalxeCampaignsToAirdropFeed(malformed, NOW).cards).toEqual([]);
     }
+
+    // Non-string optional rewardName / tokenSymbol values are ignored instead of throwing.
+    const malformedRewards = parseGalxeCampaignsToAirdropFeed(
+      {
+        data: {
+          campaigns: {
+            list: [
+              campaign({ id: 'GCbadrew1', rewardName: 42, tokenReward: { tokenSymbol: 'ARB' } }),
+              campaign({ id: 'GCbadrew2', type: 'Points', rewardName: { bad: true }, tokenReward: { tokenSymbol: 99 } }),
+            ],
+          },
+        },
+      },
+      NOW,
+    );
+    expect(malformedRewards.cards.map(c => c.rewardPool)).toEqual(['ARB rewards', 'Points']);
   });
 
   test('fetchGalxeCampaignsToAirdropFeed resolves with zero cards when nothing passes the gate but throws on GraphQL errors', async () => {

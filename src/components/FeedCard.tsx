@@ -7,6 +7,7 @@ import {
   dedupeFeedSources,
   dedupeStrings,
   describeDeadline,
+  filterUncoveredSummaryBullets,
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
@@ -67,14 +68,13 @@ function feedCardClass(isRisk: boolean, hasOgImage: boolean): string {
   return `cardx feed-card${isRisk ? ' is-risk' : ''}${hasOgImage ? ' has-og' : ''}`;
 }
 
-function FeedSummaryBlock({ summary, hasSteps }: { summary: FormattedSummary; hasSteps: boolean }) {
+function FeedSummaryBlock({ summary, steps }: { summary: FormattedSummary; steps: readonly string[] }) {
   const [expanded, setExpanded] = useState(false);
-  if (!summary.lead && summary.bullets.length === 0) return null;
+  const bullets = filterUncoveredSummaryBullets(summary.bullets, steps);
+  if (!summary.lead && bullets.length === 0) return null;
 
   const isLongLead = summary.lead.length > SUMMARY_COLLAPSE_THRESHOLD;
   const leadText = isLongLead && !expanded ? buildSummaryPreview(summary.lead, SUMMARY_PREVIEW_LIMIT) : summary.lead;
-  // Structured steps replace the bullets extracted from the summary so the card never lists them twice.
-  const bullets = hasSteps ? [] : summary.bullets;
 
   return (
     <div className="feed-summary-wrap">
@@ -296,7 +296,7 @@ export function FeedCard({
         {radarCard && <RadarPill card={radarCard} onOpen={onOpenRadar} />}
       </MetaPills>
 
-      <FeedSummaryBlock summary={summary} hasSteps={steps.length > 0} />
+      <FeedSummaryBlock summary={summary} steps={steps} />
 
       <FeedStepsPreview steps={steps} />
 

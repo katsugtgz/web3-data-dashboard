@@ -1,6 +1,7 @@
 -- Rich structured drop metadata and cached domain/OG/logo enrichment table.
 ALTER TABLE clusters ADD COLUMN reward_pool TEXT;
 ALTER TABLE clusters ADD COLUMN deadline TEXT;
+ALTER TABLE clusters ADD COLUMN deadline_updated_at INTEGER;
 ALTER TABLE clusters ADD COLUMN cost TEXT;
 ALTER TABLE clusters ADD COLUMN steps TEXT;
 ALTER TABLE clusters ADD COLUMN og_image TEXT;

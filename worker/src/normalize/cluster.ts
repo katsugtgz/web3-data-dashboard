@@ -170,7 +170,14 @@ export function buildFeedLogoIndex(
   const radarByTicker = new Map<string, RadarCardRef>();
 
   const indexRadar = (ref: RadarCardRef, dom: string | undefined): void => {
-    if (dom && !radarByDomain.has(dom)) radarByDomain.set(dom, ref);
+    if (dom) {
+      const existing = radarByDomain.get(dom);
+      if (!existing) {
+        radarByDomain.set(dom, ref);
+      } else if (existing.tvlUsd === undefined && ref.tvlUsd !== undefined) {
+        existing.tvlUsd = ref.tvlUsd;
+      }
+    }
     if (ref.ticker && !radarByTicker.has(ref.ticker)) radarByTicker.set(ref.ticker, ref);
     const nameKey = normalizeProjectKey(ref.name);
     if (nameKey.length >= 3 && !radarByName.has(nameKey)) radarByName.set(nameKey, ref);
@@ -1086,7 +1093,9 @@ export async function ingestPostIntoCluster(
       let postInserted = false;
       // Rich metadata rides on its own statement so a pre-0009 schema never fails the ingest.
       if (parsed.isRelevantDrop) {
-        await mergeClusterRichMeta(db, clusterId, parsed, { newestDeadlineWins: true });
+        await mergeClusterRichMeta(db, clusterId, parsed, {
+          deadlineAt: Number.isFinite(effectivePostedAt) ? effectivePostedAt : nowMs,
+        });
       }
       if (!existingPost) {
         const insertPost = await db
@@ -1327,8 +1336,9 @@ const MAX_STEPS = 4;
 
 /**
  * Merges rich metadata into a cluster row. Values fill only what is still
- * empty, and steps merge in first-seen order up to the cap. A fresh post lets
- * its deadline replace the stored one (extensions happen); an AI summary never
+ * empty, and steps merge in first-seen order up to the cap. When `deadlineAt`
+ * is supplied (post ingest), a newer post's deadline replaces an older one
+ * while an older post can still fill an empty field; an AI summary never
  * overrides what the parser already read. An AI caller also passes its row
  * lease so a lost lease never writes. Silently skipped on a pre-0009 schema
  * without the rich columns; the cluster write itself already succeeded.
@@ -1337,27 +1347,52 @@ export async function mergeClusterRichMeta(
   db: D1Database,
   clusterId: string,
   rich: RichDropMeta,
-  opts: { newestDeadlineWins?: boolean; leaseUntil?: number } = {},
+  opts: { deadlineAt?: number; newestDeadlineWins?: boolean; leaseUntil?: number } = {},
 ): Promise<void> {
-  if (!rich.rewardPool && !rich.deadline && !rich.cost && !rich.steps?.length) return;
+  const dedupedSteps = rich.steps?.length ? [...new Set(rich.steps)].slice(0, MAX_STEPS) : [];
+  if (!rich.rewardPool && !rich.deadline && !rich.cost && dedupedSteps.length === 0) return;
   const values: unknown[] = [
     clusterId,
     rich.rewardPool ?? null,
     rich.deadline ?? null,
     rich.cost ?? null,
-    JSON.stringify(rich.steps ?? []),
+    JSON.stringify(dedupedSteps),
   ];
-  if (opts.leaseUntil !== undefined) values.push(opts.leaseUntil);
+  const hasDeadlineAt = typeof opts.deadlineAt === 'number' && Number.isFinite(opts.deadlineAt);
+  let deadlineAtParam = '';
+  if (hasDeadlineAt) {
+    values.push(opts.deadlineAt);
+    deadlineAtParam = `?${values.length}`;
+  }
+  let leaseClause = '';
+  if (opts.leaseUntil !== undefined) {
+    values.push(opts.leaseUntil);
+    leaseClause = ` AND ai_retry_after = ?${values.length}`;
+  }
+  const deadlineClause = hasDeadlineAt
+    ? `deadline = CASE
+         WHEN ?3 IS NULL THEN NULLIF(clusters.deadline, '')
+         WHEN NULLIF(clusters.deadline, '') IS NULL THEN ?3
+         WHEN clusters.deadline_updated_at IS NULL OR ${deadlineAtParam} >= clusters.deadline_updated_at THEN ?3
+         ELSE clusters.deadline
+       END,
+       deadline_updated_at = CASE
+         WHEN ?3 IS NULL THEN clusters.deadline_updated_at
+         WHEN NULLIF(clusters.deadline, '') IS NULL THEN ${deadlineAtParam}
+         WHEN clusters.deadline_updated_at IS NULL OR ${deadlineAtParam} >= clusters.deadline_updated_at THEN ${deadlineAtParam}
+         ELSE clusters.deadline_updated_at
+       END`
+    : `deadline = ${
+        opts.newestDeadlineWins
+          ? "COALESCE(?3, NULLIF(clusters.deadline, ''))"
+          : "COALESCE(NULLIF(clusters.deadline, ''), ?3, clusters.deadline)"
+      }`;
   try {
     await db
       .prepare(
         `UPDATE clusters SET
            reward_pool = COALESCE(NULLIF(clusters.reward_pool, ''), ?2, clusters.reward_pool),
-           deadline = ${
-             opts.newestDeadlineWins
-               ? "COALESCE(?3, NULLIF(clusters.deadline, ''))"
-               : "COALESCE(NULLIF(clusters.deadline, ''), ?3, clusters.deadline)"
-           },
+           ${deadlineClause},
            cost = COALESCE(NULLIF(clusters.cost, ''), ?4, clusters.cost),
            steps = CASE
                    WHEN json_valid(clusters.steps) AND json_array_length(clusters.steps) > 0
@@ -1373,7 +1408,7 @@ export async function mergeClusterRichMeta(
                    )
                    ELSE ?5
                  END
-         WHERE id = ?1${opts.leaseUntil === undefined ? '' : ' AND ai_retry_after = ?6'}`,
+         WHERE id = ?1${leaseClause}`,
       )
       .bind(...values)
       .run();
@@ -1415,20 +1450,27 @@ async function loadClusterRichMeta(db: D1Database, clusterIds: string[]): Promis
   return map;
 }
 
+// 99 domains + 1 expires_at cutoff stays within D1's 100-parameter bind limit.
+const DOMAIN_META_BIND_CHUNK = 99;
+
 /** Unexpired cached enrichment rows for a page of domains; empty when the table is missing. */
 async function loadDomainMeta(db: D1Database, domains: string[]): Promise<Map<string, DomainMetaRow>> {
   const map = new Map<string, DomainMetaRow>();
   if (domains.length === 0) return map;
+  const nowMs = Date.now();
   try {
-    const res = await db
-      .prepare(
-        `SELECT domain, logo_url, og_image, og_title, og_description, tvl_usd
-         FROM domain_meta
-         WHERE domain IN (${bindList(domains)}) AND expires_at > ?${domains.length + 1}`,
-      )
-      .bind(...domains, Date.now())
-      .all<DomainMetaRow>();
-    for (const row of res.results ?? []) map.set(row.domain.toLowerCase(), row);
+    for (let i = 0; i < domains.length; i += DOMAIN_META_BIND_CHUNK) {
+      const chunk = domains.slice(i, i + DOMAIN_META_BIND_CHUNK);
+      const res = await db
+        .prepare(
+          `SELECT domain, logo_url, og_image, og_title, og_description, tvl_usd
+           FROM domain_meta
+           WHERE domain IN (${bindList(chunk)}) AND expires_at > ?${chunk.length + 1}`,
+        )
+        .bind(...chunk, nowMs)
+        .all<DomainMetaRow>();
+      for (const row of res.results ?? []) map.set(row.domain.toLowerCase(), row);
+    }
   } catch {
     // Pre-0009 schema (no domain_meta table): serve the feed without enrichment.
   }
@@ -1697,9 +1739,7 @@ export async function queryFeed(
       const reconciledRisk = reconcileSafetyReasons({
         level: c.risk_level,
         reasons: storedReasons,
-        domain: cleanDomain,
         cleanedLinks: selectedUrls,
-        knownDomains: allKnownDomains,
       });
 
       const summary =

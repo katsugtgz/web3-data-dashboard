@@ -47,8 +47,19 @@ class Stmt {
 
   /** Synchronous on purpose: batch() must not yield between BEGIN and COMMIT. */
   runSync() {
-    const info = this.sqlite.query(this.sql).run(...this.values());
-    return d1Result(info.changes, Number(info.lastInsertRowid));
+    const query = this.sqlite.query(this.sql);
+    const params = this.values();
+    if (query.columnNames.length > 0) {
+      const before = (this.sqlite.query('SELECT total_changes() AS n').get() as { n: number }).n;
+      const results = query.all(...params);
+      const after = this.sqlite
+        .query('SELECT total_changes() AS n, last_insert_rowid() AS id')
+        .get() as { n: number; id: number | bigint };
+      const changes = after.n - before;
+      return d1Result(changes, changes > 0 ? Number(after.id) : undefined, results);
+    }
+    const info = query.run(...params);
+    return d1Result(info.changes, Number(info.lastInsertRowid), []);
   }
 
   async run() {

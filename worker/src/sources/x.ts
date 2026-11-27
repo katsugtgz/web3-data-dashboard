@@ -374,17 +374,18 @@ export function parseXRssTimeline(
       .replace(/\n{2,}/g, '\n')
       .trim();
     const rawIpSourceText = (plainDesc || rawTitle).trim();
-    const rawIpUrls = extractSuspiciousRawIpUrls(rawIpSourceText, rawIpHrefs).filter(u => !isMirrorUrl(u));
+    const rawIpUrls = extractSuspiciousRawIpUrls(rawIpSourceText, rawIpHrefs);
 
     const cleanedDesc = stripMirrorTokens(plainDesc);
     const cleanedTitle = stripMirrorTokens(rawTitle);
     const text = (cleanedDesc || cleanedTitle).trim();
     if (!text) continue;
 
-    const allRawIpUrls =
+    const allRawIpUrls = (
       !cleanedDesc && plainDesc
         ? [...new Set([...rawIpUrls, ...extractSuspiciousRawIpUrls(rawTitle)])]
-        : rawIpUrls;
+        : rawIpUrls
+    ).filter(u => !isMirrorUrl(u));
     const cleanUrls = extractUrls(text, hrefs).filter(u => !isMirrorUrl(u));
     const urls = [...cleanUrls, ...allRawIpUrls];
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AirdropFeed } from '../shared/types';
-import { readSnapshot, upsertSnapshot } from '../worker/src/lib/db';
+import { markSnapshotError, readSnapshot, upsertSnapshot } from '../worker/src/lib/db';
 import { openDb, type RadarDb } from './db';
 import {
   ENRICH_CONCURRENCY,
@@ -300,6 +300,13 @@ describe('parseHeadMeta', () => {
       icon: null,
     });
   });
+
+  test('falls back to the highest-ranked valid icon when apple-touch-icon has an unsupported URL', () => {
+    const html =
+      '<link rel="apple-touch-icon" href="data:image/png;base64,AAAA">' +
+      '<link rel="icon" href="/favicon.png" sizes="32x32">';
+    expect(parseHeadMeta(html, base).icon).toBe('https://app.zap.example/favicon.png');
+  });
 });
 
 describe('fetchHead', () => {
@@ -441,6 +448,20 @@ describe('parseHeadResponse', () => {
     expect(big.html).toHaveLength(MAX_HEAD_BYTES);
     expect(() => parseHeadResponse(Buffer.from('HTTP/1.1 200 OK'))).toThrow('truncated');
   });
+
+  test('skips interim 1xx responses such as 103 Early Hints before reading the final 200 response', () => {
+    const html = '<head><meta property="og:title" content="Hinted"></head>';
+    const raw = Buffer.from(
+      ['HTTP/1.1 103 Early Hints', 'Link: </app.css>; rel=preload; as=style'].join(CRLF) +
+        CRLF +
+        CRLF +
+        ['HTTP/1.1 200 OK', 'Content-Type: text/html; charset=utf-8'].join(CRLF) +
+        CRLF +
+        CRLF +
+        html,
+    );
+    expect(parseHeadResponse(raw)).toEqual({ status: 200, location: null, html });
+  });
 });
 
 describe('enrichDomainsBatch', () => {
@@ -567,6 +588,39 @@ describe('enrichDomainsBatch', () => {
     db.close();
   });
 
+  test('a concurrent DefiLlama re-seed during an HTML fetch is preserved at commit time', async () => {
+    const db = freshDb();
+    await seedDefiLlamaDomains(db.d1, PROTOCOLS, NOW);
+    const newLogo = 'https://icons.llama.fi/zap-v2.png';
+    const metas = await enrichDomainsBatch(db.d1, ['zap.example'], {
+      lookup: async () => [PUBLIC_IP],
+      request: async () => {
+        // Simulate heavy ingest updating Layer 1 while the page fetch is in flight.
+        await seedDefiLlamaDomains(
+          db.d1,
+          [{ ...PROTOCOLS[0]!, logo: newLogo, tvl: 900_000_000, category: 'Perps' }],
+          NOW + HOUR,
+        );
+        return { status: 200, html: ZAP_HTML };
+      },
+      nowMs: NOW,
+    });
+    expect(metas[0]).toMatchObject({
+      logoUrl: newLogo,
+      tvlUsd: 900_000_000,
+      category: 'Perps',
+      ogImage: 'https://zap.example/img/og.png',
+      source: 'html',
+      error: null,
+    });
+    expect(db.sqlite.query("SELECT logo_url, tvl_usd, category FROM domain_meta WHERE domain = 'zap.example'").get()).toEqual({
+      logo_url: newLogo,
+      tvl_usd: 900_000_000,
+      category: 'Perps',
+    });
+    db.close();
+  });
+
   test.each(['t.co', 'localhost', '10.0.0.1', 'bit.ly', 'github.com'])('%s is never resolved or fetched', async domain => {
     const db = freshDb();
     const net = fakeNet();
@@ -681,6 +735,24 @@ describe('enrichActiveClusters', () => {
     expect(idle.lookups).toEqual(['zap.example', 'second.example', 'low.example']);
     db.close();
   });
+
+  test('backfills a new cluster from fresh cached domain_meta without making a network request', async () => {
+    const db = await seededDb();
+    const net = fakeNet({ 'https://zap.example/': { html: ZAP_HTML } });
+    await enrichActiveClusters(db.d1, NOW, 20, { ...net });
+
+    insertCluster(db, 'late-zap', 'zap.example', 75);
+    const idle = fakeNet();
+    expect(await enrichActiveClusters(db.d1, NOW + HOUR, 20, { ...idle })).toEqual({ selected: 1, errors: 0 });
+    expect(idle.lookups).toEqual([]);
+    expect(clusterMeta(db, 'late-zap')).toEqual({
+      og_image: 'https://zap.example/img/og.png',
+      og_title: 'Zap Protocol & Earn',
+      og_description: 'Earn points on Zap.',
+      tvl_usd: 500_000_000,
+    });
+    db.close();
+  });
 });
 
 describe('enrichAirdropsSnapshot', () => {
@@ -749,6 +821,51 @@ describe('enrichAirdropsSnapshot', () => {
     });
     expect(updated.cards[1]?.img).toBe('');
     expect(updated.cards[1]?.ogImage).toBeUndefined();
+    db.close();
+  });
+
+  test('fetches metadata for cards that already have images but lack description or TVL, and preserves failed snapshot status', async () => {
+    const db = openDb(':memory:');
+    const feed: AirdropFeed = {
+      cards: [
+        {
+          r: 1,
+          n: 'Zap',
+          id: 'asso:zap',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          img: ZAP_LOGO,
+          ogImage: 'https://zap.example/existing-og.png',
+          f: '$10M',
+          tk: '1/1',
+          h: 1,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Use Zap', ty: 'liquidity', c: '$0', m: '—' },
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://app.zap.example/farm',
+          source: 'ASSO7878',
+        },
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW - 1000,
+    };
+    await upsertSnapshot(db.d1, 'airdrops', feed, NOW - 1000);
+    await markSnapshotError(db.d1, 'airdrops', new Error('upstream 503'), NOW - 500);
+
+    const net = fakeNet({ 'https://zap.example/': { html: ZAP_HTML } });
+    const res = await enrichAirdropsSnapshot(db.d1, NOW, 10, { ...net });
+    expect(res).toEqual({ enriched: 1, fetched: 1, errors: 0 });
+    expect(net.lookups).toEqual(['zap.example']);
+
+    const stored = await readSnapshot(db.d1, 'airdrops');
+    expect(stored?.ok).toBe(0);
+    expect(stored?.error).toBe('upstream 503');
+    const updated = JSON.parse(stored!.body) as AirdropFeed;
+    expect(updated.cards[0]?.description).toBe('Earn points on Zap.');
     db.close();
   });
 });
