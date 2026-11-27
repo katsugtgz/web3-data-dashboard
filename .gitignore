@@ -11,3 +11,6 @@ srv.log
 body.tmp
 .lighthouseci
 .wrangler
+.env
+.env.local
+data/*.sqlite*

@@ -47,6 +47,13 @@ export interface Card {
   sub: [number, number, number | null];
   url: string | null;
   source?: string;
+  ogImage?: string | null;
+  description?: string;
+  tvlUsd?: number;
+  apy?: string;
+  deadline?: string;
+  rewardPool?: string;
+  verifiedDomain?: boolean;
 }
 
 export interface Tge {
@@ -161,9 +168,34 @@ export interface FeedItem {
   sourceCount: number;
   score: number;
   risk: { level: RiskLevel; reasons: string[] };
+  verifiedDomain?: boolean;
+  rewardPool?: string;
+  deadline?: string;
+  cost?: string;
+  steps?: string[];
+  ogImage?: string | null;
+  ogTitle?: string;
+  ogDescription?: string;
+  tvlUsd?: number;
+  funding?: string;
+  radarId?: string;
   surf?: { tier?: Grade; cardRank?: number };
   firstSeen: number;
   lastSeen: number;
+}
+
+export interface DomainMeta {
+  domain: string;
+  logoUrl?: string | null;
+  ogImage?: string | null;
+  ogTitle?: string | null;
+  ogDescription?: string | null;
+  tvlUsd?: number | null;
+  category?: string | null;
+  source: 'defillama' | 'coingecko' | 'html' | 'curated';
+  fetchedAt: number;
+  expiresAt: number;
+  error?: string | null;
 }
 
 export interface SourceHealth {

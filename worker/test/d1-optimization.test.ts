@@ -389,7 +389,28 @@ describe('migration 0005 query plans', () => {
       .first<{ name: string }>();
     expect(dropped).toBeNull();
 
-    // 1. AI backlog query
+    // 1. AI backlog query, as issued by postProcessIngest: the literal attempt cap,
+    //    is_drop filter, and enabled-source join are what make the partial
+    //    index clusters_ai_backlog usable (its WHERE needs every one of them).
+    assertIndexedNoTempBTree(
+      explain(
+        `SELECT c.id, c.project, c.risk_level FROM clusters c
+         WHERE c.summary_source = 'rule'
+           AND c.risk_level != 'risk'
+           AND c.ai_attempts < 3
+           AND c.ai_retry_after <= ?1
+           AND (c.is_drop IS NULL OR c.is_drop = 1)
+           AND EXISTS (SELECT 1 FROM posts p JOIN sources s ON s.id = p.source_id WHERE p.cluster_id = c.id AND s.enabled = 1)
+         ORDER BY c.score DESC, c.last_seen DESC
+         LIMIT ?2`,
+        [1000, 10],
+      ),
+      [/clusters_ai_backlog/, /posts_cluster/],
+    );
+
+    // Dropping any one of those predicates leaves the partial index unusable and
+    // falls back to a full scan of clusters_feed_score: the guard below is what
+    // keeps the production query in sync with the index.
     assertIndexedNoTempBTree(
       explain(
         `SELECT c.id, c.project, c.risk_level
@@ -403,7 +424,7 @@ describe('migration 0005 query plans', () => {
          LIMIT ?2`,
         [1000, 10],
       ),
-      [/clusters_ai_backlog/, /posts_cluster/],
+      [/clusters_feed_score/, /posts_cluster/],
     );
 
     // 2. queryFeed score sort (risk included)

@@ -550,9 +550,7 @@ export function finalizeSnapshotCluster(
   const safety = reconcileSafetyReasons({
     level: rawSafety.level,
     reasons: rawSafety.reasons,
-    domain: acc.domain,
     cleanedLinks,
-    knownDomains: ctx.allKnownDomains,
   });
   const taskTypes = acc.taskTypes.size > 1
     ? [...acc.taskTypes].sort((a, b) => a.localeCompare(b)).filter(t => t !== 'other')
@@ -569,6 +567,7 @@ export function finalizeSnapshotCluster(
     { project: acc.project, domain: acc.domain, ticker: acc.ticker, riskLevel: safety.level },
     ctx.logoIndex,
   );
+  const verifiedDomain = !acc.domain || ctx.allKnownDomains.has(acc.domain.toLowerCase());
   return {
     id: acc.id,
     project: acc.project,
@@ -589,6 +588,7 @@ export function finalizeSnapshotCluster(
     sourceCount: acc.sourceIds.size,
     score,
     risk: safety as { level: RiskLevel; reasons: string[] },
+    verifiedDomain,
     ...(acc.surf ? { surf: acc.surf } : {}),
     firstSeen: acc.firstSeen,
     lastSeen: acc.lastSeen,

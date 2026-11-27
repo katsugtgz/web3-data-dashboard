@@ -172,13 +172,17 @@ interface MainContentProps {
     loading: boolean;
     failed: boolean;
     logoIndex?: ProjectLogoIndex;
+    radarIndex?: ReadonlyMap<string, Card>;
     searchRef: RefObject<HTMLInputElement | null>;
     onApplyPending: () => void;
+    onSelectDetail: (item: FeedItem) => void;
     onCopyBrief: (item: FeedItem) => void;
+    onOpenRadar: (card: Card) => void;
   };
   airdropsProps: {
     filters: AirdropFiltersState;
     cardCount: number;
+    cards: readonly Card[];
     tgeItems: Tge[];
     fetchedAt: number | null;
     hasFeed: boolean;

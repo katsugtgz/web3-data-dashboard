@@ -1,12 +1,18 @@
 import { describe, expect, test } from 'bun:test';
+import { fmtIsoDate } from '../src/lib/format';
 import { createTestD1, FORBIDDEN_CJK_RE } from './helpers';
 import { queryFeed } from '../src/normalize/cluster';
 import {
+  fetchAirdropAlertAirdrops,
   fetchDropFeedPosts,
+  fetchGalxeCampaignsToAirdropFeed,
   fetchMerklOpportunities,
   fetchPendlePoints,
   fetchWpCalendarAirdrops,
+  isCleanProjectDomain,
+  parseAirdropAlertEvents,
   parseGalxeCampaigns,
+  parseGalxeCampaignsToAirdropFeed,
   parseMerklOpportunities,
   parsePendlePoints,
   parseRssOrAtomXml,
@@ -1308,5 +1314,566 @@ describe('pollFeedBatch D1 ingestion, TTL, backoff, and sources_poll index', () 
       .all<{ id: string }>();
     expect(post42Rows.results).toHaveLength(1);
     expect(post42Rows.results[0].id).toBe(legacyId);
+  });
+});
+
+describe('structured curated enrichment (Pendle, Merkl, AirdropAlert active airdrops, Galxe trending)', () => {
+  test('Pendle cards carry structured apy, tvlUsd, deadline and description from upstream market data', () => {
+    const feed = parsePendlePoints(
+      {
+        markets: [
+          {
+            name: 'sUSDe',
+            address: '0xa',
+            protocol: 'Ethena',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 25_000_000, impliedApy: 0.145 },
+          },
+          {
+            name: 'USDe',
+            address: '0xb',
+            protocol: 'Ethena',
+            chainId: 8453,
+            expiry: '2027-06-24T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 5_000_000, impliedApy: 0.08 },
+          },
+          {
+            name: 'NoApyPool',
+            address: '0xc',
+            protocol: 'NoApyProto',
+            chainId: 1,
+            expiry: '2027-03-25T00:00:00.000Z',
+            categoryIds: ['points'],
+            details: { liquidity: 9_000_000, impliedApy: Number.NaN },
+          },
+        ],
+      },
+      NOW,
+    );
+
+    const ethena = feed.cards.find(c => c.n === 'Ethena')!;
+    expect(ethena.tvlUsd).toBe(30_000_000);
+    expect(ethena.apy).toBe('14.50%');
+    // Earliest expiry across the card's pools.
+    expect(ethena.deadline).toBe('2027-03-25');
+    expect(ethena.description).toContain('Ethena');
+    // Pendle market links are aggregator URLs, so no project domain can be verified.
+    expect(ethena.verifiedDomain).toBeUndefined();
+    expect(ethena.rewardPool).toBeUndefined();
+
+    const noApy = feed.cards.find(c => c.n === 'NoApyProto')!;
+    expect(noApy.tvlUsd).toBe(9_000_000);
+    expect(noApy.apy).toBeUndefined();
+    expect(noApy.deadline).toBe('2027-03-25');
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+  });
+
+  test('Merkl cards carry structured apy, tvlUsd, daily reward pool, description and verifiedDomain for clean deposit URLs', () => {
+    const feed = parseMerklOpportunities(
+      [
+        // Live Merkl data shape: the top Morpho vault is a Robinhood-only deep link, not Morpho's own site.
+        {
+          id: 'm0',
+          name: '[Robinhood Users Only] Supply to Steakhouse USDG V2 vault on Morpho',
+          chain: { name: 'Robinhood Chain' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          action: 'SUPPLY',
+          status: 'LIVE',
+          tvl: 541_980_000,
+          apr: 3.5,
+          depositUrl: 'https://applink.robinhood.com/u/home',
+        },
+        {
+          id: 'm1',
+          name: 'Supply USDC on Morpho Base',
+          chain: { name: 'Base' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          action: 'LEND',
+          status: 'LIVE',
+          tvl: 18_500_000,
+          apr: 12.4,
+          dailyRewards: 5000,
+          depositUrl: 'https://app.morpho.org/vault?ref=merkl',
+        },
+        {
+          id: 'm2',
+          name: 'Supply USDC on Morpho Ethereum',
+          chain: { name: 'Ethereum' },
+          protocol: { id: 'morpho', name: 'Morpho' },
+          action: 'LEND',
+          status: 'LIVE',
+          tvl: 11_500_000,
+          apr: 8.042,
+          dailyRewards: 2500.5,
+          depositUrl: 'https://app.morpho.org/eth',
+        },
+        {
+          id: 'm3',
+          name: 'Aggregator wrapped pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'agg', name: 'AggregatorWrapped' },
+          status: 'LIVE',
+          tvl: 5_000_000,
+          depositUrl: 'https://app.merkl.xyz/opportunities/x',
+        },
+        {
+          id: 'm4',
+          name: 'Quest platform pool',
+          chain: { name: 'Base' },
+          protocol: { id: 'quest', name: 'QuestPlatformProto' },
+          status: 'LIVE',
+          tvl: 3_000_000,
+          dailyRewards: -5,
+          depositUrl: 'https://galxe.com/quest/x',
+        },
+        // A third-party app with no protocol-matching deposit link never verifies.
+        {
+          id: 'm5',
+          name: 'Supply to Steakhouse USDG V2 vault',
+          chain: { name: 'Ethereum' },
+          protocol: { id: 'steakhouse', name: 'Steakhouse' },
+          status: 'LIVE',
+          tvl: 541_980_000,
+          depositUrl: 'https://applink.robinhood.com/u/home',
+        },
+      ],
+      NOW,
+    );
+
+    const morpho = feed.cards.find(c => c.n === 'Morpho')!;
+    expect(morpho.tvlUsd).toBe(571_980_000);
+    expect(morpho.apy).toBe('12.4% APR');
+    expect(morpho.rewardPool).toBe('$8K/day');
+    expect(morpho.description).toBe('[Robinhood Users Only] Supply to Steakhouse USDG V2 vault on Morpho (Robinhood Chain)');
+    // The verified card URL must be Morpho's qualifying site while the Robinhood deposit link stays on its task.
+    expect(morpho.url).toBe('https://app.morpho.org/vault');
+    expect(morpho.verifiedDomain).toBe(true);
+    expect(morpho.tasks?.[0]?.url).toBe('https://applink.robinhood.com/u/home');
+    const steakhouse = feed.cards.find(c => c.n === 'Steakhouse')!;
+    expect(steakhouse.url).toBe('https://applink.robinhood.com/u/home');
+    expect(steakhouse.verifiedDomain).toBeUndefined();
+    expect(morpho.deadline).toBeUndefined();
+
+    // Merkl's own app and quest platforms are aggregators, never a verified project domain.
+    const aggregator = feed.cards.find(c => c.n === 'AggregatorWrapped')!;
+    expect(aggregator.verifiedDomain).toBeUndefined();
+    const quest = feed.cards.find(c => c.n === 'QuestPlatformProto')!;
+    expect(quest.verifiedDomain).toBeUndefined();
+    expect(quest.apy).toBeUndefined();
+    expect(quest.rewardPool).toBeUndefined();
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+  });
+
+  test('isCleanProjectDomain accepts only https project sites, rejecting platforms, aggregators, shorteners and raw IPs', () => {
+    expect(isCleanProjectDomain('https://app.morpho.org/vault', 'Morpho')).toBe(true);
+    expect(isCleanProjectDomain('https://variational.io', 'Variational')).toBe(true);
+    expect(isCleanProjectDomain('https://x.com/variational', 'Variational')).toBe(false);
+    expect(isCleanProjectDomain('https://defillama.com/protocol/x', 'X')).toBe(false);
+    expect(isCleanProjectDomain('https://galxe.com/quest/x', 'X')).toBe(false);
+    expect(isCleanProjectDomain('https://app.pendle.finance/trade/markets/0x1', 'Ethena')).toBe(false);
+    // Pendle itself is a real protocol on its own card.
+    expect(isCleanProjectDomain('https://app.pendle.finance/', 'Pendle')).toBe(true);
+    expect(isCleanProjectDomain('https://bit.ly/abc', 'X')).toBe(false);
+    expect(isCleanProjectDomain('http://insecure.xyz', 'X')).toBe(false);
+    expect(isCleanProjectDomain('https://127.0.0.1/x', 'X')).toBe(false);
+    expect(isCleanProjectDomain(null, 'X')).toBe(false);
+    expect(isCleanProjectDomain('', 'X')).toBe(false);
+  });
+
+  test('AirdropAlert active airdrops: listing-backed calendar events become cards with real deadlines, skipping free-form, stale, undated and foreign-URL rows', () => {
+    // Field names mirror the live /aa-cal/v1/events payload.
+    const events = {
+      y: 2026,
+      m: 11,
+      radius: 2,
+      events: [
+        {
+          id: 'guide-327526',
+          source: 'guide',
+          d: '2026-10-02',
+          precision: 'exact',
+          type: 'guide',
+          title: 'TastyCo airdrop guide live',
+          p: 'TastyCo',
+          url: 'https://airdropalert.com/airdrops/tastyco/',
+          cats: ['defi', 'earn-crypto', 'featured', 'new', 'verified'],
+          status: 'confirmed',
+          time: '',
+          html: '',
+          listing: 327526,
+        },
+        {
+          id: 'manual-330146',
+          source: 'manual',
+          precision: 'quarter',
+          type: 'tge',
+          title: 'TastyCo TGE expected',
+          p: 'TastyCo',
+          url: 'https://airdropalert.com/airdrops/tastyco/',
+          cats: [],
+          status: 'estimated',
+          time: '',
+          html: 'Targeted.',
+          listing: 327526,
+          q: { y: 2026, q: 4, label: 'Q4 2026', months: ['2026-10', '2026-11', '2026-12'] },
+        },
+        {
+          id: 'manual-330158',
+          source: 'manual',
+          precision: 'exact',
+          type: 'claimstart',
+          title: 'StandX claim opens',
+          p: 'StandX',
+          url: '',
+          cats: [],
+          status: 'confirmed',
+          time: '',
+          html: '<!-- wp:paragraph -->\n<p>Claims run to 2026-12-31.</p>\n<!-- /wp:paragraph -->',
+          listing: 326000,
+          hasGuide: true,
+          d: '2026-11-01',
+        },
+        {
+          id: 'manual-330163',
+          source: 'manual',
+          precision: 'exact',
+          type: 'claimend',
+          title: 'StandX claim ends',
+          p: 'StandX',
+          url: 'https://airdropalert.com/airdrops/standx/',
+          cats: [],
+          status: 'confirmed',
+          time: '',
+          html: 'End of claim window.',
+          listing: 326000,
+          hasGuide: true,
+          d: '2026-12-31',
+        },
+        // Free-form milestone without a listing identity (listing = 0, url empty).
+        { id: 'manual-330161', source: 'manual', precision: 'exact', type: 'claimend', title: 'Aster claim ends', p: 'Aster claim ends', url: '', cats: [], status: 'confirmed', time: '', html: 'Stage 6 claim window ends.', listing: 0, d: '2026-11-28' },
+        // Month precision without any resolvable date.
+        { id: 'manual-330139', source: 'manual', precision: 'month', type: 'tge', title: 'Ducat TGE expected', p: 'Ducat', url: 'https://airdropalert.com/airdrops/ducat/', cats: [], status: 'estimated', time: '', html: '', listing: 320957, hasGuide: true, q: null },
+        // Older than the active window.
+        { id: 'manual-330142', source: 'manual', precision: 'exact', type: 'distribution', title: 'Kinetiq distribution', p: 'Kinetiq', url: 'https://airdropalert.com/airdrops/kinetiq/', cats: [], status: 'confirmed', time: '', html: 'Last distribution.', listing: 311316, hasGuide: true, d: '2026-08-01' },
+        // Listing URL must stay on airdropalert.com.
+        { id: 'manual-bad-1', source: 'manual', precision: 'exact', type: 'claimstart', title: 'Phish claim opens', p: 'Phish', url: 'https://evil.example/airdrops/phish/', cats: [], status: 'confirmed', time: '', html: '', listing: 999001, d: '2026-12-05' },
+        // Malformed rows.
+        { id: 'manual-bad-2', source: 'manual', precision: 'exact', type: 'claimstart', title: 'Bad', p: { nested: true }, url: 'https://airdropalert.com/airdrops/bad/', cats: [], status: 'confirmed', time: '', html: '', listing: 'abc', d: '2026-12-05' },
+        { id: 'manual-bad-3', source: 'manual', precision: 'exact', type: 'claimstart', title: 'Bad date', p: 'BadDate', url: 'https://airdropalert.com/airdrops/baddate/', cats: [], status: 'confirmed', time: '', html: '', listing: 999002, d: 'next tuesday' },
+        null,
+        42,
+        'not-an-event',
+      ],
+    };
+
+    const feed = parseAirdropAlertEvents(events, NOW);
+    expect(feed.cards.map(c => c.n)).toEqual(['TastyCo', 'StandX']);
+    expect(feed.counts).toEqual({ active: 2, preToken: 2 });
+    expect(feed.tge).toEqual([]);
+
+    const tasty = feed.cards[0];
+    expect(tasty.id).toBe('airdropalert:327526');
+    expect(tasty.source).toBe('AirdropAlert');
+    // Listing pages live on airdropalert.com, which is a platform, not the project site.
+    expect(tasty.url).toBeNull();
+    expect(tasty.verifiedDomain).toBeUndefined();
+    expect(tasty.deadline).toBe('Q4 2026');
+    expect(tasty.description).toBe('Targeted.');
+    expect(tasty.b).toEqual(['live', 'early']);
+    // A verified listing ranks above an unverified one.
+    expect(tasty.g).toBe('A');
+    expect(tasty.tasks?.map(t => t.title)).toEqual(['TastyCo TGE expected · Q4 2026']);
+    // Links go through cleanUrl, which drops the trailing slash.
+    expect(tasty.tasks?.[0].url).toBe('https://airdropalert.com/airdrops/tastyco');
+    expect(tasty.tk).toBe('1/1');
+
+    const standx = feed.cards[1];
+    expect(standx.id).toBe('airdropalert:326000');
+    // The next upcoming milestone is the deadline; the past "claim opens" event only feeds the description.
+    expect(standx.deadline).toBe('2026-12-31');
+    expect(standx.description).toBe('Claims run to 2026-12-31. End of claim window.');
+    expect(standx.tasks?.map(t => t.title)).toEqual(['StandX claim ends · 2026-12-31']);
+    expect(standx.g).toBe('B');
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+
+    for (const malformed of [null, undefined, 42, 'events', [], {}, { events: null }, { events: 'nope' }, { events: [[]] }]) {
+      const empty = parseAirdropAlertEvents(malformed, NOW);
+      expect(empty.cards).toEqual([]);
+      expect(empty.counts).toEqual({ active: 0, preToken: 0 });
+    }
+  });
+
+  test('fetchAirdropAlertAirdrops merges the calendar rail with active airdrop cards, fixes TGE dates via event ids, and treats the events endpoint as best-effort', async () => {
+    const prevFetch = globalThis.fetch;
+    const calendarPayload = [
+      {
+        id: 330163,
+        date_gmt: '2026-11-09T12:42:48',
+        title: { rendered: 'StandX claim ends' },
+        content: { rendered: '<p>End of claim window.</p>' },
+        link: 'https://airdropalert.com/?aa_calendar_event=standx-claim-ends',
+      },
+      {
+        id: 330576,
+        date_gmt: '2026-11-16T15:28:13',
+        title: { rendered: 'Treehouse S2 Claim' },
+        content: { rendered: '<p>Season 2 claim window closes.</p>' },
+        link: 'https://airdropalert.com/?aa_calendar_event=treehouse-s2-claim',
+      },
+    ];
+    const eventsPayload = {
+      events: [
+        // Same WP post id as the calendar entry (event id = `manual-<postId>`), real date 2027-03-31.
+        {
+          id: 'manual-330163',
+          source: 'manual',
+          precision: 'exact',
+          type: 'claimend',
+          title: 'StandX claim ends',
+          p: 'StandX',
+          url: 'https://airdropalert.com/airdrops/standx/',
+          cats: [],
+          status: 'confirmed',
+          time: '',
+          html: 'End of claim window.',
+          listing: 326000,
+          hasGuide: true,
+          d: '2027-03-31',
+        },
+      ],
+    };
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      const requested: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requested.push(url);
+        return json(url.startsWith('https://aa.test/events') ? eventsPayload : calendarPayload);
+      }) as unknown as typeof fetch;
+
+      const feed = await fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events?y=2026&m=11&radius=2');
+      expect(requested).toEqual(['https://aa.test/calendar', 'https://aa.test/events?y=2026&m=11&radius=2']);
+      expect(feed.cards.map(c => c.n)).toEqual(['StandX']);
+      expect(feed.counts).toEqual({ active: 1, preToken: 1 });
+      // Calendar `date_gmt` is the publish time; the joined event supplies the real event date.
+      expect(feed.tge.map(t => [t.n, t.d])).toEqual([
+        ['StandX claim ends', '2027-03-31'],
+        ['Treehouse S2 Claim', '2026-11-16'],
+      ]);
+
+      // Events endpoint down or malformed: the calendar rail still ships with zero cards.
+      for (const broken of [() => json({ code: 'rest_forbidden' }, 503), () => new Response('<html>blocked</html>', { status: 200 }), () => json({ events: 'garbage' })]) {
+        requested.length = 0;
+        globalThis.fetch = (async (input: RequestInfo | URL) =>
+          String(input).startsWith('https://aa.test/events') ? broken() : json(calendarPayload)) as unknown as typeof fetch;
+        const calendarOnly = await fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events');
+        expect(calendarOnly.cards).toEqual([]);
+        expect(calendarOnly.tge.map(t => t.d)).toEqual(['2026-11-09', '2026-11-16']);
+      }
+
+      // Calendar endpoint down while events succeed: active listings still publish.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json(eventsPayload) : json({ code: 'rest_forbidden' }, 503)) as unknown as typeof fetch;
+      const eventsOnly = await fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events');
+      expect(eventsOnly.cards.map(c => c.n)).toEqual(['StandX']);
+      expect(eventsOnly.tge).toEqual([]);
+
+      // Both endpoints down (or calendar down with empty events): still rejects so prior slices can be reused.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ events: [] }) : json({ code: 'rest_forbidden' }, 503)) as unknown as typeof fetch;
+      await expect(fetchAirdropAlertAirdrops('https://aa.test/calendar', NOW, 'https://aa.test/events')).rejects.toThrow(/HTTP 503/);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('Galxe curated cards keep only high-signal verified campaigns and surface description, reward, deadline and verified project domain', () => {
+    const hour = 3_600_000;
+    const space = (overrides: Record<string, unknown>) => ({
+      id: '85886',
+      name: 'Asterium',
+      alias: 'Asterium',
+      isVerified: true,
+      followersCount: 178_831,
+      thumbnail: 'https://appeco.galxe.com/space/logo/a.jpeg',
+      info: 'Fintech ecosystem powering the HUMO bond token.',
+      links: '{"Discord":"https://discord.gg/uQZ","HomePage":"https://asterium.uz/en","Telegram":"@asterium"}',
+      ...overrides,
+    });
+    const campaign = (overrides: Record<string, unknown>) => ({
+      id: 'GCdaHtZYGx',
+      name: 'Hop in the DeLorean. Win $50 USDT with Asterium',
+      status: 'Active',
+      startTime: Math.floor((NOW - 3 * hour) / 1000),
+      endTime: Math.floor((NOW + 5 * hour) / 1000),
+      chain: 'BSC',
+      type: 'Token',
+      description: '![IMG_5744.jpg](https://appeco.galxe.com/mdresource/img.jpeg)\n\nFollow Asterium, join community, and enter 50 USDT raffle.',
+      participants: { participantsCount: 2153 },
+      rewardName: '',
+      tokenReward: { tokenSymbol: 'USDT' },
+      space: space({}),
+      ...overrides,
+    });
+
+    const feed = parseGalxeCampaignsToAirdropFeed(
+      {
+        data: {
+          campaigns: {
+            list: [
+              campaign({}),
+              campaign({ id: 'GCuPbtZ1Z3', name: 'Think Gold. Win $50 USDT' }),
+              // Third campaign of the same space is dropped by the per-space cap.
+              campaign({ id: 'GCthird', name: 'Third Asterium campaign' }),
+              campaign({
+                id: 'GCinfinit',
+                name: 'Season 2 points',
+                type: 'Points',
+                endTime: null,
+                rewardName: '',
+                tokenReward: null,
+                description:
+                  '# Season 2\n\n**Join INFINIT** points on [Galxe](https://app.galxe.com/x).\n\n![banner](https://appeco.galxe.com/b.png)',
+                participants: { participantsCount: 6233 },
+                space: space({
+                  id: '1',
+                  name: 'INFINIT',
+                  alias: 'Infinit_Labs',
+                  followersCount: 159_401,
+                  info: 'Leverage yield protocol.',
+                  links: '{"HomePage":"https://infinit.tech/","Twitter":"https://twitter.com/Infinit_Labs"}',
+                }),
+              }),
+              // Low-follower and low-participation spaces are spam risk.
+              campaign({ id: 'GCendo', participants: { participantsCount: 50_000 }, space: space({ followersCount: 196 }) }),
+              campaign({ id: 'GCfew', participants: { participantsCount: 12 }, space: space({ followersCount: 159_401 }) }),
+              campaign({ id: 'GCnopart', participants: null, space: space({ followersCount: 159_401 }) }),
+              campaign({ id: 'GCunverified', space: space({ isVerified: false, followersCount: 900_000 }) }),
+              campaign({ id: 'GCexpired', status: 'Expired' }),
+              campaign({ id: 'GCended', endTime: Math.floor((NOW - hour) / 1000) }),
+              campaign({ id: 'GCfuture', startTime: Math.floor((NOW + 48 * hour) / 1000) }),
+              campaign({ id: 'GCparent', type: 'Parent' }),
+              campaign({ id: 'GCrole', type: 'DiscordRole' }),
+              campaign({ id: 'GCbadname', name: '' }),
+              // Platform / broken HomePage falls back to the quest link with no verified domain.
+              campaign({
+                id: 'GCplat',
+                participants: { participantsCount: 4000 },
+                description: '',
+                space: space({
+                  id: '77',
+                  name: 'Plat Space',
+                  alias: 'plat',
+                  info: 'Plat protocol on BNB Chain.',
+                  links: '{"HomePage":"https://galxe.com/plat"}',
+                  thumbnail: 'http://insecure.example/a.png',
+                }),
+              }),
+              campaign({
+                id: 'GCbrokenlinks',
+                participants: { participantsCount: 3500 },
+                description: null,
+                space: space({ id: '78', name: 'Broken Links', alias: 'brokenlinks', links: 'not json', info: null }),
+              }),
+              null,
+              'not-a-campaign',
+            ],
+          },
+        },
+      },
+      NOW,
+    );
+
+    // Sorted by participation: INFINIT (6233), Plat Space (4000), Broken Links (3500), Asterium (2153, best two of three).
+    expect(feed.cards.map(c => c.n)).toEqual(['INFINIT', 'Plat Space', 'Broken Links', 'Asterium', 'Asterium']);
+    expect(feed.counts).toEqual({ active: 5, preToken: 5 });
+    expect(feed.cards.some(c => ['Endorphina', 'Parent', 'DiscordRole'].includes(c.n))).toBe(false);
+
+    const infinit = feed.cards[0];
+    expect(infinit.id).toBe('galxe:1');
+    expect(infinit.source).toBe('Galxe');
+    expect(infinit.url).toBe('https://infinit.tech/');
+    expect(infinit.verifiedDomain).toBe(true);
+    expect(infinit.deadline).toBeUndefined();
+    expect(infinit.apy).toBeUndefined();
+    expect(infinit.rewardPool).toBe('Points');
+    // Markdown heading, bold, link and image reduced to plain prose.
+    expect(infinit.description).toBe('Season 2 Join INFINIT points on Galxe.');
+    expect(infinit.best.ty).toBe('points');
+    expect(infinit.tasks?.[0]).toMatchObject({ type: 'points', status: 'OPEN', cost: 0, url: 'https://app.galxe.com/quest/Infinit_Labs/GCinfinit' });
+    expect(infinit.g).toBe('A');
+
+    const plat = feed.cards[1];
+    expect(plat.url).toBe('https://app.galxe.com/quest/plat/GCplat');
+    expect(plat.verifiedDomain).toBeUndefined();
+    expect(plat.img).toBe('');
+    // Empty campaign description falls back to the space blurb.
+    expect(plat.description).toBe('Plat protocol on BNB Chain.');
+
+    const broken = feed.cards[2];
+    expect(broken.url).toBe('https://app.galxe.com/quest/brokenlinks/GCbrokenlinks');
+    expect(broken.verifiedDomain).toBeUndefined();
+    expect(broken.description).toBeUndefined();
+
+    const asterium = feed.cards[3];
+    // Two cards of one space share one stable id so the merge step folds them into a single project card.
+    expect(asterium.id).toBe('galxe:85886');
+    expect(feed.cards[4].id).toBe('galxe:85886');
+    expect(asterium.url).toBe('https://asterium.uz/en');
+    expect(asterium.verifiedDomain).toBe(true);
+    expect(asterium.img).toBe('https://appeco.galxe.com/space/logo/a.jpeg');
+    // Markdown image stripped, prose kept.
+    expect(asterium.description).toBe('Follow Asterium, join community, and enter 50 USDT raffle.');
+    expect(asterium.rewardPool).toBe('USDT rewards');
+    expect(asterium.deadline).toBe(fmtIsoDate(NOW + 5 * hour));
+    expect(asterium.chain).toBe('BNB');
+    expect(asterium.tasks?.[0]).toMatchObject({ type: 'quest', url: 'https://app.galxe.com/quest/Asterium/GCdaHtZYGx' });
+    expect(asterium.g).toBe('B');
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+
+      // Malformed GraphQL envelopes never throw.
+    for (const malformed of [null, undefined, 42, 'x', {}, { data: null }, { data: { campaigns: null } }, { data: { campaigns: { list: 'x' } } }]) {
+      expect(parseGalxeCampaignsToAirdropFeed(malformed, NOW).cards).toEqual([]);
+    }
+
+    // Non-string optional rewardName / tokenSymbol values are ignored instead of throwing.
+    const malformedRewards = parseGalxeCampaignsToAirdropFeed(
+      {
+        data: {
+          campaigns: {
+            list: [
+              campaign({ id: 'GCbadrew1', rewardName: 42, tokenReward: { tokenSymbol: 'ARB' } }),
+              campaign({ id: 'GCbadrew2', type: 'Points', rewardName: { bad: true }, tokenReward: { tokenSymbol: 99 } }),
+            ],
+          },
+        },
+      },
+      NOW,
+    );
+    expect(malformedRewards.cards.map(c => c.rewardPool)).toEqual(['ARB rewards', 'Points']);
+  });
+
+  test('fetchGalxeCampaignsToAirdropFeed resolves with zero cards when nothing passes the gate but throws on GraphQL errors', async () => {
+    const prevFetch = globalThis.fetch;
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    try {
+      globalThis.fetch = (async () => json({ data: { campaigns: { list: [{ id: 'GCx', name: 'Quiet', space: { isVerified: true, followersCount: 12 } }] } } })) as unknown as typeof fetch;
+      const quiet = await fetchGalxeCampaignsToAirdropFeed('https://galxe.test/query', NOW);
+      expect(quiet.cards).toEqual([]);
+
+      globalThis.fetch = (async () => json({ errors: [{ message: 'rate limited' }], data: null })) as unknown as typeof fetch;
+      await expect(fetchGalxeCampaignsToAirdropFeed('https://galxe.test/query', NOW)).rejects.toThrow(/Galxe GraphQL/i);
+
+      globalThis.fetch = (async () => json({ errors: [{ message: 'Invalid request.' }] })) as unknown as typeof fetch;
+      await expect(fetchGalxeCampaignsToAirdropFeed('https://galxe.test/query', NOW)).rejects.toThrow(/Invalid request/);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 });

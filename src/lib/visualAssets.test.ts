@@ -6,6 +6,7 @@ import {
   getCryptoVisual,
   getSourceVisual,
   resolveEntityVisual,
+  resolveOgPreview,
   sanitizeImageUrl,
 } from './visualAssets';
 
@@ -361,5 +362,34 @@ describe('buildProjectLogoIndex & resolveEntityVisual', () => {
       logoIndex: index,
     });
     expect(yieldResolved.imageUrls[0]).toBe('https://icons.example.com/aave.png');
+  });
+});
+
+describe('resolveOgPreview', () => {
+  test('keeps only https images and clamps title and description text', () => {
+    expect(
+      resolveOgPreview({
+        ogImage: 'https://cdn.example.com/og.png?v=1',
+        ogTitle: '  Acme\u0000  airdrop\n guide  ',
+        ogDescription: 'x'.repeat(400),
+      }),
+    ).toEqual({ image: 'https://cdn.example.com/og.png?v=1', title: 'Acme airdrop guide', description: `${'x'.repeat(280)}\u2026` });
+
+    expect(resolveOgPreview({ ogImage: 'http://cdn.example.com/og.png', ogTitle: 'T' })).toEqual({
+      image: null,
+      title: 'T',
+      description: null,
+    });
+  });
+
+  test('returns null when nothing usable exists', () => {
+    expect(resolveOgPreview({})).toBeNull();
+    expect(resolveOgPreview({ ogImage: 'javascript:alert(1)', ogTitle: ' ', ogDescription: '' })).toBeNull();
+  });
+
+  test('falls back to the project name for a missing OG title', () => {
+    expect(resolveOgPreview({ ogImage: 'https://cdn.example.com/og.png', fallbackTitle: 'Acme' })).toMatchObject({
+      title: 'Acme',
+    });
   });
 });

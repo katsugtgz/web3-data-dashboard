@@ -15,6 +15,7 @@ import {
   levenshtein,
   loadKnownDomains,
   seedKnownDomains,
+  type SafetyInput,
 } from '../src/safety';
 import { pollTelegramBatch, pruneOldPosts } from '../src/sources/telegram';
 
@@ -95,7 +96,77 @@ describe('parser, clustering, safety, and scoring pipeline', () => {
       sourceCount: 1,
     });
     expect(warnRes.level).toBe('warn');
-    expect(warnRes.reasons.length).toBeGreaterThanOrEqual(3);
+    // Shortener + single low-trust source. The unverified domain adds no registry reason.
+    expect(warnRes.reasons).toEqual(['URL shortener used: bit.ly', 'Single low-trust source']);
+  });
+
+  test('risk policy: unverified domains stay ok; lookalike, punycode, shortener, http, raw IP, and drainer still escalate', async () => {
+    const known = new Map([['arbitrum.io', 'Arbitrum']]);
+    const base = { knownProjectDomains: known, trustMax: 0.8, sourceCount: 2 };
+
+    const unknown = evaluateSafety({
+      domain: 'brandnewprotocol.xyz',
+      urls: ['https://brandnewprotocol.xyz/quest'],
+      text: 'Quest live on Monad',
+      ...base,
+    });
+    expect(unknown).toEqual({ level: 'ok', reasons: [] });
+
+    const threats: Array<[Omit<Partial<SafetyInput>, 'urls'> & { urls: string[] }, RiskLevel, string]> = [
+      // [patch over base, expected level, substring the reasons must contain]
+      [{ domain: 'arbitrurn.io', urls: ['https://arbitrurn.io/claim'], text: 'Claim live' }, 'risk', 'Possible lookalike domain'],
+      [{ domain: 'xn--arbitrm-91a.io', urls: ['https://xn--arbitrm-91a.io/'], text: 'Quest live' }, 'risk', 'Punycode or mixed-script'],
+      [{ urls: ['http://45.33.12.9/claim'], text: 'Claim live http://45.33.12.9/claim' }, 'risk', 'Raw IP link'],
+      [{ urls: ['https://brandnewprotocol.xyz/claim'], text: 'Claim now and connect your wallet to claim rewards' }, 'risk', 'wallet-connect'],
+      [{ urls: ['https://brandnewprotocol.xyz/claim'], text: 'Send 1 ETH to receive 2x back' }, 'risk', 'doubling'],
+      [{ urls: ['https://bit.ly/3xyz', 'https://brandnewprotocol.xyz'], text: 'Quest live' }, 'warn', 'URL shortener used'],
+      [{ domain: 'brandnewprotocol.xyz', urls: ['http://brandnewprotocol.xyz/claim'], text: 'Claim live' }, 'warn', 'Insecure transport (plain http)'],
+    ];
+    for (const [patch, level, needle] of threats) {
+      const res = evaluateSafety({
+        knownProjectDomains: known,
+        trustMax: 0.8,
+        sourceCount: 2,
+        domain: patch.domain,
+        urls: patch.urls,
+        rawIpUrls: patch.rawIpUrls,
+        text: patch.text ?? '',
+      });
+      expect(res.level).toBe(level);
+      expect(res.reasons.some(r => r.includes(needle!))).toBe(true);
+      expect(res.reasons.some(r => /not in verified registry/i.test(r))).toBe(false);
+    }
+
+    // The same policy holds end to end: an unknown-domain drop cluster is stored and served as ok.
+    const db = createSqliteD1();
+    const now = 1_795_200_000_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const res = await ingestPostIntoCluster(
+      db,
+      {
+        postId: 'telegram:ch1:77',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/77',
+        postedAt: now - 60_000,
+        text: 'Brandnew Protocol quest is live https://brandnewprotocol.xyz/quest',
+      },
+      { knownDomains: new Map() },
+      { byDomain: new Map(), byTicker: new Map() },
+      new Map(),
+      new Set<string>(),
+      now,
+    );
+    expect(res.riskLevel).toBe('ok');
+    const stored = await db
+      .prepare('SELECT risk_level, risk_reasons FROM clusters WHERE id = ?1')
+      .bind(res.clusterId)
+      .first<{ risk_level: string; risk_reasons: string }>();
+    expect(stored).toEqual({ risk_level: 'ok', risk_reasons: '[]' });
+    const feed = await queryFeed(db, new Set(['arbitrum.io']));
+    expect(feed.items[0].risk).toEqual({ level: 'ok', reasons: [] });
   });
 
   test('dedupes cross-channel posts and never inflates source_count on same-channel reposts', async () => {

@@ -1,10 +1,17 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Tge } from '../../shared/types';
+import { describeTgeDate } from '../lib/feedDisplay';
 import { normalizeExternalUrl } from '../lib/format';
 import { formatTgeStatus } from '../lib/labels';
 import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
 import { CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon } from './Icons';
+import {
+  CalendarIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DollarSignIcon,
+  ExternalLinkIcon,
+} from './Icons';
 
 type TgeFilter = 'all' | 'claimable' | 'verify' | 'other';
 
@@ -14,6 +21,7 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
 
   const normalized = useMemo(() => {
     const seen = new Map<string, number>();
+    const now = Date.now();
     return items.map(it => {
       const st = formatTgeStatus(it.s);
       // Split inline "$TICKER" from snapshot names like "predict.fun $PREDICT"
@@ -39,6 +47,7 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
         statusLabel: st.label,
         statusKind: st.kind,
         claimable: st.claimable,
+        date: describeTgeDate(it.d, now),
       };
     });
   }, [items]);
@@ -49,10 +58,16 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
   const activeFilter: TgeFilter = filter === 'other' && otherCount === 0 ? 'all' : filter;
 
   const visible = useMemo(() => {
-    if (activeFilter === 'claimable') return normalized.filter(i => i.statusKind === 'claimable');
-    if (activeFilter === 'verify') return normalized.filter(i => i.statusKind === 'verify');
-    if (activeFilter === 'other') return normalized.filter(i => i.statusKind === 'other');
-    return normalized;
+    const matching =
+      activeFilter === 'claimable'
+        ? normalized.filter(i => i.statusKind === 'claimable')
+        : activeFilter === 'verify'
+          ? normalized.filter(i => i.statusKind === 'verify')
+          : activeFilter === 'other'
+            ? normalized.filter(i => i.statusKind === 'other')
+            : normalized;
+    // Chronological, soonest event first; undated events close the timeline in source order.
+    return [...matching].sort((a, b) => a.date.sortKey - b.date.sortKey);
   }, [normalized, activeFilter]);
 
   if (items.length === 0) return null;
@@ -110,7 +125,6 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
           </button>
         </div>
       </div>
-
       {visible.length > 0 ? (
         <div
           className="tge-rail"
@@ -121,6 +135,21 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
         >
           {visible.map(it => (
             <article key={it.itemKey} className="tge-card">
+              <div className={`tge-timeline is-${it.date.state}`}>
+                <span className={`tge-node is-${it.date.state}`} aria-hidden="true" />
+                <span className="tge-date tt mono">
+                  <CalendarIcon size={11} />
+                  <span>{it.date.dateLabel}</span>
+                </span>
+                {it.date.countdown && (
+                  <span
+                    className={`tge-countdown mono is-${it.date.state}`}
+                    title={`${it.date.dateLabel}: ${it.date.countdown}`}
+                  >
+                    {it.date.countdown}
+                  </span>
+                )}
+              </div>
               <div className="tge-card-top">
                 <EntityAvatar
                   name={it.name}
@@ -143,11 +172,13 @@ export function TgeCarousel({ items, logoIndex }: { items: Tge[]; logoIndex?: Pr
               </div>
               <div className="tge-card-meta">
                 <span className={it.claimable ? 'badge badge-live' : 'badge'}>{it.statusLabel}</span>
-                <span className="tge-meta-date tt mono">
-                  <CalendarIcon size={11} />
-                  <span>{it.d}</span>
-                </span>
-                {it.raise && <span className="tt mono">{it.raise}</span>}
+                {it.raise && (
+                  <span className="tge-funding tt mono" title={`Funding raised: ${it.raise}`}>
+                    <DollarSignIcon size={11} />
+                    <span>{it.raise}</span>
+                    <span className="sr"> raised</span>
+                  </span>
+                )}
                 {it.source && <PlatformBadge source={it.source} size={12} />}
               </div>
               {it.safeUrl && (

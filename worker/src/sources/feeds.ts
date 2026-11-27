@@ -14,21 +14,32 @@ import {
   extractSuspiciousRawIpUrls,
   extractUrls,
   getRegistrableDomain,
+  isCuratedAggregatorDomain,
+  isPlatformDomain,
   isRawIpHost,
 } from '../normalize/domains';
 import { stripOrTranslateCjk } from '../normalize/i18n';
 import { extractTicker, parseDropPost, type ParseContext } from '../normalize/parse';
 import { isStopName, MAJOR_TICKERS } from '../normalize/text';
 import { loadKnownDomains } from '../safety';
+import { URL_SHORTENERS } from '../safety/shorteners';
 import { getSeedSourceById, type SourceConfig } from './registry';
 import { decodeHtmlEntities } from './telegram';
 
 export const AIRDROPALERT_CALENDAR_URL =
   'https://airdropalert.com/wp-json/wp/v2/aa_calendar_event?per_page=30';
+/** AirdropAlert calendar feed with real event dates; accepts only `y`, `m` and `radius` (months). */
+export const AIRDROPALERT_EVENTS_URL = 'https://airdropalert.com/wp-json/aa-cal/v1/events';
 export const GALXE_GRAPHQL_URL = 'https://graphigo.prd.galaxy.eco/query';
 export const PENDLE_POINTS_URL = 'https://api-v2.pendle.finance/core/v1/markets/all?isActive=true';
 export const MERKL_OPPORTUNITIES_URL =
   'https://api.merkl.xyz/v4/opportunities?items=50&status=LIVE&sort=tvl&order=desc';
+
+/** Events within two months of `nowMs`. */
+export function buildAirdropAlertEventsUrl(nowMs = Date.now(), baseUrl = AIRDROPALERT_EVENTS_URL): string {
+  const d = new Date(nowMs);
+  return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}y=${d.getUTCFullYear()}&m=${d.getUTCMonth() + 1}&radius=2`;
+}
 
 export interface ParsedFeedPost {
   id: string;
@@ -39,19 +50,34 @@ export interface ParsedFeedPost {
   urls: string[];
 }
 
+// Field set verified against the live GraphQL schema: `Space.funding` and
+// `Space.tgeInfo` resolve errors ("ALVA integration is disabled") and `first` > 50
+// returns no data, so none of them may be requested.
 const GALXE_TRENDING_QUERY = `query TrendingCampaigns {
-  campaigns(input: { first: 15, listType: Trending, statuses: [Active], isVerified: [1], orderByParticipation: true }) {
+  campaigns(input: { first: 50, listType: Trending, statuses: [Active], isVerified: [1], orderByParticipation: true }) {
     list {
       id
       name
+      type
       status
+      description
       startTime
       endTime
       chain
+      participants {
+        participantsCount
+      }
+      rewardName
+      tokenReward {
+        tokenSymbol
+      }
       space {
         id
         name
         alias
+        info
+        links
+        thumbnail
         followersCount
         isVerified
       }
@@ -325,6 +351,41 @@ function buildStableCardIdMap(prefix: string, identityKeys: readonly string[]): 
 }
 
 /**
+ * True when `rawUrl` is an https link to the project's own site: its registrable
+ * domain is not a raw IP, a social/content/aggregator/exchange platform, a URL
+ * shortener, or the Pendle/Merkl wrappers hosting third-party campaigns.
+ */
+export function isCleanProjectDomain(rawUrl: string | null | undefined, projectName: string): boolean {
+  if (!rawUrl?.startsWith('https://')) return false;
+  const domain = getRegistrableDomain(rawUrl)?.toLowerCase();
+  return Boolean(
+    domain &&
+      !isRawIpHost(domain) &&
+      !isPlatformDomain(domain) &&
+      !URL_SHORTENERS[domain] &&
+      !isCuratedAggregatorDomain(domain, { n: projectName }),
+  );
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${lastSpace > maxChars / 2 ? cut.slice(0, lastSpace) : cut}...`;
+}
+
+/**
+ * Turns untrusted upstream text into one line of plain prose: entity decoding,
+ * tag stripping, CJK removal and whitespace collapsing, then truncation.
+ * Returns undefined when nothing readable is left. Never throws.
+ */
+export function toPlainBlurb(raw: unknown, maxChars = 200): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const plain = stripOrTranslateCjk(htmlToPlainText(raw).replace(/\s+/g, ' ')).trim();
+  return plain ? truncateText(plain, maxChars) : undefined;
+}
+
+/**
  * Lightweight zero-dependency RSS 2.0 & Atom XML parser suitable for Workers.
  * Undated/invalid entries are strictly dropped (never stamped with Date.now()).
  */
@@ -505,13 +566,23 @@ function inferCalendarStatus(text: string): string {
   return 'Upcoming';
 }
 
-export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): AirdropFeed {
+/**
+ * `date_gmt` on a calendar post is its publish time, not the event date. When the
+ * caller passes `eventDateByPostId` (post id -> real date from the events feed),
+ * that date wins for the matching entries.
+ */
+export function parseWpCalendarToAirdropFeed(
+  raw: unknown,
+  nowMs = Date.now(),
+  eventDateByPostId: ReadonlyMap<string, string> = new Map(),
+): AirdropFeed {
   if (!Array.isArray(raw)) {
     return { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: nowMs };
   }
   const tge: Tge[] = [];
   const seen = new Set<string>();
   for (const item of raw as WpCalendarEvent[]) {
+    if (!item || typeof item !== 'object') continue;
     const title = stripOrTranslateCjk(htmlToPlainText(item.title?.rendered ?? ''));
     if (!title) continue;
     const key = title.toLowerCase();
@@ -524,6 +595,7 @@ export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): 
     const ticker = extractTicker(combined) ?? extractParenthesizedTicker(title) ?? '';
     const logo = extractWpCalendarLogo(item, bodyHtml);
     const dateMs = parseWpDateMs(item);
+    const eventDate = eventDateByPostId.get(String(item.id));
     const hrefs = extractHrefsFromHtml(bodyHtml, false);
     const externalHref = hrefs.find(u => {
       const reg = getRegistrableDomain(u);
@@ -535,7 +607,7 @@ export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): 
       n: title,
       t: ticker,
       s: inferCalendarStatus(combined),
-      d: Number.isFinite(dateMs) ? fmtIsoDate(dateMs) : 'TBA',
+      d: eventDate ?? (Number.isFinite(dateMs) ? fmtIsoDate(dateMs) : 'TBA'),
       ...(logo ? { logo } : {}),
       url: externalHref ?? fallbackLink,
       source: 'AirdropAlert',
@@ -546,6 +618,205 @@ export function parseWpCalendarToAirdropFeed(raw: unknown, nowMs = Date.now()): 
     cards: [],
     tge,
     counts: { active: 0, preToken: 0 },
+    fetchedAt: nowMs,
+  };
+}
+
+/** One row of AirdropAlert's `aa-cal/v1/events` payload (field names as served live). */
+interface AaCalEvent {
+  id?: unknown;
+  type?: unknown;
+  title?: unknown;
+  p?: unknown;
+  url?: unknown;
+  cats?: unknown;
+  html?: unknown;
+  listing?: unknown;
+  d?: unknown;
+  q?: unknown;
+}
+
+interface AaMilestone {
+  ms: number;
+  label: string;
+  type: string;
+  title: string;
+  description: string;
+}
+
+interface AaListingGroup {
+  name: string;
+  url: string | null;
+  verified: boolean;
+  events: AaMilestone[];
+}
+
+const AA_EVENT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const AA_MONTH_RE = /^\d{4}-\d{2}$/;
+const AA_ACTIVE_WINDOW_MS = 30 * 86_400_000;
+const AA_URGENT_WINDOW_MS = 14 * 86_400_000;
+const AA_MAX_CARDS = 30;
+const AA_MAX_TASKS = 5;
+const AA_MILESTONE_TYPES = new Set(['tge', 'claimstart', 'claimend', 'snapshot', 'distribution', 'other']);
+
+/**
+ * Resolves an event to `[utcMs, label]`: an exact `d` date, or the last day of
+ * the quarter/month window in `q`. Returns null when neither is usable.
+ */
+function aaEventDate(ev: AaCalEvent): [number, string] | null {
+  if (typeof ev.d === 'string' && AA_EVENT_DATE_RE.test(ev.d)) {
+    const ms = Date.parse(`${ev.d}T00:00:00Z`);
+    if (Number.isFinite(ms)) return [ms, ev.d];
+  }
+  if (!ev.q || typeof ev.q !== 'object') return null;
+  const q = ev.q as { label?: unknown; months?: unknown };
+  const months = Array.isArray(q.months) ? q.months : [];
+  const last = months[months.length - 1];
+  if (typeof last !== 'string' || !AA_MONTH_RE.test(last)) return null;
+  const [year, month] = last.split('-').map(Number);
+  // Day 0 of the next month is the last day of `month`.
+  const ms = Date.UTC(year, month, 0, 23, 59, 59);
+  return Number.isFinite(ms) ? [ms, typeof q.label === 'string' && q.label.trim() ? q.label.trim() : last] : null;
+}
+
+/** Listing pages must stay on airdropalert.com under /airdrops/. */
+function aaListingUrl(raw: unknown): string | null {
+  const cleaned = typeof raw === 'string' ? cleanUrl(raw) : null;
+  if (!cleaned) return null;
+  try {
+    const u = new URL(cleaned);
+    return u.protocol === 'https:' && getRegistrableDomain(cleaned) === 'airdropalert.com' && u.pathname.startsWith('/airdrops/')
+      ? cleaned
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Groups listing-backed AirdropAlert milestone events (claim windows, snapshots,
+ * TGEs, distributions) by listing within the active window. Free-form events
+ * without a listing (`listing` is 0) carry no project identity and are skipped.
+ * Also returns the real event date per calendar post id (`manual-<postId>`).
+ * Never throws: any malformed row is skipped.
+ */
+function collectAirdropAlertActiveListings(
+  raw: unknown,
+  nowMs: number,
+): { cards: Card[]; eventDateByPostId: Map<string, string> } {
+  const eventDateByPostId = new Map<string, string>();
+  const groups = new Map<number, AaListingGroup>();
+  const list = (raw as { events?: unknown } | null)?.events;
+  if (!Array.isArray(list)) return { cards: [], eventDateByPostId };
+
+  const cutoffMs = nowMs - AA_ACTIVE_WINDOW_MS;
+  const todayMs = Math.floor(nowMs / 86_400_000) * 86_400_000;
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const ev = item as AaCalEvent;
+    const date = aaEventDate(ev);
+    const postId = typeof ev.id === 'string' ? /^manual-(\d+)$/.exec(ev.id)?.[1] : undefined;
+    if (date && postId) eventDateByPostId.set(postId, date[1]);
+
+    const listing = typeof ev.listing === 'number' ? ev.listing : NaN;
+    const type = ev.type;
+    if (!Number.isInteger(listing) || listing <= 0 || typeof type !== 'string') continue;
+    const name = typeof ev.p === 'string' ? (toPlainBlurb(ev.p, 80) ?? '') : '';
+    const url = aaListingUrl(ev.url);
+    let group = groups.get(listing);
+    if (!group) {
+      group = { name, url, verified: false, events: [] };
+      groups.set(listing, group);
+    } else {
+      if (!group.name && name) group.name = name;
+      if (!group.url && url) group.url = url;
+    }
+    if (type === 'guide' && Array.isArray(ev.cats) && ev.cats.includes('verified')) group.verified = true;
+    if (!date || !AA_MILESTONE_TYPES.has(type) || date[0] < cutoffMs) continue;
+    group.events.push({
+      ms: date[0],
+      label: date[1],
+      type,
+      title: toPlainBlurb(ev.title, 120) ?? '',
+      description: toPlainBlurb(ev.html, 240) ?? '',
+    });
+  }
+
+  const ranked: { listing: number; group: AaListingGroup; upcoming: AaMilestone[]; description: string; sc: number }[] = [];
+  for (const [listing, group] of groups) {
+    if (!group.url || !group.name || group.events.length === 0) continue;
+    group.events.sort((a, b) => a.ms - b.ms || a.title.localeCompare(b.title));
+    const upcoming = group.events.filter(e => e.ms >= todayMs && e.title);
+    // The next future milestone is the deadline; nothing future means only a recent event.
+    const urgent = Boolean(upcoming.length > 0 && upcoming[0].ms - nowMs <= AA_URGENT_WINDOW_MS);
+    const description = [...new Set(group.events.map(e => e.description).filter(Boolean))]
+      .join(' ')
+      .trim();
+    ranked.push({
+      listing,
+      group,
+      upcoming,
+      description,
+      sc: 50 + (group.verified ? 6 : 0) + (urgent ? 6 : 0),
+    });
+  }
+  ranked.sort(
+    (a, b) => b.sc - a.sc || (a.upcoming[0]?.ms ?? Infinity) - (b.upcoming[0]?.ms ?? Infinity) || a.group.name.localeCompare(b.group.name),
+  );
+
+  const cards: Card[] = [];
+  for (const { listing, group, upcoming, description, sc } of ranked.slice(0, AA_MAX_CARDS)) {
+    // No future milestone: the listing itself (read the guide) stays actionable.
+    const milestones =
+      upcoming.length > 0 ? upcoming.slice(0, AA_MAX_TASKS) : [{ ms: 0, label: '', type: 'guide', title: `Read the ${group.name} airdrop guide`, description: '' }];
+    const tasks: CardTask[] = milestones.map(e => ({
+      title: e.label ? `${e.title} · ${e.label}` : e.title,
+      type: 'other',
+      status: 'OPEN',
+      cost: 0,
+      timeMinutes: null,
+      url: group.url,
+    }));
+    const badges: Badge[] = ['live'];
+    if (upcoming.some(e => e.type === 'tge')) badges.push('early');
+    cards.push({
+      r: cards.length + 1,
+      n: group.name,
+      id: `airdropalert:${listing}`,
+      t: null,
+      g: sc >= 56 ? 'A' : 'B',
+      b: badges,
+      x: null,
+      img: '',
+      f: '—',
+      raiseNum: 0,
+      tk: `${tasks.length}/${tasks.length}`,
+      h: group.events.length,
+      u: 'today',
+      updatedTs: Math.floor(nowMs / 1000),
+      fit: ['community'],
+      best: { n: tasks[0].title, ty: 'other', c: 'Free', m: '—' },
+      costNum: 0,
+      taskTypes: ['other'],
+      tasks,
+      sc,
+      sub: [6, 6, null],
+      url: null,
+      source: 'AirdropAlert',
+      ...(upcoming.length > 0 ? { deadline: upcoming[0].label } : {}),
+      ...(description ? { description: truncateText(description, 240) } : {}),
+    });
+  }
+  return { cards, eventDateByPostId };
+}
+
+/** Active AirdropAlert listings (one card per listing) from a `aa-cal/v1/events` payload. */
+export function parseAirdropAlertEvents(raw: unknown, nowMs = Date.now()): AirdropFeed {
+  const { cards } = collectAirdropAlertActiveListings(raw, nowMs);
+  return {
+    cards,
+    tge: [],
+    counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
     fetchedAt: nowMs,
   };
 }
@@ -598,23 +869,33 @@ export function parseSubstackArchive(raw: unknown): ParsedFeedPost[] {
 interface GalxeCampaign {
   id?: string;
   name?: string;
+  type?: string;
   status?: string;
+  description?: string;
   startTime?: number;
   endTime?: number;
   chain?: string;
   participantsCount?: number;
+  participants?: { participantsCount?: number } | null;
+  rewardName?: string;
+  tokenReward?: { tokenSymbol?: string } | null;
   space?: {
     id?: string;
     name?: string;
     alias?: string;
+    info?: string;
+    /** JSON string such as {"HomePage":"https://app.xyz","Discord":"..."}. */
+    links?: string;
+    thumbnail?: string;
     followersCount?: number;
     isVerified?: boolean;
-  };
+  } | null;
 }
 
 export function parseGalxeCampaigns(raw: unknown, nowMs = Date.now()): ParsedFeedPost[] {
-  const list = (raw as { data?: { campaigns?: { list?: GalxeCampaign[] } } } | null)?.data?.campaigns?.list ?? [];
+  const list = (raw as { data?: { campaigns?: { list?: GalxeCampaign[] } } } | null)?.data?.campaigns?.list;
   const out: ParsedFeedPost[] = [];
+  if (!Array.isArray(list)) return out;
 
   for (const c of list) {
     if (!c?.id || !c.name || !c.space) continue;
@@ -658,6 +939,169 @@ export function parseGalxeCampaigns(raw: unknown, nowMs = Date.now()): ParsedFee
   return out;
 }
 
+const GALXE_CURATED_MIN_FOLLOWERS = 10_000;
+const GALXE_CURATED_MIN_PARTICIPANTS = 1_000;
+const GALXE_CURATED_MAX_CARDS = 12;
+const GALXE_CURATED_MAX_PER_SPACE = 2;
+/** Parent campaigns are containers and DiscordRole rewards are not airdrop-like. */
+const GALXE_CURATED_SKIP_TYPES = new Set(['Parent', 'DiscordRole']);
+const GALXE_MAX_START_SKEW_MS = 15 * 60_000;
+const GALXE_REWARD_SYMBOL_RE = /^[A-Z0-9]{2,15}$/;
+
+/** Project website from a space's `links` JSON (`HomePage` key); null when absent or unparsable. */
+function galxeProjectSite(links: unknown): string | null {
+  let parsed: unknown = links;
+  if (typeof links === 'string') {
+    if (!links.trim()) return null;
+    try {
+      parsed = JSON.parse(links);
+    } catch {
+      return null;
+    }
+  }
+  const home = parsed && typeof parsed === 'object' ? (parsed as { HomePage?: unknown }).HomePage : undefined;
+  return typeof home === 'string' ? safeHttpsUrl(home) : null;
+}
+
+/**
+ * Single-line prose: markdown images dropped, links reduced to their text,
+ * headings and emphasis markers removed, HTML tags stripped.
+ */
+function galxePlainDescription(campaign: GalxeCampaign): string | undefined {
+  const source = [campaign.description, campaign.space?.info].find(t => typeof t === 'string' && t.trim());
+  if (typeof source !== 'string') return undefined;
+  return toPlainBlurb(
+    source
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^\s{0,3}#{1,6}\s/gm, '')
+      .replace(/\*+|_{2,}/g, ' '),
+    220,
+  );
+}
+
+function galxeReward(campaign: GalxeCampaign): string | undefined {
+  const rewardName = typeof campaign.rewardName === 'string' ? stripOrTranslateCjk(campaign.rewardName.trim()) : '';
+  if (rewardName) return truncateText(rewardName, 60);
+  const rawSymbol = campaign.tokenReward?.tokenSymbol;
+  const symbol = typeof rawSymbol === 'string' ? stripOrTranslateCjk(rawSymbol.trim().toUpperCase()) : '';
+  if (GALXE_REWARD_SYMBOL_RE.test(symbol)) return `${symbol} rewards`;
+  return campaign.type === 'Points' ? 'Points' : undefined;
+}
+
+/**
+ * High-signal verified trending Galxe campaigns as curated cards: verified space
+ * with >= 10k followers, >= 1k participants, already started and not ended.
+ * At most two campaigns per space and twelve cards in total, so the feed can
+ * never be flooded. Cards of one space share `galxe:<spaceId>` so the merge
+ * step folds them into a single project card. Never throws on malformed data.
+ */
+export function parseGalxeCampaignsToAirdropFeed(raw: unknown, nowMs = Date.now()): AirdropFeed {
+  const list = (raw as { data?: { campaigns?: { list?: unknown } } } | null)?.data?.campaigns?.list;
+  const cards: Card[] = [];
+  if (!Array.isArray(list)) {
+    return { cards, tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: nowMs };
+  }
+
+  // Fields already validated by the gate below, so card building needs no further checks.
+  type QualifiedCampaign = GalxeCampaign & { id: string; participants: { participantsCount: number } };
+  const candidates: QualifiedCampaign[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const c = item as GalxeCampaign;
+    const space = c.space;
+    if (typeof c.id !== 'string' || !c.id || !space || space.isVerified !== true) continue;
+    if (c.status !== 'Active' || typeof c.type !== 'string' || GALXE_CURATED_SKIP_TYPES.has(c.type)) continue;
+    if (typeof space.followersCount !== 'number' || space.followersCount < GALXE_CURATED_MIN_FOLLOWERS) continue;
+    const name = stripOrTranslateCjk(c.name ?? '').trim();
+    if (!name) continue;
+    const participants = c.participants?.participantsCount;
+    if (typeof participants !== 'number' || !Number.isFinite(participants) || participants < GALXE_CURATED_MIN_PARTICIPANTS) {
+      continue;
+    }
+    const startMs = Number(c.startTime) * 1000;
+    const endMs = Number(c.endTime) * 1000;
+    if (!Number.isFinite(startMs) || startMs > nowMs + GALXE_MAX_START_SKEW_MS) continue;
+    if (c.endTime != null && c.endTime !== 0 && (!Number.isFinite(endMs) || endMs < nowMs)) continue;
+    candidates.push({ ...c, id: c.id, participants: { participantsCount: participants } });
+  }
+  candidates.sort(
+    (a, b) => b.participants.participantsCount - a.participants.participantsCount || a.id.localeCompare(b.id),
+  );
+
+  const perSpace = new Map<string, number>();
+  for (const c of candidates) {
+    if (cards.length >= GALXE_CURATED_MAX_CARDS) break;
+    const space = c.space!;
+    const spaceKey = String(space.id ?? space.alias ?? space.name ?? '');
+    const questSlug = stripOrTranslateCjk(space.alias ?? '').trim() || spaceKey;
+    if (!questSlug) continue;
+    if ((perSpace.get(spaceKey) ?? 0) >= GALXE_CURATED_MAX_PER_SPACE) continue;
+    perSpace.set(spaceKey, (perSpace.get(spaceKey) ?? 0) + 1);
+
+    const participants = c.participants.participantsCount;
+    const campaignName = stripOrTranslateCjk(c.name ?? '').trim();
+    const projectName =
+      stripOrTranslateCjk(space.name ?? '').trim() || stripOrTranslateCjk(space.alias ?? '').trim() || campaignName;
+    const questUrl = `https://app.galxe.com/quest/${encodeURIComponent(questSlug)}/${encodeURIComponent(c.id)}`;
+    const projectSite = galxeProjectSite(space.links);
+    const isProjectSite = Boolean(projectSite && isCleanProjectDomain(projectSite, projectName));
+    const url = isProjectSite ? projectSite! : questUrl;
+    const grade: Grade = participants >= 10_000 ? 'S' : participants >= 3_000 ? 'A' : 'B';
+    const taskType = c.type === 'Points' ? 'points' : 'quest';
+    const task: CardTask = {
+      title: truncateText(campaignName, 120),
+      type: taskType,
+      status: 'OPEN',
+      cost: 0,
+      timeMinutes: null,
+      url: questUrl,
+    };
+    const endMs = Number(c.endTime) * 1000;
+    const reward = galxeReward(c);
+    const description = galxePlainDescription(c);
+    const chain = typeof c.chain === 'string' ? GALXE_CHAIN_NAMES[c.chain.trim().toUpperCase()] : undefined;
+
+    cards.push({
+      r: cards.length + 1,
+      n: projectName,
+      id: `galxe:${space.id ?? slugify(spaceKey)}`,
+      t: null,
+      g: grade,
+      b: ['live'],
+      x: null,
+      img: safeHttpsUrl(space.thumbnail) ?? '',
+      f: '—',
+      raiseNum: 0,
+      tk: '1/1',
+      h: Math.round(participants / 100),
+      u: 'today',
+      updatedTs: Math.floor(nowMs / 1000),
+      fit: ['community'],
+      best: { n: task.title, ty: taskType, c: 'Free', m: '—' },
+      costNum: 0,
+      taskTypes: [taskType],
+      tasks: [task],
+      sc: grade === 'S' ? 60 : grade === 'A' ? 54 : 48,
+      sub: [6, 8, null],
+      url,
+      source: 'Galxe',
+      ...(isProjectSite ? { verifiedDomain: true } : {}),
+      ...(c.endTime != null && c.endTime !== 0 && Number.isFinite(endMs) ? { deadline: fmtIsoDate(endMs) } : {}),
+      ...(reward ? { rewardPool: reward } : {}),
+      ...(description ? { description } : {}),
+      ...(chain ? { chain } : {}),
+    });
+  }
+
+  return {
+    cards,
+    tge: [],
+    counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
+    fetchedAt: nowMs,
+  };
+}
+
 interface PendleMarket {
   name?: string;
   address?: string;
@@ -697,6 +1141,8 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
       chains: Set<string>;
       liquidity: number;
       isNew: boolean;
+      maxApyPct: number | null;
+      earliestExpiryMs: number | null;
       markets: { liq: number; url: string; task: CardTask }[];
     }
   >();
@@ -735,6 +1181,8 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
         chains: new Set<string>(),
         liquidity: 0,
         isNew: false,
+        maxApyPct: null,
+        earliestExpiryMs: null,
         markets: [],
       };
       grouped.set(key, bucket);
@@ -744,6 +1192,12 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
     bucket.chains.add(chainName);
     bucket.liquidity += liq;
     bucket.isNew ||= Boolean(m.isNew);
+    if (impliedApy != null && Number.isFinite(impliedApy) && impliedApy > 0 && (bucket.maxApyPct ?? 0) < impliedApy) {
+      bucket.maxApyPct = impliedApy;
+    }
+    if (Number.isFinite(expiryMs) && (bucket.earliestExpiryMs ?? Infinity) > expiryMs) {
+      bucket.earliestExpiryMs = expiryMs;
+    }
     bucket.markets.push({
       liq,
       url: marketUrl,
@@ -810,6 +1264,10 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
         sub: [7, 7, null],
         url: primaryUrl,
         source: 'Pendle',
+        ...(g.liquidity > 0 ? { tvlUsd: g.liquidity } : {}),
+        ...(g.maxApyPct != null ? { apy: fmtPct(g.maxApyPct).replace(/^\+/, '') } : {}),
+        ...(g.earliestExpiryMs != null ? { deadline: fmtIsoDate(g.earliestExpiryMs) } : {}),
+        description: `Pendle yield-token pools farming ${g.name} points`,
       };
     });
 
@@ -891,6 +1349,18 @@ function extractMerklProtocolTicker(op: MerklOpportunity, protoName: string): st
   return null;
 }
 
+/**
+ * Merkl deposit links are action links and may land on a third-party app (a
+ * Robinhood link for a Morpho vault), so the host label must also match the
+ * protocol name before the card claims a verified project domain.
+ */
+function isMerklProtocolSite(url: string | null, protocolName: string): boolean {
+  if (!url || !isCleanProjectDomain(url, protocolName)) return false;
+  const label = (getRegistrableDomain(url) ?? '').split('.')[0].replace(/[^a-z0-9]/g, '');
+  const key = normalizeProjectKey(protocolName);
+  return label.length >= 3 && key.length >= 3 && (key.includes(label) || label.includes(key));
+}
+
 export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): AirdropFeed {
   if (!Array.isArray(raw)) {
     return { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: nowMs };
@@ -908,6 +1378,9 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
       chains: Set<string>;
       tvl: number;
       maxApr: number;
+      dailyRewards: number;
+      summary: string;
+      protocolSite: string | null;
       tasks: CardTask[];
       taskTypes: Set<string>;
       primaryUrl: string | null;
@@ -945,6 +1418,9 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         chains: new Set<string>(),
         tvl: 0,
         maxApr: 0,
+        dailyRewards: 0,
+        summary: '',
+        protocolSite: null,
         tasks: [],
         taskTypes: new Set<string>(),
         primaryUrl: url,
@@ -966,9 +1442,14 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
     }
     bucket.chains.add(chainName);
     bucket.tvl += tvl;
+    if (typeof op.dailyRewards === 'number' && Number.isFinite(op.dailyRewards) && op.dailyRewards > 0) {
+      bucket.dailyRewards += op.dailyRewards;
+    }
     if (apr != null && apr > bucket.maxApr) bucket.maxApr = apr;
     bucket.taskTypes.add(type);
     if (!bucket.primaryUrl && url) bucket.primaryUrl = url;
+    if (!bucket.protocolSite && url && isMerklProtocolSite(url, protoName)) bucket.protocolSite = url;
+    if (!bucket.summary) bucket.summary = `${opName} (${chainName})`;
     if (bucket.tasks.length < 4) {
       const aprText = apr != null && apr > 0 ? ` · ${apr.toFixed(1)}% APR` : '';
       bucket.tasks.push({
@@ -1027,8 +1508,13 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
         tasks: g.tasks,
         sc,
         sub: [7, 7, null],
-        url: g.primaryUrl,
+        url: g.protocolSite ?? g.primaryUrl,
         source: 'Merkl',
+        ...(g.tvl > 0 ? { tvlUsd: g.tvl } : {}),
+        ...(g.maxApr > 0 ? { apy: `${g.maxApr.toFixed(1)}% APR` } : {}),
+        ...(g.dailyRewards > 0 ? { rewardPool: `${fmtUsd(g.dailyRewards)}/day` } : {}),
+        ...(g.summary ? { description: g.summary } : {}),
+        ...(g.protocolSite ? { verifiedDomain: true } : {}),
       };
     });
 
@@ -1093,6 +1579,101 @@ export async function fetchWpCalendarAirdrops(
   return feed;
 }
 
+async function fetchGalxeTrendingRaw(url: string): Promise<unknown> {
+  const raw = (await fetchJsonWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: GALXE_TRENDING_QUERY }),
+  })) as { errors?: unknown; data?: unknown } | null;
+  if (!raw || (Array.isArray(raw.errors) && raw.errors.length > 0) || raw.data == null) {
+    const firstErr =
+      Array.isArray(raw?.errors) && raw.errors.length > 0
+        ? typeof (raw.errors[0] as { message?: unknown })?.message === 'string'
+          ? (raw.errors[0] as { message: string }).message
+          : 'GraphQL error'
+        : 'Missing data payload';
+    throw new Error(`Galxe GraphQL error: ${firstErr}`);
+  }
+  return raw;
+}
+
+/** Resolves with zero cards (not an error) when no trending campaign passes the high-signal gate. */
+export async function fetchGalxeCampaignsToAirdropFeed(url = GALXE_GRAPHQL_URL, nowMs = Date.now()): Promise<AirdropFeed> {
+  return parseGalxeCampaignsToAirdropFeed(await fetchGalxeTrendingRaw(url), nowMs);
+}
+
+export interface AirdropAlertFetchParts {
+  feed: AirdropFeed;
+  calendarFailed: boolean;
+  eventsFailed: boolean;
+}
+
+/**
+ * Fetches AirdropAlert calendar TGEs and active event listings independently so
+ * a failure in one endpoint never discards valid data from the other, and callers
+ * can distinguish an events failure from a legitimate empty events list.
+ */
+export async function fetchAirdropAlertAirdropsParts(
+  calendarUrl = AIRDROPALERT_CALENDAR_URL,
+  nowMs = Date.now(),
+  eventsUrl = buildAirdropAlertEventsUrl(nowMs),
+): Promise<AirdropAlertFetchParts> {
+  const [calendar, events] = await Promise.allSettled([
+    fetchJsonWithTimeout(calendarUrl),
+    fetchJsonWithTimeout(eventsUrl),
+  ]);
+  const eventsRaw = events.status === 'fulfilled' ? events.value : null;
+  const hasEventsList =
+    eventsRaw != null && typeof eventsRaw === 'object' && Array.isArray((eventsRaw as { events?: unknown }).events);
+  const eventsFailed = !hasEventsList;
+  const { cards, eventDateByPostId } = hasEventsList
+    ? collectAirdropAlertActiveListings(eventsRaw, nowMs)
+    : { cards: [], eventDateByPostId: new Map<string, string>() };
+
+  let tge: Tge[] = [];
+  let calendarFailed = false;
+  let calendarErr: unknown = null;
+  if (calendar.status === 'rejected') {
+    calendarFailed = true;
+    calendarErr = calendar.reason;
+  } else {
+    const calFeed = parseWpCalendarToAirdropFeed(calendar.value, nowMs, eventDateByPostId);
+    if (calFeed.tge.length === 0) {
+      calendarFailed = true;
+      calendarErr = new Error('Empty AirdropAlert calendar payload');
+    } else {
+      tge = calFeed.tge;
+    }
+  }
+
+  if (calendarFailed && cards.length === 0) {
+    throw calendarErr instanceof Error ? calendarErr : new Error(String(calendarErr ?? 'AirdropAlert calendar failed'));
+  }
+
+  return {
+    feed: {
+      cards,
+      tge,
+      counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
+      fetchedAt: nowMs,
+    },
+    calendarFailed,
+    eventsFailed,
+  };
+}
+
+/**
+ * Calendar rail plus active airdrop cards from the events endpoint, handled
+ * independently so valid data from either endpoint survives an outage in the other.
+ */
+export async function fetchAirdropAlertAirdrops(
+  calendarUrl = AIRDROPALERT_CALENDAR_URL,
+  nowMs = Date.now(),
+  eventsUrl = buildAirdropAlertEventsUrl(nowMs),
+): Promise<AirdropFeed> {
+  return (await fetchAirdropAlertAirdropsParts(calendarUrl, nowMs, eventsUrl)).feed;
+}
+
 export async function fetchDropFeedPosts(src: SourceConfig, nowMs = Date.now()): Promise<ParsedFeedPost[]> {
   if (!src.url) throw new Error(`Missing URL for feed source ${src.handle}`);
   switch (src.parser) {
@@ -1108,23 +1689,8 @@ export async function fetchDropFeedPosts(src: SourceConfig, nowMs = Date.now()):
       const raw = await fetchJsonWithTimeout(src.url);
       return parseSubstackArchive(raw);
     }
-    case 'galxe': {
-      const raw = (await fetchJsonWithTimeout(src.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: GALXE_TRENDING_QUERY }),
-      })) as { errors?: unknown; data?: unknown } | null;
-      if (!raw || (Array.isArray(raw.errors) && raw.errors.length > 0) || raw.data == null) {
-        const firstErr =
-          Array.isArray(raw?.errors) && raw.errors.length > 0
-            ? typeof (raw.errors[0] as { message?: unknown })?.message === 'string'
-              ? (raw.errors[0] as { message: string }).message
-              : 'GraphQL error'
-            : 'Missing data payload';
-        throw new Error(`Galxe GraphQL error: ${firstErr}`);
-      }
-      return parseGalxeCampaigns(raw, nowMs);
-    }
+    case 'galxe':
+      return parseGalxeCampaigns(await fetchGalxeTrendingRaw(src.url), nowMs);
     default:
       throw new Error(`Unsupported drop feed parser "${String(src.parser)}" for ${src.handle}`);
   }

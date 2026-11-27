@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type RefObject } from 'rea
 import type { MarketRow, MarketSection, MarketSectionId, MarketSector } from '../../shared/types';
 import { formatRelativeTime, hostnameLabel, isHttpUrl, sortVal } from '../lib/format';
 import { cmpRows, rowKey } from '../lib/marketSort';
+import { changeMagnitude, momentumPercent, scaleDeltaColumns, sectorIntensity } from '../lib/viz';
 import {
   classifyDeltaCell,
   detectNumericColumns,
@@ -69,6 +70,9 @@ function rowChains(r: MarketRow): string[] {
 
 function SectorStrip({ sectors }: { sectors: MarketSector[] }) {
   if (sectors.length === 0) return null;
+  // The widest bar belongs to the biggest mover, so bar lengths compare across chips.
+  const peak = Math.max(0, ...sectors.map(s => changeMagnitude(s.change24h)));
+
   return (
     <div className="sector-strip" role="region" aria-label="Top sector movers (24h)">
       <span className="sector-strip-label">
@@ -79,16 +83,15 @@ function SectorStrip({ sectors }: { sectors: MarketSector[] }) {
         {sectors.map(s => {
           const displayChange = formatDeltaCell(s.change24h);
           const delta = classifyDeltaCell(displayChange);
-          const pillClass =
-            delta.tone === 'up'
-              ? 'delta-up'
-              : delta.tone === 'down'
-                ? 'delta-dn'
-                : 'delta-neutral';
+          const tone = delta.tone === 'up' || delta.tone === 'down' ? delta.tone : 'neutral';
+          const magnitude = changeMagnitude(s.change24h);
           return (
-            <span key={s.name} className="sector-pill">
+            <span key={s.name} className={`sector-pill is-${tone}-${sectorIntensity(magnitude)}`}>
               <span className="sector-pill-name">{s.name}</span>
-              <span className={`${pillClass} sector-pill-delta`}>
+              <span className="sector-pill-bar" aria-hidden="true">
+                <span style={{ width: `${momentumPercent(magnitude, peak)}%` }} />
+              </span>
+              <span className="sector-pill-delta">
                 {delta.tone === 'up' && <ChevronUpIcon size={12} className="sector-delta-icon" />}
                 {delta.tone === 'down' && <ChevronDownIcon size={12} className="sector-delta-icon" />}
                 <span>{displayChange}</span>
@@ -107,6 +110,7 @@ interface MarketCellProps {
   rowLabel: string;
   isNumCol: boolean;
   colKind: MarketColumnKind;
+  maxAbs: number;
 }
 
 function MarketChainCell({ cell }: { cell: string }) {
@@ -162,7 +166,15 @@ function MarketIlRiskCell({ cell }: { cell: string }) {
   );
 }
 
-function MarketValueCell({ cell, rowLabel, isNumCol }: { cell: string; rowLabel: string; isNumCol: boolean }) {
+interface ValueCellProps {
+  cell: string;
+  rowLabel: string;
+  isNumCol: boolean;
+  /** Largest absolute change in this column, or 0 when unknown. Sizes the momentum bar. */
+  maxAbs: number;
+}
+
+function MarketValueCell({ cell, rowLabel, isNumCol, maxAbs }: ValueCellProps) {
   if (isHttpUrl(cell)) {
     return (
       <td className="td-nowrap">
@@ -179,9 +191,17 @@ function MarketValueCell({ cell, rowLabel, isNumCol }: { cell: string; rowLabel:
   const displayCell = formatDeltaCell(cell);
   const delta = classifyDeltaCell(displayCell);
   if (delta.isPercentOrSigned && delta.tone !== 'neutral') {
+    const toneClass = delta.tone === 'up' ? 'delta-up' : 'delta-dn';
+    const width = `${momentumPercent(changeMagnitude(displayCell), maxAbs)}%`;
     return (
       <td className={isNumCol ? 'td-num' : undefined}>
-        <span className={delta.tone === 'up' ? 'delta-up' : 'delta-dn'}>{displayCell}</span>
+        <span className={`delta-momentum ${toneClass}`}>
+          {/* Decorative: length repeats the printed number, so it stays hidden from assistive tech. */}
+          <span className="delta-momentum-track" aria-hidden="true">
+            <span className="delta-momentum-fill" style={{ width }} />
+          </span>
+          <span>{displayCell}</span>
+        </span>
       </td>
     );
   }
@@ -195,7 +215,7 @@ function MarketValueCell({ cell, rowLabel, isNumCol }: { cell: string; rowLabel:
   return <td className={classes || undefined}>{displayCell || '—'}</td>;
 }
 
-function MarketDataCell({ cell, rowLabel, isNumCol, colKind }: MarketCellProps) {
+function MarketDataCell({ cell, rowLabel, isNumCol, colKind, maxAbs }: MarketCellProps) {
   switch (colKind) {
     case 'chain':
       return <MarketChainCell cell={cell} />;
@@ -206,7 +226,7 @@ function MarketDataCell({ cell, rowLabel, isNumCol, colKind }: MarketCellProps) 
     case 'ilRisk':
       return <MarketIlRiskCell cell={cell} />;
     default:
-      return <MarketValueCell cell={cell} rowLabel={rowLabel} isNumCol={isNumCol} />;
+      return <MarketValueCell cell={cell} rowLabel={rowLabel} isNumCol={isNumCol} maxAbs={maxAbs} />;
   }
 }
 
@@ -513,6 +533,7 @@ function MarketTable({
   rowKeys,
   numericCols,
   colKinds,
+  deltaScales,
   sort,
   captionId,
   query,
@@ -526,6 +547,7 @@ function MarketTable({
   rowKeys: Map<MarketRow, string>;
   numericCols: readonly boolean[];
   colKinds: readonly MarketColumnKind[];
+  deltaScales: readonly number[];
   sort: Sort;
   captionId: string;
   query: string;
@@ -592,6 +614,7 @@ function MarketTable({
                     rowLabel={row.cells[0] ?? section.title}
                     isNumCol={numericCols[ci] ?? false}
                     colKind={colKinds[ci] ?? 'data'}
+                    maxAbs={deltaScales[ci] ?? 0}
                   />
                 );
               })}
@@ -650,6 +673,8 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
     () => section.cols.map((col, idx) => resolveColumnKind(section.id, col, idx)),
     [section.id, section.cols],
   );
+
+  const deltaScales = useMemo(() => scaleDeltaColumns(section), [section]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -719,6 +744,7 @@ export function MarketPanel({ section, sectors, searchRef }: Props) {
         rowKeys={rowKeys}
         numericCols={numericCols}
         colKinds={colKinds}
+        deltaScales={deltaScales}
         sort={sort}
         captionId={captionId}
         query={query}

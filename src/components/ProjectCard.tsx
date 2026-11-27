@@ -6,10 +6,12 @@ import {
   getCardTasks,
   isTaskKeyDone,
 } from '../hooks/useWatchlist';
+import { cleanMetaText } from '../lib/feedDisplay';
 import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
 import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
+import { ProjectRichMeta } from './ProjectRichMeta';
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -350,6 +352,7 @@ export function ProjectCard({
   const isRisk = c.b.includes('risk');
   const safeHeat = Number.isFinite(c.h) && c.h >= 0 ? c.h : 0;
   const subTitle = `Launch potential ${c.sub[0]}/10, Airdrop value ${c.sub[1]}/10${c.sub[2] != null ? `, Heat ${c.sub[2]}/10` : ''}`;
+  const description = cleanMetaText(c.description, 200);
 
   return (
     <article className={`cardx project-card${saved ? ' is-saved' : ''}`}>
@@ -363,6 +366,9 @@ export function ProjectCard({
       />
 
       <ProjectChipRow tags={tags} riskLabel={c.riskLabel} />
+
+      <ProjectRichMeta card={c} />
+      {description && <p className="project-description">{description}</p>}
 
       <div className="card-bottom project-bottom">
         <div className="meta project-stats">

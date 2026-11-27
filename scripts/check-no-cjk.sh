@@ -7,7 +7,7 @@ set -euo pipefail
 CJK_RE='\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Bopomofo}|[\x{3000}-\x{303F}\x{3200}-\x{32FF}\x{FE30}-\x{FE4F}\x{FF01}-\x{FFEF}]'
 
 set +e
-MATCHES=$(rg -n --pcre2 "$CJK_RE" src shared worker/src index.html scripts public worker/sources.json worker/migrations data/snapshot --glob '!worker/src/normalize/i18n.ts')
+MATCHES=$(rg -n --pcre2 "$CJK_RE" src shared worker/src server deploy index.html scripts public worker/sources.json worker/migrations data/snapshot --glob '!worker/src/normalize/i18n.ts')
 STATUS=$?
 set -e
 

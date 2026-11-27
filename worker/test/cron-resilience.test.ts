@@ -4,7 +4,15 @@ import { createTestD1 } from './helpers';
 import { evaluateSafety } from '../src/safety';
 import { DRAINER_RE, URL_SHORTENERS } from '../src/safety/index';
 import { markSnapshotError, upsertSnapshot, readSnapshot } from '../src/lib/db';
-import worker, { bodyEtag, ensureSourcesSynced, postProcessIngest, type Env } from '../src/index';
+import worker, {
+  bodyEtag,
+  buildMarketsPayload,
+  ensureSourcesSynced,
+  postProcessIngest,
+  runFiveMinCron,
+  runOneMinCron,
+  type Env,
+} from '../src/index';
 import type { IngestPostResult } from '../src/normalize/cluster';
 
 function createSqliteD1(): D1Database {
@@ -2175,6 +2183,263 @@ describe('HTTP hardening: health, CORS, Allow, HEAD, canonical cache keys, cold 
       await worker.fetch(new Request('https://radar.test/feed.json?limit=0'), { DB: db }, ctx);
       await Promise.all(pendingWaits.splice(0));
       expect(store.has('https://radar.test/feed.json?limit=1')).toBe(true);
+    } finally {
+      if (hadCaches) g.caches = prevCaches;
+      else delete g.caches;
+    }
+  });
+
+  test('runs without a caches global (Bun server host): ETag, If-None-Match 304, and Cache-Control still work', async () => {
+    const { db } = createTestD1();
+    await upsertSnapshot(db, 'airdrops', { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW }, NOW);
+
+    const g = globalThis as unknown as { caches?: CacheStorage };
+    const hadCaches = 'caches' in g;
+    const prevCaches = g.caches;
+    delete g.caches;
+    try {
+      expect('caches' in g).toBe(false);
+
+      const res = await worker.fetch(new Request('https://radar.test/airdrops.json'), { DB: db }, makeExecCtx());
+      expect(res.status).toBe(200);
+      const etag = res.headers.get('ETag');
+      expect(etag).toMatch(/^"[0-9a-f]{40}"$/);
+      expect(res.headers.get('Cache-Control')).toBe('public, max-age=60, s-maxage=120');
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+
+      // Without an edge cache the ETag is still honored on a cold request.
+      const notModified = await worker.fetch(
+        new Request('https://radar.test/airdrops.json?cb=1', { headers: { 'If-None-Match': etag! } }),
+        { DB: db },
+        makeExecCtx(),
+      );
+      expect(notModified.status).toBe(304);
+      expect(notModified.headers.get('ETag')).toBe(etag);
+      expect(notModified.headers.get('Cache-Control')).toBe('public, max-age=60, s-maxage=120');
+      expect(await notModified.text()).toBe('');
+
+      // A stale validator gets the full body again.
+      const stale = await worker.fetch(
+        new Request('https://radar.test/airdrops.json', { headers: { 'If-None-Match': '"stale"' } }),
+        { DB: db },
+        makeExecCtx(),
+      );
+      expect(stale.status).toBe(200);
+
+      const feed = await worker.fetch(new Request('https://radar.test/feed.json'), { DB: db }, makeExecCtx());
+      expect(feed.status).toBe(200);
+      expect(feed.headers.get('Cache-Control')).toBe('public, max-age=30, s-maxage=60');
+      expect(feed.headers.get('ETag')).toMatch(/^"[0-9a-f]{40}"$/);
+
+      const head = await worker.fetch(
+        new Request('https://radar.test/feed.json', { method: 'HEAD', headers: { 'If-None-Match': feed.headers.get('ETag')! } }),
+        { DB: db },
+        makeExecCtx(),
+      );
+      expect(head.status).toBe(304);
+      expect(await head.text()).toBe('');
+
+      // No markets snapshots yet: the route still answers its 503 instead of crashing.
+      const markets = await worker.fetch(new Request('https://radar.test/markets.json'), { DB: db }, makeExecCtx());
+      expect(markets.status).toBe(503);
+      expect(markets.headers.get('Cache-Control')).toBe('no-store');
+    } finally {
+      if (hadCaches) g.caches = prevCaches;
+      else delete g.caches;
+    }
+  });
+
+  test('exports the cron runners and markets builder for a Bun server host next to the default { fetch, scheduled }', async () => {
+    expect(typeof worker.fetch).toBe('function');
+    expect(typeof worker.scheduled).toBe('function');
+    expect(typeof runOneMinCron).toBe('function');
+    expect(typeof runFiveMinCron).toBe('function');
+    expect(typeof buildMarketsPayload).toBe('function');
+
+    const { db } = createTestD1();
+    expect(await buildMarketsPayload(db, NOW)).toBeNull();
+
+    await upsertSnapshot(
+      db,
+      'markets:crypto',
+      {
+        section: {
+          id: 'crypto',
+          title: 'Crypto Market',
+          blurb: '',
+          cols: ['Coin'],
+          rows: [],
+          source: 'CoinGecko',
+          sourceUrl: 'https://www.coingecko.com',
+          fetchedAt: NOW,
+          stale: false,
+        },
+        sectors: [],
+      },
+      NOW,
+    );
+    const payload = await buildMarketsPayload(db, NOW);
+    expect(payload).not.toBeNull();
+    expect(JSON.parse(payload!.body).sections.map((s: { id: string }) => s.id)).toEqual(['crypto']);
+    expect(payload!.etag).toBe(await bodyEtag(payload!.body));
+  });
+});
+
+describe('provider-agnostic LLM resolution in postProcessIngest', () => {
+  interface Seen { url: string; auth: string | null; body: Record<string, unknown> }
+
+  async function withLlmFetch<T>(
+    handler: (url: string, init: RequestInit) => Response,
+    fn: (seen: Seen[]) => Promise<T>,
+  ): Promise<T> {
+    const seen: Seen[] = [];
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const headers = init?.headers as Record<string, string> | undefined;
+      seen.push({ url, auth: headers?.Authorization ?? null, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
+      return handler(url, init ?? {});
+    }) as unknown as typeof fetch;
+    try {
+      return await fn(seen);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  }
+
+  async function seedRuleCluster(db: D1Database): Promise<void> {
+    await seedEnabledSource(db);
+    await db
+      .prepare(
+        `INSERT OR REPLACE INTO clusters (id, project, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, ai_attempts, ai_retry_after)
+         VALUES ('c:compat', 'CompatProto', '[]', '["other"]', 'rule', 'rule', 'ok', '[]', 1, 1, ?1, ?1, 0, 0)`,
+      )
+      .bind(NOW - 1_000)
+      .run();
+    await db
+      .prepare(
+        `INSERT OR REPLACE INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p:compat', 'telegram:ch1', 'https://t.me/ch1/1', ?1, 'compat post', '[]', 'c:compat', ?1)`,
+      )
+      .bind(NOW - 1_000)
+      .run();
+  }
+
+  const chatCompletion = () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ summary: 'CompatProto testnet quest is live.', taskTypes: ['quest'] }) } }],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+
+  test('uses an OpenAI-compatible endpoint when env.AI is absent and LLM_BASE_URL + LLM_API_KEY are set', async () => {
+    const db = createSqliteD1();
+    await seedRuleCluster(db);
+
+    let seen: Seen[] = [];
+    await withLlmFetch(() => chatCompletion(), async calls => {
+      await postProcessIngest(
+        { DB: db, LLM_BASE_URL: 'https://llm.example/v1/', LLM_API_KEY: 'secret', LLM_MODEL: 'gpt-4.1-mini', AI_SUMMARY_CHUNK: '4' },
+        [],
+        NOW,
+      );
+      seen = calls;
+    });
+
+    expect(
+      await db.prepare(`SELECT summary_source, summary FROM clusters WHERE id = 'c:compat'`).first(),
+    ).toEqual({ summary_source: 'ai', summary: 'CompatProto testnet quest is live.' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ url: 'https://llm.example/v1/chat/completions', auth: 'Bearer secret' });
+    expect(seen[0]!.body.model).toBe('gpt-4.1-mini');
+  });
+
+  test('uses the Cloudflare Workers AI REST endpoint when only CF_ACCOUNT_ID + CF_API_TOKEN are set', async () => {
+    const db = createSqliteD1();
+    await seedRuleCluster(db);
+
+    await withLlmFetch(
+      () =>
+        new Response(
+          JSON.stringify({ success: true, errors: [], messages: [], result: { response: JSON.stringify({ summary: 'Rest summary.' }) } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      async () => {
+        await postProcessIngest({ DB: db, CF_ACCOUNT_ID: 'acc', CF_API_TOKEN: 'cf-token', AI_SUMMARY_CHUNK: '4' }, [], NOW);
+      },
+    );
+
+    expect(await db.prepare(`SELECT summary_source, summary FROM clusters WHERE id = 'c:compat'`).first()).toEqual({
+      summary_source: 'ai',
+      summary: 'Rest summary.',
+    });
+  });
+
+  test('env.AI always wins over the OpenAI-compatible configuration', async () => {
+    const db = createSqliteD1();
+    await seedRuleCluster(db);
+    let nativeCalls = 0;
+    const nativeAi = {
+      async run() {
+        nativeCalls++;
+        return JSON.stringify({ summary: 'Native binding summary.' });
+      },
+    };
+
+    await withLlmFetch(() => chatCompletion(), async seen => {
+      await postProcessIngest(
+        { DB: db, AI: nativeAi, LLM_BASE_URL: 'https://llm.example/v1', LLM_API_KEY: 'secret', AI_SUMMARY_CHUNK: '4' },
+        [],
+        NOW,
+      );
+      expect(seen).toHaveLength(0);
+    });
+
+    expect(nativeCalls).toBe(1);
+    expect(await db.prepare(`SELECT summary FROM clusters WHERE id = 'c:compat'`).first()).toEqual({
+      summary: 'Native binding summary.',
+    });
+  });
+
+  test('incomplete or missing credentials fall back to rule summaries with zero queries', async () => {
+    const { db, queries } = createTestD1();
+    await seedRuleCluster(db);
+
+    for (const env of [
+      { LLM_BASE_URL: 'https://llm.example/v1' },
+      { LLM_API_KEY: 'secret' },
+      { CF_ACCOUNT_ID: 'acc' },
+      {},
+    ] as Partial<Env>[]) {
+      const before = queries.length;
+      await postProcessIngest({ DB: db, AI_SUMMARY_CHUNK: '4', ...env }, [], NOW);
+      expect(queries.slice(before)).toEqual([]);
+    }
+    expect(await db.prepare(`SELECT summary_source FROM clusters WHERE id = 'c:compat'`).first()).toEqual({
+      summary_source: 'rule',
+    });
+  });
+
+  test('the exported cron runners run without a caches global, as a Bun server host calls them', async () => {
+    const { db } = createTestD1();
+    const g = globalThis as unknown as { caches?: CacheStorage };
+    const hadCaches = 'caches' in g;
+    const prevCaches = g.caches;
+    delete g.caches;
+    try {
+      await withStubbedFetch(
+        () => new Response('nope', { status: 503 }),
+        async () => {
+          await runOneMinCron({ DB: db }, NOW);
+          await runFiveMinCron({ DB: db }, NOW);
+        },
+      );
+      // Source sync ran and failures were recorded as source errors, not as thrown crashes.
+      const failed = await db
+        .prepare(`SELECT COUNT(*) AS n FROM sources WHERE status = 'error' OR status = 'degraded'`)
+        .first<{ n: number }>();
+      expect(failed!.n).toBeGreaterThan(0);
     } finally {
       if (hadCaches) g.caches = prevCaches;
       else delete g.caches;

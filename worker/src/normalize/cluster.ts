@@ -11,7 +11,14 @@ import type {
 } from '../../../shared/types';
 import { sha1Hex } from '../lib/hash';
 import { safeHttpsUrl } from '../lib/url';
-import { evaluateSafety, getTrustedSurfCardDomain, isUntrustedSheetSource, reconcileSafetyReasons } from '../safety';
+import {
+  evaluateSafety,
+  getTrustedSurfCardDomain,
+  isUntrustedSheetSource,
+  isUnverifiedRegistryReason,
+  reconcileSafetyReasons,
+  UNVERIFIED_REGISTRY_REASON_PREFIX,
+} from '../safety';
 import {
   getRegistrableDomain,
   isCuratedAggregatorDomain,
@@ -25,6 +32,7 @@ import {
   parseDropPost,
   type ParseContext,
   type ParsedDrop,
+  type RichDropMeta,
   type SurfMatch,
 } from './parse';
 import { computeScore } from './score';
@@ -116,16 +124,39 @@ export function buildSurfIndex(feed?: AirdropFeed | null): SurfIndex {
   return { byDomain, byTicker, byName };
 }
 
+/** A trusted Radar card (or DefiLlama protocol row) a Live Drops item can be linked back to. */
+export interface RadarCardRef {
+  /** Stable Radar card id (`card.id`); null for DefiLlama rows, which are not Radar cards. */
+  id: string | null;
+  name: string;
+  /** Trusted registrable domain of the card, when it has one. */
+  domain?: string;
+  ticker?: string;
+  logo?: string;
+  /** Total raise (`card.f`); absent when the card shows no funding. */
+  funding?: string;
+  tvlUsd?: number;
+}
+
 export interface FeedLogoIndex {
   byDomain: Map<string, string>;
   byTicker: Map<string, string>;
   byName: Map<string, string>;
+  /** Radar cards by trusted domain / project key / ticker, built together with the logo maps. */
+  radarByDomain?: Map<string, RadarCardRef>;
+  radarByName?: Map<string, RadarCardRef>;
+  radarByTicker?: Map<string, RadarCardRef>;
+}
+
+function positiveUsd(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 /**
- * Builds a lightweight in-memory HTTPS logo lookup from trusted Surf/curated
- * airdrop cards, TGE entries, and DefiLlama protocols. Strictly excludes risk
- * cards, editable public sheets (ASSO7878 / arndxt), and non-HTTPS URLs.
+ * Builds a lightweight in-memory HTTPS logo and Radar-card lookup from trusted
+ * Surf/curated airdrop cards, TGE entries, and DefiLlama protocols. Strictly
+ * excludes risk cards, editable public sheets (ASSO7878 / arndxt), and
+ * non-HTTPS URLs.
  */
 export function buildFeedLogoIndex(
   airdrops?: AirdropFeed | null,
@@ -134,22 +165,50 @@ export function buildFeedLogoIndex(
   const byDomain = new Map<string, string>();
   const byTicker = new Map<string, string>();
   const byName = new Map<string, string>();
+  const radarByDomain = new Map<string, RadarCardRef>();
+  const radarByName = new Map<string, RadarCardRef>();
+  const radarByTicker = new Map<string, RadarCardRef>();
+
+  const indexRadar = (ref: RadarCardRef, dom: string | undefined): void => {
+    if (dom) {
+      const existing = radarByDomain.get(dom);
+      if (!existing) {
+        radarByDomain.set(dom, ref);
+      } else if (existing.tvlUsd === undefined && ref.tvlUsd !== undefined) {
+        existing.tvlUsd = ref.tvlUsd;
+      }
+    }
+    if (ref.ticker && !radarByTicker.has(ref.ticker)) radarByTicker.set(ref.ticker, ref);
+    const nameKey = normalizeProjectKey(ref.name);
+    if (nameKey.length >= 3 && !radarByName.has(nameKey)) radarByName.set(nameKey, ref);
+  };
 
   if (airdrops) {
     for (const card of airdrops.cards ?? []) {
       if (card.b?.includes('risk') || isUntrustedSheetSource(card.source)) continue;
-      const logo = safeHttpsUrl(card.img);
-      if (!logo) continue;
+      const logo = safeHttpsUrl(card.img) ?? undefined;
       const dom = getTrustedSurfCardDomain(card);
-      if (dom && !byDomain.has(dom)) byDomain.set(dom, logo);
-      if (card.t) {
-        const upper = card.t.trim().toUpperCase();
-        if (upper && !MAJOR_TICKERS.has(upper) && !byTicker.has(upper)) {
-          byTicker.set(upper, logo);
-        }
+      const ticker = card.t?.trim().toUpperCase() || undefined;
+      const majorTicker = ticker ? MAJOR_TICKERS.has(ticker) : false;
+      if (logo) {
+        if (dom && !byDomain.has(dom)) byDomain.set(dom, logo);
+        if (ticker && !majorTicker && !byTicker.has(ticker)) byTicker.set(ticker, logo);
       }
       const nameKey = normalizeProjectKey(card.n);
-      if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+      if (logo && nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+      const tvlUsd = positiveUsd(card.tvlUsd);
+      indexRadar(
+        {
+          id: card.id?.trim() || null,
+          name: card.n,
+          ...(dom ? { domain: dom } : {}),
+          ...(ticker && !majorTicker ? { ticker } : {}),
+          ...(logo ? { logo } : {}),
+          ...(card.f && card.f !== '—' ? { funding: card.f } : {}),
+          ...(tvlUsd !== undefined ? { tvlUsd } : {}),
+        },
+        dom,
+      );
     }
 
     for (const tge of airdrops.tge ?? []) {
@@ -179,24 +238,68 @@ export function buildFeedLogoIndex(
   }
 
   if (defiSection) {
+    // TVL sits in the raw sort value of the column titled `TVL`, never in its formatted cell.
+    const tvlCol = defiSection.cols?.findIndex(col => /^tvl$/i.test(col.trim())) ?? -1;
     for (const row of defiSection.rows ?? []) {
       const logo = safeHttpsUrl(row.icon);
-      if (!logo) continue;
-      if (row.href) {
-        const dom = getRegistrableDomain(row.href)?.toLowerCase();
-        if (dom && !isPlatformDomain(dom) && !byDomain.has(dom)) {
-          byDomain.set(dom, logo);
-        }
-      }
-      const label = row.cells?.[0];
-      if (label) {
-        const nameKey = normalizeProjectKey(label);
+      const dom = row.href ? getRegistrableDomain(row.href)?.toLowerCase() : undefined;
+      const tvlUsd = tvlCol >= 0 ? positiveUsd(row.sortValues?.[tvlCol]) : undefined;
+      if (logo) {
+        if (dom && !isPlatformDomain(dom) && !byDomain.has(dom)) byDomain.set(dom, logo);
+        const label = row.cells?.[0];
+        const nameKey = label ? normalizeProjectKey(label) : '';
         if (nameKey.length >= 3 && !byName.has(nameKey)) byName.set(nameKey, logo);
+      }
+      if (logo || tvlUsd !== undefined) {
+        indexRadar(
+          {
+            // DefiLlama rows carry TVL and a logo only; they are not Radar cards.
+            id: null,
+            name: row.cells?.[0] ?? '',
+            ...(dom && !isPlatformDomain(dom) ? { domain: dom } : {}),
+            ...(logo ? { logo } : {}),
+            ...(tvlUsd !== undefined ? { tvlUsd } : {}),
+          },
+          dom && !isPlatformDomain(dom) ? dom : undefined,
+        );
       }
     }
   }
 
-  return { byDomain, byTicker, byName };
+  return { byDomain, byTicker, byName, radarByDomain, radarByName, radarByTicker };
+}
+
+function radarNameKey(project: string): string | undefined {
+  const nameKey = normalizeProjectKey(project);
+  return nameKey.length >= 3 && nameKey !== 'web3project' && !isStopName(project) ? nameKey : undefined;
+}
+
+/**
+ * Finds the Radar card (or DefiLlama row) behind a Live Drops item. A domain
+ * match is exact. A name match is accepted only when the two domains do not
+ * disagree, so a project never inherits the funding or TVL of a same-named
+ * protocol that lives on a different domain.
+ */
+export function resolveRadarCard(
+  item: { project: string; domain?: string; ticker?: string },
+  logoIndex?: FeedLogoIndex | null,
+): RadarCardRef | undefined {
+  if (!logoIndex) return undefined;
+  const dom = item.domain?.toLowerCase();
+  if (dom && logoIndex.radarByDomain) {
+    const byDom = logoIndex.radarByDomain.get(dom);
+    if (byDom) return byDom;
+  }
+  const nameKey = radarNameKey(item.project);
+  if (nameKey && logoIndex.radarByName) {
+    const byName = logoIndex.radarByName.get(nameKey);
+    if (byName && (!dom || !byName.domain || byName.domain === dom)) return byName;
+  }
+  if (!dom && item.ticker && logoIndex.radarByTicker) {
+    const upper = item.ticker.toUpperCase();
+    if (!MAJOR_TICKERS.has(upper)) return logoIndex.radarByTicker.get(upper);
+  }
+  return undefined;
 }
 
 /**
@@ -664,12 +767,6 @@ export async function ingestPostIntoCluster(
       const mergedTasks = mergedTasksRaw.length > 1 ? mergedTasksRaw.filter(t => t !== 'other') : mergedTasksRaw;
 
       const resolvedDomain = existing?.domain ?? parsed.projectDomain ?? undefined;
-      const domainIsKnown = Boolean(
-        resolvedDomain && (knownProjectDomains.has(resolvedDomain.toLowerCase()) || isPlatformDomain(resolvedDomain)),
-      );
-      const exactUnverifiedReason = resolvedDomain
-        ? `domain not in verified registry: ${resolvedDomain.toLowerCase()}`
-        : '';
 
       const safety = evaluateSafety({
         domain: resolvedDomain,
@@ -683,11 +780,11 @@ export async function ingestPostIntoCluster(
       });
 
       // Escalate risk conservatively across merged posts, while clearing stale
-      // single-low-trust and exact-matching unverified-registry warnings once
-      // corroborated or seeded into known_domains.
+      // single-low-trust warnings once corroborated and the retired
+      // unverified-registry warning still stored on legacy rows.
       const filteredPrevReasons = prevReasons.filter(r => {
         if (sourceCount > 1 && r === 'Single low-trust source') return false;
-        if (domainIsKnown && exactUnverifiedReason && r.trim().toLowerCase() === exactUnverifiedReason) return false;
+        if (isUnverifiedRegistryReason(r)) return false;
         return true;
       });
       const mergedReasons = unionStrings(filteredPrevReasons, safety.reasons);
@@ -734,7 +831,6 @@ export async function ingestPostIntoCluster(
         riskLevel: mergedRisk,
       });
 
-      const domainKnownFlag = domainIsKnown ? 1 : 0;
       const isDropFlag = parsed.isRelevantDrop ? 1 : 0;
 
       if (existing) {
@@ -794,7 +890,7 @@ export async function ingestPostIntoCluster(
                  FROM (SELECT value FROM json_each(clusters.risk_reasons)
                        UNION SELECT value FROM json_each(?10))
                  WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, ?12) <= 1)
-                   AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
+                   AND lower(trim(value)) NOT LIKE '${UNVERIFIED_REGISTRY_REASON_PREFIX}%'
                ),
                risk_level = CASE
                  WHEN clusters.risk_level = 'risk' OR ?9 = 'risk' THEN 'risk'
@@ -805,7 +901,7 @@ export async function ingestPostIntoCluster(
                               UNION
                               SELECT value FROM json_each(?10))
                         WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, ?12) <= 1)
-                          AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
+                          AND lower(trim(value)) NOT LIKE '${UNVERIFIED_REGISTRY_REASON_PREFIX}%'
                       )
                    THEN 'warn'
                  ELSE 'ok'
@@ -816,24 +912,24 @@ export async function ingestPostIntoCluster(
                  ELSE MAX(clusters.score, ?11)
                END,
                source_count = MAX(clusters.source_count, ?12),
-               trust_max = MAX(clusters.trust_max, ?20),
+               trust_max = MAX(clusters.trust_max, ?18),
                surf_tier = COALESCE(?13, clusters.surf_tier), surf_rank = COALESCE(?14, clusters.surf_rank),
                first_seen = MIN(clusters.first_seen, ?15), last_seen = MAX(clusters.last_seen, ?16),
                project = ?2, ticker = COALESCE(?3, clusters.ticker), domain = COALESCE(?4, clusters.domain),
-               is_drop = CASE WHEN clusters.is_drop = 1 OR ?19 = 1 THEN 1 ELSE COALESCE(clusters.is_drop, ?19) END,
-               project_key = COALESCE(clusters.project_key, ?21)
+               is_drop = CASE WHEN clusters.is_drop = 1 OR ?17 = 1 THEN 1 ELSE COALESCE(clusters.is_drop, ?17) END,
+               project_key = COALESCE(clusters.project_key, ?19)
              WHERE id = ?1
                AND (
-                 ?22 IS NULL
-                 OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22)
+                 ?20 IS NULL
+                 OR (?21 >= clusters.first_seen - ?20 AND ?21 <= clusters.last_seen + ?20)
                  OR (
-                   ?24 IS NOT NULL
+                   ?22 IS NOT NULL
                    AND EXISTS (
                      SELECT 1 FROM fallback_windows fw
-                     WHERE fw.identity_key = ?24
+                     WHERE fw.identity_key = ?22
                        AND fw.cluster_id = clusters.id
-                       AND ?23 >= fw.first_seen
-                       AND ?23 <= fw.last_seen
+                       AND ?21 >= fw.first_seen
+                       AND ?21 <= fw.last_seen
                        AND clusters.first_seen >= fw.first_seen
                        AND clusters.last_seen <= fw.last_seen
                    )
@@ -857,8 +953,6 @@ export async function ingestPostIntoCluster(
             surfRank,
             firstSeen,
             lastSeen,
-            domainKnownFlag,
-            exactUnverifiedReason,
             isDropFlag,
             trustMax,
             projectKey,
@@ -877,7 +971,7 @@ export async function ingestPostIntoCluster(
         const upsertRes = await db
           .prepare(
             `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, surf_tier, surf_rank, first_seen, last_seen, is_drop, trust_max, project_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?19, ?20, ?21)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT(id) DO UPDATE SET
                chains = (
                  SELECT json_group_array(DISTINCT value)
@@ -901,7 +995,7 @@ export async function ingestPostIntoCluster(
                    SELECT value FROM json_each(excluded.risk_reasons)
                  )
                  WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, excluded.source_count) <= 1)
-                   AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
+                   AND lower(trim(value)) NOT LIKE '${UNVERIFIED_REGISTRY_REASON_PREFIX}%'
                ),
                risk_level = CASE
                  WHEN clusters.risk_level = 'risk' OR excluded.risk_level = 'risk' THEN 'risk'
@@ -912,7 +1006,7 @@ export async function ingestPostIntoCluster(
                               UNION
                               SELECT value FROM json_each(excluded.risk_reasons))
                         WHERE (value != 'Single low-trust source' OR MAX(clusters.source_count, excluded.source_count) <= 1)
-                          AND (?17 = 0 OR ?18 = '' OR lower(trim(value)) != ?18)
+                          AND lower(trim(value)) NOT LIKE '${UNVERIFIED_REGISTRY_REASON_PREFIX}%'
                       )
                    THEN 'warn'
                  ELSE 'ok'
@@ -934,16 +1028,16 @@ export async function ingestPostIntoCluster(
                is_drop = CASE WHEN clusters.is_drop = 1 OR excluded.is_drop = 1 THEN 1 ELSE COALESCE(clusters.is_drop, excluded.is_drop) END,
                trust_max = MAX(clusters.trust_max, excluded.trust_max),
                project_key = COALESCE(clusters.project_key, excluded.project_key)
-             WHERE ?22 IS NULL
-                OR (?23 >= clusters.first_seen - ?22 AND ?23 <= clusters.last_seen + ?22)
+             WHERE ?20 IS NULL
+                OR (?21 >= clusters.first_seen - ?20 AND ?21 <= clusters.last_seen + ?20)
                 OR (
-                  ?24 IS NOT NULL
+                  ?22 IS NOT NULL
                   AND EXISTS (
                     SELECT 1 FROM fallback_windows fw
-                    WHERE fw.identity_key = ?24
+                    WHERE fw.identity_key = ?22
                       AND fw.cluster_id = clusters.id
-                      AND ?23 >= fw.first_seen
-                      AND ?23 <= fw.last_seen
+                      AND ?21 >= fw.first_seen
+                      AND ?21 <= fw.last_seen
                       AND clusters.first_seen >= fw.first_seen
                       AND clusters.last_seen <= fw.last_seen
                   )
@@ -966,8 +1060,6 @@ export async function ingestPostIntoCluster(
             surfRank,
             firstSeen,
             lastSeen,
-            domainKnownFlag,
-            exactUnverifiedReason,
             isDropFlag,
             trustMax,
             projectKey,
@@ -999,6 +1091,12 @@ export async function ingestPostIntoCluster(
       }
 
       let postInserted = false;
+      // Rich metadata rides on its own statement so a pre-0009 schema never fails the ingest.
+      if (parsed.isRelevantDrop) {
+        await mergeClusterRichMeta(db, clusterId, parsed, {
+          deadlineAt: Number.isFinite(effectivePostedAt) ? effectivePostedAt : nowMs,
+        });
+      }
       if (!existingPost) {
         const insertPost = await db
           .prepare(
@@ -1217,6 +1315,168 @@ function polishLegacyRuleSummary(
   return truncateAtWordBoundary(cleaned);
 }
 
+interface ClusterRichMetaRow {
+  id: string;
+  reward_pool: string | null;
+  deadline: string | null;
+  cost: string | null;
+  steps: string | null;
+}
+
+interface DomainMetaRow {
+  domain: string;
+  logo_url: string | null;
+  og_image: string | null;
+  og_title: string | null;
+  og_description: string | null;
+  tvl_usd: number | null;
+}
+
+const MAX_STEPS = 4;
+
+/**
+ * Merges rich metadata into a cluster row. Values fill only what is still
+ * empty, and steps merge in first-seen order up to the cap. When `deadlineAt`
+ * is supplied (post ingest), a newer post's deadline replaces an older one
+ * while an older post can still fill an empty field; an AI summary never
+ * overrides what the parser already read. An AI caller also passes its row
+ * lease so a lost lease never writes. Silently skipped on a pre-0009 schema
+ * without the rich columns; the cluster write itself already succeeded.
+ */
+export async function mergeClusterRichMeta(
+  db: D1Database,
+  clusterId: string,
+  rich: RichDropMeta,
+  opts: { deadlineAt?: number; newestDeadlineWins?: boolean; leaseUntil?: number } = {},
+): Promise<void> {
+  const dedupedSteps = rich.steps?.length ? [...new Set(rich.steps)].slice(0, MAX_STEPS) : [];
+  if (!rich.rewardPool && !rich.deadline && !rich.cost && dedupedSteps.length === 0) return;
+  const values: unknown[] = [
+    clusterId,
+    rich.rewardPool ?? null,
+    rich.deadline ?? null,
+    rich.cost ?? null,
+    JSON.stringify(dedupedSteps),
+  ];
+  const hasDeadlineAt = typeof opts.deadlineAt === 'number' && Number.isFinite(opts.deadlineAt);
+  let deadlineAtParam = '';
+  if (hasDeadlineAt) {
+    values.push(opts.deadlineAt);
+    deadlineAtParam = `?${values.length}`;
+  }
+  let leaseClause = '';
+  if (opts.leaseUntil !== undefined) {
+    values.push(opts.leaseUntil);
+    leaseClause = ` AND ai_retry_after = ?${values.length}`;
+  }
+  const deadlineClause = hasDeadlineAt
+    ? `deadline = CASE
+         WHEN ?3 IS NULL THEN NULLIF(clusters.deadline, '')
+         WHEN NULLIF(clusters.deadline, '') IS NULL THEN ?3
+         WHEN clusters.deadline_updated_at IS NULL OR ${deadlineAtParam} >= clusters.deadline_updated_at THEN ?3
+         ELSE clusters.deadline
+       END,
+       deadline_updated_at = CASE
+         WHEN ?3 IS NULL THEN clusters.deadline_updated_at
+         WHEN NULLIF(clusters.deadline, '') IS NULL THEN ${deadlineAtParam}
+         WHEN clusters.deadline_updated_at IS NULL OR ${deadlineAtParam} >= clusters.deadline_updated_at THEN ${deadlineAtParam}
+         ELSE clusters.deadline_updated_at
+       END`
+    : `deadline = ${
+        opts.newestDeadlineWins
+          ? "COALESCE(?3, NULLIF(clusters.deadline, ''))"
+          : "COALESCE(NULLIF(clusters.deadline, ''), ?3, clusters.deadline)"
+      }`;
+  try {
+    await db
+      .prepare(
+        `UPDATE clusters SET
+           reward_pool = COALESCE(NULLIF(clusters.reward_pool, ''), ?2, clusters.reward_pool),
+           ${deadlineClause},
+           cost = COALESCE(NULLIF(clusters.cost, ''), ?4, clusters.cost),
+           steps = CASE
+                   WHEN json_valid(clusters.steps) AND json_array_length(clusters.steps) > 0
+                   THEN (
+                     SELECT json_group_array(value) FROM (
+                       SELECT DISTINCT value FROM (
+                         SELECT value FROM json_each(clusters.steps)
+                         UNION ALL
+                         SELECT value FROM json_each(?5)
+                       )
+                       LIMIT ${MAX_STEPS}
+                     )
+                   )
+                   ELSE ?5
+                 END
+         WHERE id = ?1${leaseClause}`,
+      )
+      .bind(...values)
+      .run();
+  } catch {
+    // Pre-0009 schema: the cluster row is still correct, only the rich fields are absent.
+  }
+}
+
+/** One-line display text with control characters and CJK removed, or undefined when nothing is left. */
+function cleanMetaText(raw: string | null | undefined, maxLen: number): string | undefined {
+  if (!raw) return undefined;
+  const text = truncateAtWordBoundary(
+    stripOrTranslateCjk(raw)
+      .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    maxLen,
+  );
+  return text || undefined;
+}
+
+function bindList(values: string[]): string {
+  return values.map((_, idx) => `?${idx + 1}`).join(',');
+}
+
+/** Rich metadata for a page of clusters; an empty map on a pre-0009 schema without the columns. */
+async function loadClusterRichMeta(db: D1Database, clusterIds: string[]): Promise<Map<string, ClusterRichMetaRow>> {
+  const map = new Map<string, ClusterRichMetaRow>();
+  if (clusterIds.length === 0) return map;
+  try {
+    const res = await db
+      .prepare(`SELECT id, reward_pool, deadline, cost, steps FROM clusters WHERE id IN (${bindList(clusterIds)})`)
+      .bind(...clusterIds)
+      .all<ClusterRichMetaRow>();
+    for (const row of res.results ?? []) map.set(row.id, row);
+  } catch {
+    // Pre-0009 schema: serve the feed without rich metadata.
+  }
+  return map;
+}
+
+// 99 domains + 1 expires_at cutoff stays within D1's 100-parameter bind limit.
+const DOMAIN_META_BIND_CHUNK = 99;
+
+/** Unexpired cached enrichment rows for a page of domains; empty when the table is missing. */
+async function loadDomainMeta(db: D1Database, domains: string[]): Promise<Map<string, DomainMetaRow>> {
+  const map = new Map<string, DomainMetaRow>();
+  if (domains.length === 0) return map;
+  const nowMs = Date.now();
+  try {
+    for (let i = 0; i < domains.length; i += DOMAIN_META_BIND_CHUNK) {
+      const chunk = domains.slice(i, i + DOMAIN_META_BIND_CHUNK);
+      const res = await db
+        .prepare(
+          `SELECT domain, logo_url, og_image, og_title, og_description, tvl_usd
+           FROM domain_meta
+           WHERE domain IN (${bindList(chunk)}) AND expires_at > ?${chunk.length + 1}`,
+        )
+        .bind(...chunk, nowMs)
+        .all<DomainMetaRow>();
+      for (const row of res.results ?? []) map.set(row.domain.toLowerCase(), row);
+    }
+  } catch {
+    // Pre-0009 schema (no domain_meta table): serve the feed without enrichment.
+  }
+  return map;
+}
+
 export async function queryFeed(
   db: D1Database,
   allKnownDomains: Set<string>,
@@ -1303,8 +1563,16 @@ export async function queryFeed(
       if (domLower && (isNewsDomain(domLower) || LEGACY_BLOCKED_DOMAINS.has(domLower))) continue;
       legacyIds.push(c.id);
     }
+    const metaDomains = [
+      ...new Set(
+        clusters
+          .map(c => c.domain?.toLowerCase())
+          .filter((d): d is string => Boolean(d) && !isPlatformDomain(d!)),
+      ),
+    ];
 
-    const [postRows, legacyRows] = await Promise.all([
+    // Rich metadata and cached domain enrichment load in the same round trip as the posts.
+    const [postRows, legacyRows, richByCluster, domainMetaByDomain] = await Promise.all([
       db
         .prepare(
           `SELECT p.cluster_id, p.source_id, p.post_url, p.posted_at, p.urls, s.platform, s.handle
@@ -1329,6 +1597,8 @@ export async function queryFeed(
             .bind(...legacyIds)
             .all<LegacyPostRow>()
         : Promise.resolve({ results: [] as LegacyPostRow[] }),
+      loadClusterRichMeta(db, clusterIds),
+      loadDomainMeta(db, metaDomains),
     ]);
 
     const postsByCluster = new Map<string, ClusterPostAgg>();
@@ -1469,9 +1739,7 @@ export async function queryFeed(
       const reconciledRisk = reconcileSafetyReasons({
         level: c.risk_level,
         reasons: storedReasons,
-        domain: cleanDomain,
         cleanedLinks: selectedUrls,
-        knownDomains: allKnownDomains,
       });
 
       const summary =
@@ -1496,10 +1764,47 @@ export async function queryFeed(
       };
       if (c.ticker && !MAJOR_TICKERS.has(c.ticker.toUpperCase())) item.ticker = c.ticker;
       if (cleanDomain) item.domain = cleanDomain;
-      const logo = resolveFeedItemLogo(
-        { project, domain: cleanDomain, ticker: item.ticker, riskLevel: reconciledRisk.level },
-        opts.logoIndex,
-      );
+
+      // Domain trust: an item with no resolvable domain has nothing untrusted to flag.
+      item.verifiedDomain = !cleanDomain || allKnownDomains.has(cleanDomain);
+
+      const radar = resolveRadarCard({ project, domain: cleanDomain, ticker: item.ticker }, opts.logoIndex);
+      const domainMeta = cleanDomain ? domainMetaByDomain.get(cleanDomain) : undefined;
+      const tvlUsd = radar?.tvlUsd ?? domainMeta?.tvl_usd;
+      if (radar?.id) item.radarId = radar.id;
+      if (radar?.funding) item.funding = cleanMetaText(radar.funding, 40);
+      if (typeof tvlUsd === 'number' && Number.isFinite(tvlUsd) && tvlUsd > 0) item.tvlUsd = tvlUsd;
+
+      const rich = richByCluster.get(c.id);
+      if (rich) {
+        const rewardPool = cleanMetaText(rich.reward_pool, 60);
+        const deadline = cleanMetaText(rich.deadline, 40);
+        const cost = cleanMetaText(rich.cost, 40);
+        if (rewardPool) item.rewardPool = rewardPool;
+        if (deadline) item.deadline = deadline;
+        if (cost) item.cost = cost;
+        const steps = (rich.steps ? parseJsonArray<string>(rich.steps) : [])
+          .map(step => cleanMetaText(step, 100))
+          .filter((step): step is string => Boolean(step))
+          .slice(0, MAX_STEPS);
+        if (steps.length > 0) item.steps = steps;
+      }
+      if (domainMeta) {
+        const ogImage = safeHttpsUrl(domainMeta.og_image);
+        const ogTitle = cleanMetaText(domainMeta.og_title, 140);
+        const ogDescription = cleanMetaText(domainMeta.og_description, 300);
+        if (ogImage) item.ogImage = ogImage;
+        if (ogTitle) item.ogTitle = ogTitle;
+        if (ogDescription) item.ogDescription = ogDescription;
+      }
+
+      const logo =
+        resolveFeedItemLogo(
+          { project, domain: cleanDomain, ticker: item.ticker, riskLevel: reconciledRisk.level },
+          opts.logoIndex,
+        ) ??
+        // A cached third-party logo is borrowed only by clusters that are not flagged risky.
+        (reconciledRisk.level !== 'risk' ? safeHttpsUrl(domainMeta?.logo_url) ?? undefined : undefined);
       if (logo) item.logo = logo;
       if (c.surf_tier || c.surf_rank != null) {
         item.surf = {

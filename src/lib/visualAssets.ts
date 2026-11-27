@@ -2609,6 +2609,47 @@ export function sanitizeImageUrl(raw: string | null | undefined): string | null 
   }
 }
 
+const OG_TEXT_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
+const OG_TITLE_MAX = 120;
+const OG_DESCRIPTION_MAX = 280;
+
+function cleanOgText(raw: string | null | undefined, max: number): string | null {
+  if (typeof raw !== 'string') return null;
+  // Fold line breaks first so stripped control characters never glue two words together.
+  const cleaned = raw.replace(/\s+/g, ' ').replace(OG_TEXT_CONTROL_RE, '').trim();
+  if (!cleaned) return null;
+  if (cleaned.length <= max) return cleaned;
+  const window = cleaned.slice(0, max);
+  const lastSpace = window.lastIndexOf(' ');
+  const cut = lastSpace >= Math.floor(max * 0.6) ? window.slice(0, lastSpace) : window;
+  return `${cut.trimEnd()}\u2026`;
+}
+
+export interface OgPreviewData {
+  /** https-only image URL, or null when the source carries no safe image. */
+  image: string | null;
+  title: string | null;
+  description: string | null;
+}
+
+/**
+ * Sanitized Open Graph preview for a drop or card. Returns null when neither an
+ * image nor any text survives cleaning.
+ */
+export function resolveOgPreview(input: {
+  ogImage?: string | null;
+  ogTitle?: string | null;
+  ogDescription?: string | null;
+  /** Project name used when the source has an image but no title. */
+  fallbackTitle?: string | null;
+}): OgPreviewData | null {
+  const image = sanitizeImageUrl(input.ogImage);
+  const title = cleanOgText(input.ogTitle, OG_TITLE_MAX) ?? (image ? cleanOgText(input.fallbackTitle, OG_TITLE_MAX) : null);
+  const description = cleanOgText(input.ogDescription, OG_DESCRIPTION_MAX);
+  if (!image && !title && !description) return null;
+  return { image, title, description };
+}
+
 export function extractTickerFallback(
   name?: string | null,
   explicitTicker?: string | null,

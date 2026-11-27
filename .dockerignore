@@ -1,0 +1,9 @@
+# Rebuilt inside the image
+**/node_modules
+dist
+
+# Local state and secrets
+.git
+.codegraph
+.env
+data/*.sqlite*

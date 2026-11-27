@@ -221,7 +221,264 @@ describe('X best-effort syndication parser & backoff', () => {
     ).toEqual([]);
   });
 
-  test('hardens rssMirrorBase (rejects http/IP/localhost/.local/creds/query/hash), filters mirror subdomains & redirect host, strips script/style, preserves <br> newlines, falls back to guid, and preserves raw-IP hrefs', async () => {
+  test('accepts explicitly configured local/Docker RSS mirror bases (rsshub, 127.0.0.1, localhost over http) and parses RSSHub twitter/user RSS', async () => {
+    const now = Date.parse('2026-11-24T12:00:00Z');
+    const prevFetch = globalThis.fetch;
+    const requested: string[] = [];
+    // Shape served by RSSHub /twitter/user/<handle>/rss (verified against a live RSSHub instance).
+    const rssHubXml = (mirrorBase: string) => `<?xml version="1.0" encoding="UTF-8"?><rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0"><channel>
+      <title>Twitter / DefiIgnas</title>
+      <link>https://twitter.com/DefiIgnas</link>
+      <atom:link href="${mirrorBase}/DefiIgnas/rss" rel="self" type="application/rss+xml"></atom:link>
+      <description>Twitter User for DefiIgnas , Powered by RSSHub(https://github.com/DIYgod/RSSHub)</description>
+      <lastBuildDate>Mon, 23 Nov 2026 12:05:00 GMT</lastBuildDate>
+      <ttl>300</ttl>
+      <item>
+        <title>Monad points guide</title>
+        <description>&lt;a href="https://twitter.com/DefiIgnas"&gt;Monad&lt;/a&gt; points guide: farm &lt;a href="https://monad.xyz/quest?ref=xyz"&gt;monad.xyz/quest&lt;/a&gt;&lt;br&gt;New testnet is live ${mirrorBase}/DefiIgnas</description>
+        <pubDate>Mon, 23 Nov 2026 12:00:00 GMT</pubDate>
+        <guid isPermaLink="false">https://twitter.com/DefiIgnas/status/212500201</guid>
+        <link>https://twitter.com/DefiIgnas/status/212500201</link>
+      </item>
+      <item>
+        <title>RT @OtherAcct: NovaDrop testnet airdrop is live https://t.co/AbC123</title>
+        <description><![CDATA[RT @OtherAcct: <a href="https://twitter.com/OtherAcct">@OtherAcct</a> NovaDrop testnet airdrop is live <a href="https://t.co/AbC123">https://t.co/AbC123</a>]]></description>
+        <pubDate>Mon, 23 Nov 2026 12:03:00 GMT</pubDate>
+        <guid isPermaLink="false">https://x.com/DefiIgnas/status/212500202</guid>
+        <link>https://x.com/DefiIgnas/status/212500202</link>
+      </item>
+      <item>
+        <title>No status id here</title>
+        <link>https://twitter.com/DefiIgnas</link>
+        <pubDate>Mon, 23 Nov 2026 12:04:00 GMT</pubDate>
+        <description>profile link only</description>
+      </item>
+      <item>
+        <title>Undated item is dropped</title>
+        <link>https://x.com/DefiIgnas/status/212500203</link>
+        <description>no pubDate</description>
+      </item>
+    </channel></rss>`;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.includes('rsshub:1200/') || url.startsWith('http://127.0.0.1:1200/') || url.startsWith('http://localhost:1200/')) {
+        return new Response(rssHubXml(url.slice(0, url.indexOf('/DefiIgnas/rss'))), {
+          status: 200,
+          headers: { 'Content-Type': 'application/rss+xml' },
+        });
+      }
+      return new Response('rate limited', { status: 429 });
+    }) as unknown as typeof fetch;
+
+    try {
+      for (const base of ['http://rsshub:1200/twitter/user', 'http://127.0.0.1:1200/twitter/user', 'http://localhost:1200/twitter/user']) {
+        requested.length = 0;
+        const posts = await fetchXTimelineBestEffort('DefiIgnas', base, now);
+        // Only the configured local mirror is contacted; syndication is never touched.
+        expect(requested).toEqual([`${base}/DefiIgnas/rss`]);
+        expect(posts.map(p => p.idStr)).toEqual(['212500201', '212500202']);
+
+        const [guide, rt] = posts;
+        expect(guide.postUrl).toBe('https://x.com/DefiIgnas/status/212500201');
+        expect(rt.postUrl).toBe('https://x.com/DefiIgnas/status/212500202');
+        expect(guide.postedAt).toBe(Date.parse('Mon, 23 Nov 2026 12:00:00 GMT'));
+        // HTML description: anchors + <br> newlines, mirror self-links stripped.
+        expect(guide.text).toContain('Monad points guide: farm monad.xyz/quest\nNew testnet is live');
+        expect(guide.urls).toContain('https://monad.xyz/quest');
+        // RT prefix kept verbatim, t.co short link preserved for downstream shortener handling.
+        expect(rt.text).toBe('RT @OtherAcct: @OtherAcct NovaDrop testnet airdrop is live https://t.co/AbC123');
+        expect(rt.urls).toContain('https://t.co/AbC123');
+        for (const p of posts) {
+          expect(p.urls.some(u => /rsshub|127\.0\.0\.1|localhost/i.test(u))).toBe(false);
+          expect(p.text).not.toMatch(/rsshub|127\.0\.0\.1|localhost/);
+        }
+      }
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('rejects metadata IPs, RFC1918, IPv6 loopback, .local, multi-label internal names, creds, query, hash and non-http schemes even when configured as the mirror base', async () => {
+    const prevFetch = globalThis.fetch;
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return new Response('rate limited', { status: 429 });
+    }) as unknown as typeof fetch;
+    const syndication = 'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas';
+
+    try {
+      const unsafeLocalBases = [
+        'http://169.254.169.254',
+        'http://169.254.169.254:1200/twitter/user',
+        'http://10.0.0.5:1200/twitter/user',
+        'http://192.168.1.10:1200/twitter/user',
+        'http://0.0.0.0:1200/twitter/user',
+        'http://[::1]:1200/twitter/user',
+        'http://rsshub.local:1200/twitter/user',
+        'http://metadata.google.internal/computeMetadata/v1/',
+        'http://rsshub.internal:1200/twitter/user',
+        'http://user:pass@rsshub:1200/twitter/user',
+        'http://rsshub:1200/twitter/user?token=1',
+        'http://rsshub:1200/twitter/user#frag',
+        'file://rsshub:1200/twitter/user',
+        'ftp://rsshub:1200/twitter/user',
+      ];
+      for (const bad of unsafeLocalBases) {
+        requested.length = 0;
+        await expect(fetchXTimelineBestEffort('DefiIgnas', bad)).rejects.toThrow();
+        expect(requested).toEqual([syndication]);
+      }
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('local mirror follows only same-origin redirects; external, cross-port, credential and metadata redirect targets are never requested', async () => {
+    const prevFetch = globalThis.fetch;
+    const base = 'http://rsshub:1200/twitter/user';
+    const syndication = 'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas';
+
+    try {
+      const unsafeLocations = [
+        'http://169.254.169.254/latest/meta-data/',
+        'http://127.0.0.1:2375/containers/json',
+        'http://evil-service:1200/twitter/user/DefiIgnas',
+        'http://rsshub:1201/twitter/user/DefiIgnas',
+        'https://user:pass@rsshub:1200/twitter/user/DefiIgnas',
+        'file:///etc/passwd',
+      ];
+      for (const badLocation of unsafeLocations) {
+        const requested: string[] = [];
+        globalThis.fetch = (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          requested.push(url);
+          if (url === `${base}/DefiIgnas/rss`) {
+            return new Response('', { status: 302, headers: { Location: badLocation } });
+          }
+          return new Response('rate limited', { status: 429 });
+        }) as unknown as typeof fetch;
+
+        await expect(fetchXTimelineBestEffort('DefiIgnas', base)).rejects.toThrow();
+        expect(requested).toEqual([`${base}/DefiIgnas/rss`, syndication]);
+        expect(requested.some(r => r.includes(badLocation))).toBe(false);
+      }
+
+      // Same-origin redirect (absolute or relative) from the configured service is followed.
+      const rss = (host: string) =>
+        `<rss version="2.0"><channel><item><title>Guide https://realproto.xyz/quest</title><link>https://twitter.com/DefiIgnas/status/212500301</link><guid isPermaLink="false">https://twitter.com/DefiIgnas/status/212500301</guid><pubDate>Mon, 23 Nov 2026 12:00:00 GMT</pubDate><description><![CDATA[<a href="http://${host}/img.png">img</a> <a href="https://realproto.xyz/quest">Quest</a>]]></description></item></channel></rss>`;
+      const sameOriginCases: { base: string; location: string; finalUrl: string }[] = [
+        { base, location: '/twitter/user/DefiIgnas', finalUrl: `${base}/DefiIgnas` },
+        { base: 'http://127.0.0.1:1200/twitter/user', location: 'http://127.0.0.1:1200/twitter/user/DefiIgnas/rss.xml', finalUrl: 'http://127.0.0.1:1200/twitter/user/DefiIgnas/rss.xml' },
+      ];
+      for (const c of sameOriginCases) {
+        const requested: string[] = [];
+        globalThis.fetch = (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          requested.push(url);
+          if (url === `${c.base}/DefiIgnas/rss`) {
+            return new Response('', { status: 301, headers: { Location: c.location } });
+          }
+          return new Response(rss(new URL(c.base).hostname), { status: 200 });
+        }) as unknown as typeof fetch;
+
+        const posts = await fetchXTimelineBestEffort('DefiIgnas', c.base, Date.parse('2026-11-24T12:00:00Z'));
+        expect(requested).toEqual([`${c.base}/DefiIgnas/rss`, c.finalUrl]);
+        expect(posts.length).toBe(1);
+        expect(posts[0].idStr).toBe('212500301');
+        expect(posts[0].urls).toEqual(['https://realproto.xyz/quest']);
+      }
+
+      // A public HTTPS mirror may not redirect into a local/http target.
+      const requested: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requested.push(url);
+        if (url === 'https://mirror.example/DefiIgnas/rss') {
+          return new Response('', { status: 302, headers: { Location: `${base}/DefiIgnas/rss` } });
+        }
+        return new Response('rate limited', { status: 429 });
+      }) as unknown as typeof fetch;
+      await expect(fetchXTimelineBestEffort('DefiIgnas', 'https://mirror.example')).rejects.toThrow();
+      expect(requested).toEqual(['https://mirror.example/DefiIgnas/rss', syndication]);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('RSSHub 429/503 falls through to syndication once (body cancelled, no retry storm) and health-aware backoff throttles the source', async () => {
+    const prevFetch = globalThis.fetch;
+    const base = 'http://rsshub:1200/twitter/user';
+    const syndication = 'https://syndication.twitter.com/srv/timeline-profile/screen-name/DefiIgnas';
+    const now = Date.parse('2026-11-24T12:00:00Z');
+
+    try {
+      for (const status of [429, 503]) {
+        const requested: string[] = [];
+        let cancels = 0;
+        globalThis.fetch = (async (input: RequestInfo | URL) => {
+          requested.push(String(input));
+          return {
+            ok: false,
+            status,
+            body: {
+              async cancel() {
+                cancels++;
+              },
+            },
+          };
+        }) as unknown as typeof fetch;
+
+        await expect(fetchXTimelineBestEffort('DefiIgnas', base, now)).rejects.toThrow('X endpoints unavailable');
+        expect(requested).toEqual([`${base}/DefiIgnas/rss`, syndication]);
+        expect(cancels).toBe(2);
+      }
+
+      const db = createSqliteD1();
+      await db
+        .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('x:RsshubUser', 'x', 'RsshubUser', 'en', 0.85, 1)`)
+        .run();
+      let mirrorStatus = 429;
+      const row = () =>
+        db
+          .prepare(`SELECT status, fail_count, next_poll_at FROM sources WHERE id = 'x:RsshubUser'`)
+          .first<{ status: string; fail_count: number; next_poll_at: number | null }>();
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === `${base}/RsshubUser/rss` && mirrorStatus === 200) {
+          return new Response(
+            `<rss version="2.0"><channel><item><title>Quiet account</title><link>https://twitter.com/RsshubUser/status/212500401</link><guid isPermaLink="false">https://twitter.com/RsshubUser/status/212500401</guid><pubDate>Mon, 23 Nov 2026 12:00:00 GMT</pubDate><description>Quiet account</description></item></channel></rss>`,
+            { status: 200 },
+          );
+        }
+        return new Response('rate limited', { status: mirrorStatus });
+      }) as unknown as typeof fetch;
+
+      const t0 = Date.parse('2026-11-24T13:00:00Z');
+      const poll1 = await pollXBatch(db, 3, t0, null, undefined, base);
+      expect(poll1.degraded).toBe(1);
+      expect(await row()).toEqual({ status: 'degraded', fail_count: 1, next_poll_at: t0 + 5 * 60_000 });
+
+      // Not due yet: the mirror is not hammered between backoff windows.
+      expect((await pollXBatch(db, 3, t0 + 60_000, null, undefined, base)).polled).toBe(0);
+
+      const t1 = t0 + 5 * 60_000;
+      expect((await pollXBatch(db, 3, t1, null, undefined, base)).degraded).toBe(1);
+      expect(await row()).toEqual({ status: 'degraded', fail_count: 2, next_poll_at: t1 + 10 * 60_000 });
+
+      // RSSHub recovers: source returns to ok and the backoff state resets.
+      mirrorStatus = 200;
+      const t2 = t1 + 10 * 60_000;
+      const poll3 = await pollXBatch(db, 3, t2, null, undefined, base);
+      expect(poll3.degraded).toBe(0);
+      expect(await row()).toEqual({ status: 'ok', fail_count: 0, next_poll_at: null });
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('hardens rssMirrorBase (rejects external http/metadata IP/.local/creds/query/hash), filters mirror subdomains & redirect host, strips script/style, preserves <br> newlines, falls back to guid, and preserves raw-IP hrefs', async () => {
     const requested: string[] = [];
     const prevFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -247,11 +504,13 @@ describe('X best-effort syndication parser & backoff', () => {
     }) as unknown as typeof fetch;
 
     try {
+      // Loopback bases are now allowed when explicitly configured (see the local mirror tests).
       const unsafeBases = [
         'http://mirror.example',
-        'https://127.0.0.1',
+        'http://rsshub.evil.com:1200/twitter/user',
         'https://169.254.169.254',
-        'https://localhost',
+        'https://169.254.169.254:1200',
+        'https://10.0.0.5:1200/twitter/user',
         'https://internal.local',
         'https://user:pass@mirror.example',
         'https://mirror.example/?foo=bar',
@@ -593,6 +852,19 @@ describe('X best-effort syndication parser & backoff', () => {
     const downstreamRawIp = parseDropPost(rawIpFallbackPost.text, rawIpFallbackPost.urls);
     expect(downstreamRawIp.rawIpUrls).toContain('http://185.220.101.9/claim');
     expect(downstreamRawIp.urls.some(isMirrorHost)).toBe(false);
+
+    // Loopback mirror URL in both description-only and fallback title must stay filtered while keeping unrelated raw-IP URLs.
+    const loopbackXml = `<?xml version="1.0"?><rss version="2.0"><channel>
+      <item>
+        <title>Loopback fallback http://127.0.0.1:1200/media/1.png and http://185.220.101.9/claim</title>
+        <link>http://127.0.0.1:1200/DefiIgnas/status/212500109</link>
+        <pubDate>Mon, 23 Nov 2026 12:12:00 GMT</pubDate>
+        <description><![CDATA[http://127.0.0.1:1200/DefiIgnas/status/212500109]]></description>
+      </item>
+    </channel></rss>`;
+    const loopbackPosts = parseXRssTimeline(loopbackXml, 'DefiIgnas', ['127.0.0.1'], now);
+    expect(loopbackPosts).toHaveLength(1);
+    expect(loopbackPosts[0].urls).toEqual(['http://185.220.101.9/claim']);
   });
 
   test('fetchXTimelineBestEffort falls through to syndication when mirror only returns stale (>14d) posts and accepts fresh mirror posts immediately', async () => {

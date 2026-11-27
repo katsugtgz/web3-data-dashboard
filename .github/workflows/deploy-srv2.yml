@@ -1,0 +1,62 @@
+name: Deploy to srv2
+
+# No checkout of secrets into the repository. Configure in repo settings:
+#   Secrets: SRV2_SSH_KEY       private key of the deploy account on srv2
+#            SRV2_KNOWN_HOSTS   (optional) `ssh-keyscan` output of srv2; without it
+#                               the run trusts the host key presented on first contact
+#   Vars:    SRV2_HOST, SRV2_USER, SRV2_SSH_PORT (default 22)
+# Without SRV2_SSH_KEY the run is a no-op, so forks and repositories that do not
+# use srv2 stay green.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-srv2
+  # A deploy rebuilds and restarts the stack. Let the run in flight finish; the
+  # newest queued run follows.
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Deploy over SSH
+        env:
+          SRV2_SSH_KEY: ${{ secrets.SRV2_SSH_KEY }}
+          SRV2_KNOWN_HOSTS: ${{ secrets.SRV2_KNOWN_HOSTS }}
+          SRV2_HOST: ${{ vars.SRV2_HOST }}
+          SRV2_USER: ${{ vars.SRV2_USER }}
+          SRV2_SSH_PORT: ${{ vars.SRV2_SSH_PORT }}
+        run: |
+          if [ -z "${SRV2_SSH_KEY}" ]; then
+            echo "::notice::SRV2_SSH_KEY is not configured; skipping the srv2 deploy."
+            exit 0
+          fi
+          if [ -z "${SRV2_HOST}" ] || [ -z "${SRV2_USER}" ]; then
+            echo "::error::SRV2_HOST and SRV2_USER repository variables are required for the srv2 deploy."
+            exit 1
+          fi
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SRV2_SSH_KEY" > ~/.ssh/srv2_key
+          if [ -n "${SRV2_KNOWN_HOSTS}" ]; then
+            printf '%s\n' "$SRV2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H -p "${SRV2_SSH_PORT:-22}" "$SRV2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          ssh_opts=(-i ~/.ssh/srv2_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o "Port=${SRV2_SSH_PORT:-22}")
+          # The script clones or fast-forwards ~/apps/web3-radar on srv2, rebuilds,
+          # and waits for /health before exiting.
+          scp "${ssh_opts[@]}" deploy/srv2-deploy.sh "${SRV2_USER}@${SRV2_HOST}:/tmp/web3-radar-deploy.sh"
+          ssh "${ssh_opts[@]}" "${SRV2_USER}@${SRV2_HOST}" bash /tmp/web3-radar-deploy.sh

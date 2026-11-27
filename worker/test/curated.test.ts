@@ -12,6 +12,19 @@ import {
 
 const NOW = Date.parse('2026-11-24T12:00:00Z');
 
+const EMPTY_FEED: AirdropFeed = { cards: [], tge: [], counts: { active: 0, preToken: 0 }, fetchedAt: NOW };
+const emptyFeed = async (): Promise<AirdropFeed> => EMPTY_FEED;
+/** Every live-capable curated source, so no test ever reaches the network. */
+const ALL_EMPTY_FETCHERS = {
+  surf: emptyFeed,
+  asso7878: emptyFeed,
+  arndxt: emptyFeed,
+  pendle: emptyFeed,
+  merkl: emptyFeed,
+  airdropalert: emptyFeed,
+  galxe: emptyFeed,
+};
+
 function makeCard(overrides: Partial<Card> & { n: string }): Card {
   return {
     r: 1,
@@ -129,6 +142,7 @@ describe('curated multi-source airdrop aggregator', () => {
     const result = await buildCuratedAirdropFeed({
       nowMs: NOW,
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           throw new Error('Surf timeout 15000ms');
         },
@@ -174,11 +188,11 @@ describe('curated multi-source airdrop aggregator', () => {
         onOutcomes: outcomes => {
           for (const o of outcomes) recorded.push({ name: o.name, ok: o.ok, sourceId: o.sourceId });
         },
-        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail },
+        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail, galxe: fail },
       }),
     ).rejects.toThrow();
 
-    expect(recorded.length).toBe(6);
+    expect(recorded.length).toBe(7);
     expect(recorded.every(r => r.ok === false)).toBe(true);
     expect(recorded.some(r => r.sourceId === 'sheet:asso7878_sheet')).toBe(true);
     expect(recorded.some(r => r.sourceId === 'feed:pendle_points')).toBe(true);
@@ -248,7 +262,7 @@ describe('curated multi-source airdrop aggregator', () => {
         nowMs: NOW,
         defiLlamaFeed,
         prevFeed,
-        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail },
+        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail, galxe: fail },
       }),
     ).rejects.toThrow(/All curated airdrop sources failed/i);
 
@@ -257,6 +271,7 @@ describe('curated multi-source airdrop aggregator', () => {
       buildCuratedAirdropFeed({
         nowMs: NOW,
         fetchers: {
+          galxe: emptyFeed,
           surf: fail,
           asso7878: fail,
           arndxt: fail,
@@ -296,6 +311,7 @@ describe('curated multi-source airdrop aggregator', () => {
       disabledSourceIds: new Set(['sheet:arndxt_sheet']),
       deferredSourceIds: new Set(['feed:pendle_points']),
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           called.push('surf');
           throw new Error('timeout');
@@ -349,6 +365,7 @@ describe('curated multi-source airdrop aggregator', () => {
         'feed:airdropalert_calendar',
       ]),
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           throw new Error('must not run');
         },
@@ -702,6 +719,7 @@ describe('curated multi-source airdrop aggregator', () => {
       cachedAsso7878Feed: cachedAsso,
       cachedArndxtFeed: cachedArndxt,
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           called.push('surf');
           throw new Error('surf timeout');
@@ -743,6 +761,7 @@ describe('curated multi-source airdrop aggregator', () => {
       cachedArndxtFeed: cachedArndxt,
       disabledSourceIds: new Set(['sheet:asso7878_sheet']),
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           throw new Error('timeout');
         },
@@ -773,7 +792,7 @@ describe('curated multi-source airdrop aggregator', () => {
         nowMs: NOW,
         cachedAsso7878Feed: cachedAsso,
         cachedArndxtFeed: cachedArndxt,
-        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail },
+        fetchers: { surf: fail, asso7878: fail, arndxt: fail, pendle: fail, merkl: fail, airdropalert: fail, galxe: fail },
       }),
     ).rejects.toThrow(/All curated airdrop sources failed/i);
   });
@@ -810,6 +829,7 @@ describe('curated multi-source airdrop aggregator', () => {
       prevFeed: prevMerged,
       disabledSourceIds: new Set(['sheet:asso7878_sheet']),
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           throw new Error('surf outage');
         },
@@ -876,6 +896,7 @@ describe('curated multi-source airdrop aggregator', () => {
       nowMs: NOW,
       prevFeed: legacyPrevFeed,
       fetchers: {
+        galxe: emptyFeed,
         surf: async () => {
           throw new Error('surf outage');
         },
@@ -978,6 +999,7 @@ describe('curated multi-source airdrop aggregator', () => {
       ['feed:pendle_points', { platform: 'feed' as const, handle: 'pendle_points', lang: 'en', trust: 0.85, tags: ['curated'], enabled: true, url: 'https://registry.test/pendle.json', parser: 'pendle' as const }],
       ['feed:merkl_opportunities', { platform: 'feed' as const, handle: 'merkl_opportunities', lang: 'en', trust: 0.85, tags: ['curated'], enabled: true, url: 'https://registry.test/merkl.json', parser: 'merkl' as const }],
       ['feed:airdropalert_calendar', { platform: 'feed' as const, handle: 'airdropalert_calendar', lang: 'en', trust: 0.85, tags: ['drops', 'tge'], enabled: true, url: 'https://registry.test/calendar.json', parser: 'wp_calendar' as const }],
+      ['feed:galxe_trending', { platform: 'feed' as const, handle: 'galxe_trending', lang: 'en', trust: 0.7, tags: ['airdrop', 'quest', 'drops'], enabled: true, url: 'https://registry.test/galxe.json', parser: 'galxe' as const }],
     ]);
 
     try {
@@ -997,6 +1019,9 @@ describe('curated multi-source airdrop aggregator', () => {
       expect(requested).toContain('https://registry.test/pendle.json');
       expect(requested).toContain('https://registry.test/merkl.json');
       expect(requested).toContain('https://registry.test/calendar.json');
+      // Active airdrops come from the events endpoint of the same host; Galxe uses the registered URL.
+      expect(requested.some(u => u.startsWith('https://airdropalert.com/wp-json/aa-cal/v1/events?y=2026&m=11&radius=2'))).toBe(true);
+      expect(requested).toContain('https://registry.test/galxe.json');
     } finally {
       globalThis.fetch = prevFetch;
     }
@@ -1140,5 +1165,494 @@ describe('curated multi-source airdrop aggregator', () => {
     const tgeVar = merged.tge.find(t => t.n === 'Variational')!;
     expect(tgeVar.logo).toBe('https://icons.merkl.xyz/variational.png');
     expect(tgeVar.t).toBe('VAR');
+  });
+
+  test('DefiLlama extractor populates tvlUsd, a clean one-line description and verifiedDomain only for clean https project domains', () => {
+    const feed = extractDefiLlamaTokenlessAirdrops(
+      [
+        {
+          name: 'Variational',
+          slug: 'variational',
+          symbol: '-',
+          category: 'Derivatives',
+          tvl: 120_000_000,
+          url: 'https://variational.io',
+          description: '  Decentralized\noptions &amp; trading on Arbitrum.\n\n<B>Backed by</B> leading funds  ',
+        },
+        { name: 'XPageProto', slug: 'xpage', symbol: '-', category: 'Dexes', tvl: 20_000_000, url: 'https://x.com/xpageproto', description: 'Has a description' },
+        { name: 'TrackerProto', slug: 'tracker', symbol: '-', category: 'Dexes', tvl: 19_000_000, url: 'https://defillama.com/protocol/tracker' },
+        { name: 'HttpProto', slug: 'http', symbol: '-', category: 'Dexes', tvl: 18_000_000, url: 'http://insecure.xyz' },
+        { name: 'NoUrlProto', slug: 'nourl', symbol: '-', category: 'Dexes', tvl: 17_000_000 },
+        { name: 'LongDescProto', slug: 'longdesc', symbol: '-', category: 'Dexes', tvl: 16_000_000, url: 'https://longdesc.xyz', description: `${'yield farming protocol '.repeat(20)}end` },
+        { name: 'BadDescProto', slug: 'baddesc', symbol: '-', category: 'Dexes', tvl: 15_000_000, url: 'https://baddesc.xyz', description: { text: 'object' } },
+        { name: 'BlankDescProto', slug: 'blankdesc', symbol: '-', category: 'Dexes', tvl: 14_000_000, url: 'https://blankdesc.xyz', description: '   <p></p>  ' },
+      ],
+      NOW,
+    );
+    const byName = Object.fromEntries(feed.cards.map(c => [c.n, c]));
+
+    expect(byName.Variational.tvlUsd).toBe(120_000_000);
+    expect(byName.Variational.description).toBe('Decentralized options & trading on Arbitrum. Backed by leading funds');
+    expect(byName.Variational.verifiedDomain).toBe(true);
+
+    // Social pages, trackers, plain http and missing URLs never verify a project domain.
+    expect(byName.XPageProto.description).toBe('Has a description');
+    expect(byName.XPageProto.verifiedDomain).toBeUndefined();
+    expect(byName.TrackerProto.verifiedDomain).toBeUndefined();
+    expect(byName.HttpProto.verifiedDomain).toBeUndefined();
+    expect(byName.NoUrlProto.verifiedDomain).toBeUndefined();
+    // Raw numeric TVL is kept for every card.
+    expect(byName.NoUrlProto.tvlUsd).toBe(17_000_000);
+
+    // A long blurb is cut at a word boundary near 200 chars; unusable blurbs are omitted.
+    expect(byName.LongDescProto.description!.length).toBeLessThanOrEqual(203);
+    expect(byName.LongDescProto.description!.endsWith('...')).toBe(true);
+    expect(byName.BadDescProto.description).toBeUndefined();
+    expect(byName.BlankDescProto.description).toBeUndefined();
+    expect(byName.HttpProto.description).toBeUndefined();
+    expect(FORBIDDEN_CJK_RE.test(JSON.stringify(feed))).toBe(false);
+  });
+
+  test('Surf is optional: a hanging Surf fetcher is cut off at surfTimeoutMs with prior cards reused, and a synchronously throwing Surf never fails the build', async () => {
+    const prevFeed: AirdropFeed = {
+      cards: [
+        makeCard({ r: 1, n: 'PrevSurf', source: 'Surf', url: 'https://prevsurf.xyz', sc: 90 }),
+        makeCard({ r: 2, n: 'PrevPendle', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0xp', sc: 70 }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW - 60_000,
+    };
+    const others = async (): Promise<AirdropFeed> => ({
+      cards: [makeCard({ r: 1, n: 'SheetProto', source: 'ASSO7878', url: 'https://sheetproto.xyz', sc: 60 })],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW,
+    });
+
+    const started = Date.now();
+    const result = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed,
+      surfTimeoutMs: 30,
+      fetchers: {
+        ...ALL_EMPTY_FETCHERS,
+        surf: () => new Promise<AirdropFeed>(() => {}),
+        asso7878: others,
+      },
+    });
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(25);
+    expect(elapsed).toBeLessThan(2_000);
+    // Only Surf's own prior cards come back; the hanging fetcher never stalls the other sources.
+    expect(result.feed.cards.map(c => c.n)).toEqual(['PrevSurf', 'SheetProto']);
+    expect(result.outcomes.find(o => o.name === 'Surf')).toMatchObject({ ok: false, cards: 0, error: expect.stringMatching(/Surf timed out after 30ms/) });
+    expect(result.outcomes.find(o => o.name === 'ASSO7878')).toMatchObject({ ok: true, cards: 1 });
+
+    // A fetcher that throws synchronously is reported as a failed source, not a crashed build.
+    const syncThrow = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      fetchers: {
+        ...ALL_EMPTY_FETCHERS,
+        surf: () => {
+          throw new Error('sync boom');
+        },
+        merkl: () => {
+          throw new Error('sync merkl boom');
+        },
+        asso7878: others,
+      },
+    });
+    expect(syncThrow.feed.cards.map(c => c.n)).toEqual(['SheetProto']);
+    expect(syncThrow.outcomes.find(o => o.name === 'Surf')).toMatchObject({ ok: false, error: 'sync boom' });
+    expect(syncThrow.outcomes.find(o => o.name === 'Merkl')).toMatchObject({ ok: false, error: 'sync merkl boom' });
+
+    // With no Surf at all the other sources still produce a feed.
+    const surfOnly = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      fetchers: { ...ALL_EMPTY_FETCHERS, surf: emptyFeed, pendle: others },
+    });
+    expect(surfOnly.feed.cards.map(c => c.n)).toEqual(['SheetProto']);
+  });
+
+  test('merge fills missing structured fields from trusted secondary cards but never from editable sheets, and primary values win', () => {
+    const surfFeed: AirdropFeed = {
+      cards: [
+        makeCard({ r: 1, n: 'SharedProto', source: 'Surf', url: 'https://sharedproto.xyz/app', sc: 88 }),
+        makeCard({ r: 2, n: 'RichSurf', source: 'Surf', url: 'https://richsurf.xyz', sc: 86, tvlUsd: 99, description: 'Surf blurb' }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+    const pendleFeed: AirdropFeed = {
+      cards: [
+        makeCard({
+          r: 1,
+          n: 'SharedProto',
+          source: 'Pendle',
+          url: 'https://app.pendle.finance/trade/markets/0xshared',
+          sc: 70,
+          tvlUsd: 12_500_000,
+          apy: '14.50%',
+          deadline: '2027-03-25',
+          description: 'Pendle yield-token pools farming SharedProto points',
+        }),
+        makeCard({ r: 2, n: 'RichSurf', source: 'Pendle', url: 'https://app.pendle.finance/trade/markets/0xrich', sc: 60, tvlUsd: 1, description: 'Pendle blurb', rewardPool: '$1M' }),
+      ],
+      tge: [],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: NOW,
+    };
+    const sheetFeed: AirdropFeed = {
+      cards: [
+        makeCard({
+          r: 1,
+          n: 'SharedProto',
+          source: 'ASSO7878',
+          url: 'https://sharedproto.xyz/sheet',
+          sc: 60,
+          tvlUsd: 1,
+          rewardPool: '$1M',
+          description: 'sheet-injected blurb',
+          verifiedDomain: true,
+        }),
+      ],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW,
+    };
+
+    const merged = mergeCuratedAirdropFeeds([surfFeed, pendleFeed, sheetFeed], NOW);
+    const shared = merged.cards.find(c => c.n === 'SharedProto')!;
+    expect(shared.source).toBe('Surf');
+    expect(shared.tvlUsd).toBe(12_500_000);
+    expect(shared.apy).toBe('14.50%');
+    expect(shared.deadline).toBe('2027-03-25');
+    expect(shared.description).toBe('Pendle yield-token pools farming SharedProto points');
+    // Editable sheets can never inject structured fields onto a trusted card.
+    expect(shared.rewardPool).toBeUndefined();
+    expect(shared.verifiedDomain).toBeUndefined();
+
+    const rich = merged.cards.find(c => c.n === 'RichSurf')!;
+    expect(rich.tvlUsd).toBe(99);
+    expect(rich.description).toBe('Surf blurb');
+    // Only genuinely missing values are filled in.
+    expect(rich.rewardPool).toBe('$1M');
+  });
+
+  test('AirdropAlert and Galxe cards merge after Surf, sheets, Pendle, Merkl and DefiLlama so richer cards stay primary and gain their deadlines', async () => {
+    const aaTask = { title: 'Variational TGE expected · Q4 2026', type: 'other', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://airdropalert.com/airdrops/variational-decentralized-exchange' };
+    const result = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      defiLlamaFeed: {
+        cards: [
+          makeCard({
+            r: 1,
+            n: 'Variational',
+            id: 'defillama:variational',
+            source: 'DefiLlama',
+            url: 'https://variational.io/',
+            g: 'S',
+            sc: 84,
+            tvlUsd: 120_000_000,
+            fit: ['small', 'climber'],
+          }),
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: NOW,
+      },
+      fetchers: {
+        ...ALL_EMPTY_FETCHERS,
+        galxe: async () => ({
+          cards: [
+            makeCard({
+              r: 1,
+              n: 'Asterium',
+              id: 'galxe:85886',
+              source: 'Galxe',
+              url: 'https://asterium.uz/en',
+              sc: 48,
+              fit: ['community'],
+              verifiedDomain: true,
+              deadline: '2026-11-29',
+              rewardPool: 'USDT rewards',
+            }),
+          ],
+          tge: [],
+          counts: { active: 1, preToken: 1 },
+          fetchedAt: NOW,
+        }),
+        airdropalert: async () => ({
+          cards: [
+            makeCard({
+              r: 1,
+              n: 'Variational',
+              id: 'airdropalert:314969',
+              source: 'AirdropAlert',
+              url: null,
+              sc: 50,
+              fit: ['community'],
+              deadline: 'Q4 2026',
+              description: '$VAR tokenomics revealed.',
+              tk: '1/1',
+              taskTypes: ['other'],
+              tasks: [aaTask],
+              best: { n: aaTask.title, ty: 'other', c: 'Free', m: '—' },
+            }),
+          ],
+          tge: [{ n: 'Variational TGE expected', t: '', s: 'TGE', d: 'Q4 2026', source: 'AirdropAlert' }],
+          counts: { active: 1, preToken: 1 },
+          fetchedAt: NOW,
+        }),
+      },
+    });
+
+    // The S-grade DefiLlama card stays primary; AirdropAlert only adds its deadline, blurb and milestone task.
+    const variational = result.feed.cards.find(c => c.n === 'Variational')!;
+    expect(variational.source).toBe('DefiLlama');
+    expect(variational.g).toBe('S');
+    expect(variational.tvlUsd).toBe(120_000_000);
+    expect(variational.deadline).toBe('Q4 2026');
+    expect(variational.description).toBe('$VAR tokenomics revealed.');
+    expect(variational.tasks?.map(t => t.title)).toEqual(['Complete task', aaTask.title]);
+    expect(variational.tasks?.[1].source).toBe('AirdropAlert');
+    expect(variational.tk).toBe('2/2');
+
+    expect(result.feed.cards.map(c => c.n)).toEqual(['Variational', 'Asterium']);
+    expect(result.feed.cards[1].verifiedDomain).toBe(true);
+    expect(result.feed.tge.map(t => [t.n, t.source])).toEqual([['Variational TGE expected', 'AirdropAlert']]);
+
+    // The Galxe outcome carries no sourceId: its source row stays owned by pollFeedBatch.
+    expect(result.outcomes.find(o => o.name === 'Galxe')).toEqual({ name: 'Galxe', ok: true, cards: 1, tge: 0 });
+    expect(result.outcomes.find(o => o.name === 'AirdropAlert')).toMatchObject({ ok: true, cards: 1, tge: 1, sourceId: 'feed:airdropalert_calendar' });
+    expect(result.outcomes.find(o => o.name === 'DefiLlama')).toMatchObject({ ok: true, cards: 1 });
+  });
+
+  test('Galxe curated job honors the feed:galxe_trending enabled flag but not its drops-poll cursor, and reports untracked outcomes', async () => {
+    const galxeTask = { title: 'Follow the Ecosystem', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://app.galxe.com/quest/x/GC1', source: 'Galxe' };
+    const prevFeed: AirdropFeed = {
+      cards: [
+        makeCard({ r: 1, n: 'PrevSurf', source: 'Surf', url: 'https://prevsurf.xyz', sc: 90 }),
+        makeCard({
+          r: 2,
+          n: 'SharedProto',
+          source: 'Surf',
+          url: 'https://sharedproto.xyz',
+          sc: 85,
+          tk: '2/2',
+          taskTypes: ['testnet', 'quest'],
+          tasks: [makeCard({ n: 'x' }).tasks![0], galxeTask],
+        }),
+        makeCard({ r: 3, n: 'PrevGalxe', id: 'galxe:1', source: 'Galxe', url: 'https://prevgalxe.xyz', sc: 46, fit: ['community'] }),
+      ],
+      tge: [],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: NOW - 60_000,
+    };
+    const liveGalxe = async (): Promise<AirdropFeed> => ({
+      cards: [makeCard({ r: 1, n: 'LiveGalxe', id: 'galxe:2', source: 'Galxe', url: 'https://livegalxe.xyz', sc: 50, fit: ['community'] })],
+      tge: [],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW,
+    });
+    const mustNotRun = (name: string) => async (): Promise<AirdropFeed> => {
+      throw new Error(`${name} must not run`);
+    };
+
+    // Live.
+    const live = await buildCuratedAirdropFeed({ nowMs: NOW, fetchers: { ...ALL_EMPTY_FETCHERS, galxe: liveGalxe } });
+    expect(live.feed.cards.map(c => c.n)).toEqual(['LiveGalxe']);
+    expect(live.outcomes.find(o => o.name === 'Galxe')).toEqual({ name: 'Galxe', ok: true, cards: 1, tge: 0 });
+
+    // Galxe ignores its row's next_poll_at: that value is the drops poll TTL, whose cadence is not
+    // phase-locked to curated refreshes and would defer the job forever. Other sources stay deferrable.
+    const cursorHeld = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed,
+      deferredSourceIds: new Set(['feed:galxe_trending', 'feed:pendle_points', 'feed:merkl_opportunities', 'feed:airdropalert_calendar']),
+      fetchers: { ...ALL_EMPTY_FETCHERS, galxe: liveGalxe },
+    });
+    expect(cursorHeld.feed.cards.map(c => c.n)).toEqual(['LiveGalxe']);
+    expect(cursorHeld.outcomes.find(o => o.name === 'Galxe')).toEqual({ name: 'Galxe', ok: true, cards: 1, tge: 0 });
+    expect(cursorHeld.outcomes.find(o => o.name === 'Pendle')).toBeUndefined();
+
+    // A failed live fetch falls back to the prior Galxe cards and reports an untracked failure.
+    const failed = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed,
+      fetchers: { ...ALL_EMPTY_FETCHERS, galxe: mustNotRun('galxe') },
+    });
+    expect(failed.feed.cards.map(c => c.n)).toEqual(['PrevGalxe']);
+    expect(failed.outcomes.find(o => o.name === 'Galxe')).toEqual({ name: 'Galxe', ok: false, cards: 0, tge: 0, error: 'galxe must not run' });
+
+    // Disabled: Galxe cards disappear and Galxe tasks are stripped from restored Surf cards.
+    const disabled = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed,
+      disabledSourceIds: new Set(['feed:galxe_trending']),
+      fetchers: { ...ALL_EMPTY_FETCHERS, surf: mustNotRun('surf') },
+    });
+    expect(disabled.feed.cards.map(c => c.n)).toEqual(['PrevSurf', 'SharedProto']);
+    const shared = disabled.feed.cards[1];
+    expect(shared.tasks?.map(t => t.title)).toEqual(['Complete task']);
+    expect(shared.tk).toBe('1/1');
+    expect(shared.taskTypes).toEqual(['testnet']);
+
+    // Disabled by its raw source name too: the live Galxe fetcher never contributes cards.
+    await expect(
+      buildCuratedAirdropFeed({
+        nowMs: NOW,
+        disabledSourceIds: new Set(['Galxe']),
+        fetchers: { ...ALL_EMPTY_FETCHERS, galxe: liveGalxe },
+      }),
+    ).rejects.toThrow(/zero cards/);
+
+    // When all non-shared live sources are disabled or deferred, a Galxe failure must not reject usable deferred slices.
+    const deferredWithFailedGalxe = await buildCuratedAirdropFeed({
+      nowMs: NOW,
+      prevFeed: {
+        cards: [makeCard({ r: 1, n: 'DeferredPendle', id: 'pendle:def', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 70 })],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: NOW - 60_000,
+      },
+      disabledSourceIds: new Set(['surf', 'sheet:asso7878_sheet', 'sheet:arndxt_sheet', 'feed:merkl_opportunities', 'feed:airdropalert_calendar']),
+      deferredSourceIds: new Set(['feed:pendle_points']),
+      fetchers: { ...ALL_EMPTY_FETCHERS, galxe: mustNotRun('galxe') },
+    });
+    expect(deferredWithFailedGalxe.feed.cards.map(c => c.n)).toEqual(['DeferredPendle']);
+  });
+
+  test('merge keeps verifiedDomain attached to the verified URL and folds short-name Galxe space cards by stable ID', () => {
+    // Different domains sharing a project name must NOT copy verifiedDomain across URLs.
+    const surfAlpha = makeCard({ n: 'Alpha', id: 'surf-alpha', source: 'Surf', url: 'https://alpha.xyz', sc: 85 });
+    const galxeAlpha = makeCard({ n: 'Alpha', id: 'galxe:55', source: 'Galxe', url: 'https://alpha.org', verifiedDomain: true, sc: 55 });
+    // Same registrable domain retains verification.
+    const surfBeta = makeCard({ n: 'Beta', id: 'surf-beta', source: 'Surf', url: 'https://app.beta.org/farm', sc: 85 });
+    const galxeBeta = makeCard({ n: 'Beta', id: 'galxe:56', source: 'Galxe', url: 'https://beta.org', verifiedDomain: true, sc: 55 });
+    // Missing primary URL adopts secondary URL and its verification.
+    const surfGamma = makeCard({ n: 'Gamma', id: 'surf-gamma', source: 'Surf', url: null, sc: 85 });
+    const galxeGamma = makeCard({ n: 'Gamma', id: 'galxe:57', source: 'Galxe', url: 'https://gamma.org', verifiedDomain: true, sc: 55 });
+    // Short-name homepage-less Galxe space with two campaigns merges into one card by galxe:<spaceId>.
+    const galxeAb1 = makeCard({
+      n: 'AB',
+      id: 'galxe:12',
+      source: 'Galxe',
+      url: 'https://app.galxe.com/quest/AB/GC1',
+      tasks: [{ title: 'Quest 1', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://app.galxe.com/quest/AB/GC1' }],
+      tk: '1/1',
+      sc: 54,
+    });
+    const galxeAb2 = makeCard({
+      n: 'AB',
+      id: 'galxe:12',
+      source: 'Galxe',
+      url: 'https://app.galxe.com/quest/AB/GC2',
+      tasks: [{ title: 'Quest 2', type: 'quest', status: 'OPEN', cost: 0, timeMinutes: null, url: 'https://app.galxe.com/quest/AB/GC2' }],
+      tk: '1/1',
+      sc: 48,
+    });
+
+    const merged = mergeCuratedAirdropFeeds(
+      [
+        { cards: [surfAlpha, surfBeta, surfGamma], tge: [], counts: { active: 3, preToken: 3 }, fetchedAt: NOW },
+        { cards: [galxeAlpha, galxeBeta, galxeGamma, galxeAb1, galxeAb2], tge: [], counts: { active: 5, preToken: 5 }, fetchedAt: NOW },
+      ],
+      NOW,
+    );
+
+    const alpha = merged.cards.find(c => c.n === 'Alpha')!;
+    expect(alpha.url).toBe('https://alpha.xyz');
+    expect(alpha.verifiedDomain).toBeUndefined();
+
+    const beta = merged.cards.find(c => c.n === 'Beta')!;
+    expect(beta.url).toBe('https://app.beta.org/farm');
+    expect(beta.verifiedDomain).toBe(true);
+
+    const gamma = merged.cards.find(c => c.n === 'Gamma')!;
+    expect(gamma.url).toBe('https://gamma.org');
+    expect(gamma.verifiedDomain).toBe(true);
+
+    const abCards = merged.cards.filter(c => c.id === 'galxe:12');
+    expect(abCards).toHaveLength(1);
+    expect(abCards[0].tasks?.map(t => t.title)).toEqual(['Quest 1', 'Quest 2']);
+    expect(abCards[0].tk).toBe('2/2');
+  });
+
+  test('AirdropAlert reuses prior listings when only the events request fails, and clears them on an explicit empty list', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevFeed: AirdropFeed = {
+      cards: [makeCard({ r: 1, n: 'PriorAlertCard', id: 'airdropalert:10', source: 'AirdropAlert', url: null, sc: 56 })],
+      tge: [{ n: 'PriorAlertTge', t: '', s: 'Upcoming', d: '2026-12-01', source: 'AirdropAlert' }],
+      counts: { active: 1, preToken: 1 },
+      fetchedAt: NOW - 60_000,
+    };
+    const calendarPayload = [
+      {
+        id: 330576,
+        date_gmt: '2026-11-16T15:28:13',
+        title: { rendered: 'Fresh Calendar Event' },
+        content: { rendered: '<p>Claim window.</p>' },
+        link: 'https://airdropalert.com/?aa_calendar_event=fresh',
+      },
+    ];
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      // 1. Events 503 + Calendar 200 -> keeps prior AirdropAlert card while updating TGE.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ error: 'down' }, 503) : json(calendarPayload)) as unknown as typeof fetch;
+      const partialFail = await buildCuratedAirdropFeed({
+        nowMs: NOW,
+        prevFeed,
+        airdropAlertUrl: 'https://aa.test/calendar',
+        airdropAlertEventsUrl: 'https://aa.test/events',
+        fetchers: {
+          surf: emptyFeed,
+          asso7878: emptyFeed,
+          arndxt: emptyFeed,
+          pendle: async () => ({
+            cards: [makeCard({ r: 1, n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 80 })],
+            tge: [],
+            counts: { active: 1, preToken: 1 },
+            fetchedAt: NOW,
+          }),
+          merkl: emptyFeed,
+          galxe: emptyFeed,
+        },
+      });
+      expect(partialFail.feed.cards.map(c => c.n)).toEqual(['LivePendle', 'PriorAlertCard']);
+      expect(partialFail.feed.tge.map(t => t.n)).toEqual(['Fresh Calendar Event']);
+
+      // 2. Events 200 with empty array -> clears prior AirdropAlert listings.
+      globalThis.fetch = (async (input: RequestInfo | URL) =>
+        String(input).startsWith('https://aa.test/events') ? json({ events: [] }) : json(calendarPayload)) as unknown as typeof fetch;
+      const validEmpty = await buildCuratedAirdropFeed({
+        nowMs: NOW,
+        prevFeed,
+        airdropAlertUrl: 'https://aa.test/calendar',
+        airdropAlertEventsUrl: 'https://aa.test/events',
+        fetchers: {
+          surf: emptyFeed,
+          asso7878: emptyFeed,
+          arndxt: emptyFeed,
+          pendle: async () => ({
+            cards: [makeCard({ r: 1, n: 'LivePendle', source: 'Pendle', url: 'https://app.pendle.finance/points', sc: 80 })],
+            tge: [],
+            counts: { active: 1, preToken: 1 },
+            fetchedAt: NOW,
+          }),
+          merkl: emptyFeed,
+          galxe: emptyFeed,
+        },
+      });
+      expect(validEmpty.feed.cards.map(c => c.n)).toEqual(['LivePendle']);
+      expect(validEmpty.feed.tge.map(t => t.n)).toEqual(['Fresh Calendar Event']);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 });

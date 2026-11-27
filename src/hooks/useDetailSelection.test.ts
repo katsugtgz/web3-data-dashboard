@@ -1,6 +1,30 @@
 import { describe, expect, test } from 'bun:test';
-import type { Card } from '../../shared/types';
-import { reconcileDetailSelection, resolveDetailCard, type DetailRef } from './useDetailSelection';
+import type { Card, FeedItem } from '../../shared/types';
+import {
+  reconcileDetailSelection,
+  reconcileDropsDetailSelection,
+  resolveDetailCard,
+  resolveDropsDetail,
+  type DetailRef,
+} from './useDetailSelection';
+
+function makeDrop(over: Partial<FeedItem> = {}): FeedItem {
+  return {
+    id: 'drop-1',
+    project: 'Alpha',
+    chains: ['Base'],
+    taskTypes: ['quest'],
+    summary: 'Complete tasks.',
+    links: [],
+    sources: [],
+    sourceCount: 1,
+    score: 0.8,
+    risk: { level: 'ok', reasons: [] },
+    firstSeen: 100,
+    lastSeen: 200,
+    ...over,
+  };
+}
 
 function makeCard(over: Partial<Card> = {}): Card {
   return {
@@ -51,5 +75,21 @@ describe('detail selection reconciliation', () => {
     expect(restored.detail).toBeNull();
     expect(restored.shouldClear).toBe(false);
     expect(resolveDetailCard([makeCard({ id: 'surf-1' })], null)).toBeNull();
+  });
+
+  test('clears selected drop id when drop leaves live feed so a later return does not reopen the drawer', () => {
+    const updated = makeDrop({ id: 'drop-1', summary: 'Updated summary.' });
+    const retained = reconcileDropsDetailSelection([updated], 'drop-1');
+    expect(retained.shouldClear).toBe(false);
+    expect(retained.detail).toEqual(updated);
+
+    const removed = reconcileDropsDetailSelection([makeDrop({ id: 'drop-2' })], 'drop-1');
+    expect(removed.detail).toBeNull();
+    expect(removed.shouldClear).toBe(true);
+
+    const returnedAfterClear = reconcileDropsDetailSelection([makeDrop({ id: 'drop-1' })], null);
+    expect(returnedAfterClear.detail).toBeNull();
+    expect(returnedAfterClear.shouldClear).toBe(false);
+    expect(resolveDropsDetail([makeDrop({ id: 'drop-1' })], null)).toBeNull();
   });
 });

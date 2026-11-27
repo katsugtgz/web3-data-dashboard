@@ -188,19 +188,80 @@ export function stripNonEnglishLines(text: string, sourceLang?: string): string 
 const BARE_URL_WITH_PATH_RE =
   /\b(?:www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)*\.(?:com|io|xyz|fun|app|gg|ai|org|net|co|me|site|wtf|voyage|cc|one|pro|network|finance|exchange|market|markets|systems|bot|live|club|fi|sh|so|to)(?:\/[^\s]*|\?[^\s]*)/gi;
 
+// Emoji run: pictographs plus their variation selector, ZWJ joiner, and skin-tone modifiers.
+const EMOJI_RUN = String.raw`[\p{Emoji_Presentation}\p{Extended_Pictographic}‍️\p{Emoji_Modifier}]+`;
+const EMOJI_RE = new RegExp(EMOJI_RUN, 'gu');
+/** Replaces every emoji (with its joiners and modifiers) with a space. */
+export function stripEmoji(text: string): string {
+  return text.replace(EMOJI_RE, ' ');
+}
+// Decorative emoji prefix that opens a post, with any separator glued to it.
+const LEADING_EMOJI_RE = new RegExp(String.raw`^(?:${EMOJI_RUN}\s*[|·:;,\-~>*\s]*)+`, 'u');
+
+// Caption labels that make up Telegram channel signature rows (`Atoms | Chat | Boost`,
+// `News | Markets | YouTube`). Such a row is channel navigation, never drop content.
+const FOOTER_LABEL =
+  String.raw`(?:official\s+)?(?:links?|chat|boost|website|site|web|app|holder|dns|x|twitter|discord|telegram|tg|channel|group|community|announcements?|news|markets|youtube|updates?|medium|blog|docs|gitbook|whitepaper|dapp|dashboard|github|instagram|tiktok|threads|reddit|forum|email|contact|support|donate|source|sorce|socials?|media|atoms|us|more|info|about|subscribe|follow|join|dex|explorer|audit|tokenomics|litepaper)`;
+
+// Two or more pipe-joined caption labels, anywhere in the text.
+const FOOTER_LABEL_ROW_RE = new RegExp(
+  String.raw`(?:\s*\|\s*|\s+|^)(?:${EMOJI_RUN}\s*)?${FOOTER_LABEL}(?:\s*\|\s*(?:${EMOJI_RUN}\s*)?${FOOTER_LABEL})+\s*[.!?]?(?=\s|$)`,
+  'giu',
+);
+
+// A single trailing caption with its leading pipe (`... is live | Chat`).
+const TRAILING_CAPTION_RE = new RegExp(
+  String.raw`\s\|\s*(?:${EMOJI_RUN}\s*)?${FOOTER_LABEL}\s*[.!?]?(?=\s*$)`,
+  'gim',
+);
+
+// A line that only captions a link (`Chat`, `| Chat`) or captions it with a URL-like leftover
+// (`DNS 1.1.1.1`, `Holder Agent.id`) once the URL itself was removed.
+const LINK_CAPTION_LINE_RE = new RegExp(
+  String.raw`^[\s|>·*_-]*(?:${EMOJI_RUN}\s*)*(?:official\s+)?(?:links?|chat|boost|website|site|web|app|holder|dns|x|twitter|discord|telegram|tg|channel|group|announcements?|source|sorce|docs|whitepaper|explorer|audit|medium|blog|github|youtube|instagram|tiktok|reddit|forum|contact|support)\s*[:→➡>-]?\s*(?:[\w@./:?=&%+#-]*[./@][\w@./:?=&%+#-]*)?\s*[.!?]?$`,
+  'iu',
+);
+
+function stripTrailingLinkCaptions(text: string): string {
+  const lines = text.split('\n');
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1].trim();
+    if (line && !LINK_CAPTION_LINE_RE.test(line)) break;
+    end--;
+  }
+  return lines.slice(0, end).join('\n');
+}
+
+// Channel-growth promos appended to a post: `Subscribe to our channel`,
+// `Join our Telegram channel`, `Follow us on X`, `Turn on notifications`.
+const CHANNEL_PROMO_RE = new RegExp(
+  String.raw`(^|[.!?…·]|\n|\d[.)])\s*(?:${EMOJI_RUN}\s*)?(?:subscrib(?:e|ed)\b|join\s+(?:our|the|us)\b[^.!?·\n]{0,30}\b(?:telegram|tg|channel|group)\b|follow\s+us\b[^.!?·\n]{0,20}\b(?:x|twitter|telegram|tg|channel)\b|(?:turn\s+on|enable)\s+(?:the\s+|post\s+)?notifications?\b)[^\n·]*?(?:[.!?](?=\s|$)|(?=\n|·)|$)`,
+  'giu',
+);
+
+function stripChannelPromos(text: string): string {
+  // A promo phrased as a list step (`· Join our Telegram channel ·`, `2. Follow us on X`) is task content.
+  return text.replace(CHANNEL_PROMO_RE, (match, lead: string) => {
+    if (lead === '·' || /\d[.)]$/.test(lead)) return match;
+    return lead === '\n' ? '\n' : lead;
+  });
+}
+
 /**
- * Cleans raw post text for human-readable English card summaries:
- * removes wire prefixes/footers, URLs, bare referral URLs, dangling link labels,
- * and normalizes squashed Telegram bullets into clean ` · ` separators.
+ * Cleans raw post text for human-readable English card summaries: removes wire
+ * prefixes, Telegram channel signature footers and promo tails, URLs, bare
+ * referral URLs, dangling link labels, decorative emoji, and normalizes
+ * squashed Telegram bullets into clean ` · ` separators.
  */
 export function cleanSummaryText(raw: string, sourceLang?: string): string {
-  let text = stripBilingualDuplicate(raw);
+  let text = stripBilingualDuplicate(raw.replace(LEADING_EMOJI_RE, ''));
   text = stripNonEnglishLines(text, sourceLang);
 
-  // Remove channel signature footers and wire markers.
+  // Remove channel signature rows and wire markers.
   text = text
-    .replace(/\bNews\s*\|\s*Markets\s*\|\s*YouTube\b/gi, ' ')
-    .replace(/(?:\p{Emoji_Presentation}\s*)?Atoms\s*\|\s*(?:\p{Emoji_Presentation}\s*)?Chat\s*\|\s*(?:\p{Emoji_Presentation}\s*)?Boost/giu, ' ')
+    .replace(FOOTER_LABEL_ROW_RE, ' ')
+    .replace(TRAILING_CAPTION_RE, ' ')
     .replace(/\s*[\u2013\u2014-]\s*Link\b/gi, ' ')
     .replace(/\s+@[A-Za-z0-9_]{3,32}\s*$/g, ' ')
     .replace(/^\s*(?:\*+[A-Z0-9\s]{2,20}:|BREAKING:|JUST IN:|LATEST:|REGULATION:|INSIGHT:|BIG:)\s*/i, '');
@@ -210,16 +271,22 @@ export function cleanSummaryText(raw: string, sourceLang?: string): string {
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(BARE_URL_WITH_PATH_RE, ' ');
 
+  // Drop the caption lines those URLs left behind (`Chat`, `Boost`, `Site`).
+  text = stripTrailingLinkCaptions(text);
+
   // Normalize decorative divider lines (`____`, `----`) and convert bullet markers to ` · `.
   text = text
     .replace(/[_]{3,}|[-]{4,}/g, ' ')
     .replace(/(?:^|\n|\s)(?:[\u2796\u2022\u25AA\u25CF\u25B8\u25BA]\uFE0F?|\u2615\uFE0F?|\u{1F7E2}|-\s+)/gu, ' \u00b7 ');
 
+  // Strip channel promo tails that follow a sentence boundary.
+  text = stripChannelPromos(text);
+
   // Strip dangling empty link/source labels left behind after URL removal.
   // Repeat twice to catch chained labels like `Register : -> Link :`.
   for (let i = 0; i < 2; i++) {
     text = text.replace(
-      /(?:[\p{Emoji_Presentation}\p{Extended_Pictographic}]\uFE0F?\s*)*\b(?:Source|Sorce|Link|Links|Register|Apply Now|Apply here|Check Here|Check your Airdrop here|Complete Here|Completed Here|Spend Here|Mint Link|Join Waitlist|Go to|Winnerlist|LFG|More details|Details)\b\s*[:\u2192\u27A1\uFE0F]*\s*(?=(?:\u00b7|\n|$|\b(?:Source|Sorce|Link|Register|Apply|Check|Complete|Done)\b))/giu,
+      /(?:[\p{Emoji_Presentation}\p{Extended_Pictographic}]\uFE0F?\s*)*\b(?:Official (?:announcement|link|website|channel)|(?:Check your (?:points|rewards?|airdrop|allocation|eligibility)|Link|Join|Claim) here|Source|Sorce|Link|Links|Register|Apply Now|Apply here|Check Here|Check your Airdrop here|Complete Here|Completed Here|Spend Here|Mint Link|Join Waitlist|Go to|Winnerlist|LFG|More details|Details)\b\s*[:\u2192\u27A1\uFE0F]*\s*(?=(?:\u00b7|\n|$|\b(?:Source|Sorce|Link|Register|Apply|Check|Complete|Done|Official|Join|More)\b))/giu,
       ' ',
     );
   }
@@ -234,6 +301,12 @@ export function cleanSummaryText(raw: string, sourceLang?: string): string {
     .replace(/^[\s\u00b7:;,\-|\u2013\u2014]+/, '')
     .replace(/[\s\u00b7:;,\-|\u2013\u2014]+$/, '')
     .replace(/\s+/g, ' ')
+    .trim();
+
+  // Drop decorative emoji that survived: a leading run, or one glued to the end of a word.
+  text = text
+    .replace(LEADING_EMOJI_RE, '')
+    .replace(new RegExp(String.raw`(\S)${EMOJI_RUN}(?=\s|$|[\u00b7,.;:!?])`, 'gu'), '$1')
     .trim();
 
   return text;
@@ -384,6 +457,60 @@ const STRONG_DROP_SIGNAL_RE =
 const DROP_URL_PATH_RE =
   /\/(?:airdrop|claim|faucet|waitlist|whitelist|allowlist|quest|quests|mint|checker|apply|campaign|campaigns|rewards|points|testnet|early-access|socialcamp|sunset|walletchecker)(?:[/?#]|$)|#(?:early-access|walletchecker|quest)\b/i;
 
+// Bare status update (`Update Buzzchain.`) or label-only post (`Voice: social`).
+const STUB_STATUS_RE = /^(?:update|updated|ping|bump|status|info|news)\s*[:–—-]?\s*[@#$]?\w{1,24}[.!]?$/i;
+const STUB_LABEL_RE =
+  /^[@#$]?\w{1,24}\s*[:–—-]\s*(?:social|other|update|live|soon|new|claim|airdrop|quest|testnet|mint|points)\s*[.!]?$/i;
+// Question openers and Indonesian chat markers that mark a line as banter.
+const BANTER_OPENER_RE =
+  /^(?:anyone|any|who|what|when|where|why|how|is|are|am|did|does|do|can|could|will|would|has|have|had|apakah|ada|kapan|siapa|berapa|gimana|kenapa|udah|sudah|belum|tolong|btw)\b/i;
+const BANTER_MARKER_RE =
+  /\b(?:kapan|siapa|berapa|gimana|kenapa|apakah|ada\s+yg|ada\s+yang|udah\s+blm|kah|dong|deh|sih|wkwk|lol|lmao|haha)\b/i;
+// Phrasing that turns a short line into an announcement rather than a question.
+const LIVE_CUE_RE =
+  /\b(?:is|are|now|goes|went)\s+live\b|\bclaim\s+(?:now|your|here|at|free)\b|\bout\s+now\b|\bdown\s+now\b|\bsekarang\b|\blangsung\b/i;
+// Concrete participation action that distinguishes an instruction from a thin social repost.
+const SOCIAL_ACTION_RE =
+  /\b(?:submit|register|apply|claim|verify|complete|connect|fill|sign\s+up|check-?in|upload|redeem|bind|provide|proof|form|quiz|address|wallet)\b/i;
+
+/**
+ * A linkless post that carries no action a reader can take: a bare status update,
+ * a label-only stub, a thin social repost (follow / join only), or a
+ * single-sentence question or banter.
+ */
+function isLinklessStub(text: string, taskTypes: TaskType[]): boolean {
+  if (STUB_STATUS_RE.test(text) || STUB_LABEL_RE.test(text)) return true;
+
+  const plain = text
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\$[A-Z]{2,10}\b/g, ' ')
+    .replace(/#[\w]+/g, ' ')
+    .replace(/@[A-Za-z0-9_]{2,32}/g, ' ')
+    .replace(EMOJI_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = plain.split(' ').filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length > 10) return false;
+
+  const isSingleSentence = plain.split(/[.!?]+/).filter(s => s.trim()).length <= 1;
+  if (words.length <= 9 && isSingleSentence && /\?/.test(plain)) {
+    return true;
+  }
+  const isAnnouncement = LIVE_CUE_RE.test(plain);
+  if (
+    !isAnnouncement &&
+    !SOCIAL_ACTION_RE.test(plain) &&
+    !taskTypes.some(t => t !== 'other' && t !== 'social') &&
+    taskTypes.includes('social')
+  ) {
+    return true;
+  }
+  if (isAnnouncement || words.length > 9) return false;
+  if (!isSingleSentence) return false;
+  return BANTER_OPENER_RE.test(plain) || BANTER_MARKER_RE.test(plain);
+}
+
 export interface DropRelevanceInput {
   text: string;
   urls: string[];
@@ -454,6 +581,12 @@ export function classifyDropRelevance(input: DropRelevanceInput): DropRelevanceR
   // News-domain links inside a post with no non-news project/quest URL.
   if (input.projectDomain && isNewsDomain(input.projectDomain)) {
     return { isDrop: false, reason: 'news-project-domain' };
+  }
+
+  // Linkless stubs carry no action a reader can take (bare status updates,
+  // label-only posts, thin social reposts, single-sentence banter).
+  if (urls.length === 0 && !hasProjectDomain && isLinklessStub(text, input.taskTypes)) {
+    return { isDrop: false, reason: 'linkless-stub' };
   }
 
   // Positive acceptance: requires at least one genuine drop/participation signal.
