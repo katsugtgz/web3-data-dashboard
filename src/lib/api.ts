@@ -1,5 +1,26 @@
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
 
+/** `VITE_API_BASE` sentinel for Docker/srv2 builds where the Worker serves `/feed.json` & co. from this origin. */
+export const SAME_ORIGIN_API_BASE = 'same-origin';
+
+export interface JsonSource {
+  /** `''` = static snapshot mode, `'same-origin'` = live API on this origin, else an absolute URL. */
+  apiBase: string;
+  /** Directory holding the offline snapshots, e.g. `${BASE_URL}data`. */
+  snapshotBase: string;
+}
+
+const DEFAULT_SOURCE: JsonSource = {
+  apiBase: API_BASE,
+  snapshotBase: `${import.meta.env.BASE_URL}data`,
+};
+
+/** URL prefix for live requests, or `null` when the app is snapshot-only. */
+export function resolveApiPrefix(apiBase: string): string | null {
+  if (apiBase === SAME_ORIGIN_API_BASE) return '';
+  return apiBase || null;
+}
+
 export type JsonFetchResult<T> =
   | { status: 200; body: T; etag: string | null; source: 'api' | 'snapshot' }
   | { status: 304 };
@@ -83,12 +104,14 @@ export async function getJson<T>(
   path: string,
   etag?: string | null,
   signal?: AbortSignal,
+  source: JsonSource = DEFAULT_SOURCE,
 ): Promise<JsonFetchResult<T>> {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const prefetchKey = cleanPath.replace(/^\//, '').replace(/\.json(?:\?.*)?$/, '');
-  const snapshotUrl = `${import.meta.env.BASE_URL}data${cleanPath.split('?')[0]}`;
+  const snapshotUrl = `${source.snapshotBase}${cleanPath.split('?')[0]}`;
+  const apiPrefix = resolveApiPrefix(source.apiBase);
 
-  if (!API_BASE) {
+  if (apiPrefix === null) {
     const body = await readPrefetched<T>(prefetchKey, signal, true);
     if (body !== null) return { status: 200, body, etag: null, source: 'snapshot' };
     return fetchJson(snapshotUrl, 'snapshot', {}, signal);
@@ -98,7 +121,7 @@ export async function getJson<T>(
   if (etag) headers['If-None-Match'] = etag;
 
   try {
-    return await fetchJson(`${API_BASE}${cleanPath}`, 'api', headers, signal);
+    return await fetchJson(`${apiPrefix}${cleanPath}`, 'api', headers, signal);
   } catch (err) {
     // Transport failures, deadlines, and Worker 5xx qualify for offline fallback.
     if (signal?.aborted || !fallbackEligible(err)) throw err;

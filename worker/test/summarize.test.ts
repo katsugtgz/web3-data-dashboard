@@ -1,14 +1,372 @@
 import { describe, expect, test } from 'bun:test';
-import { createTestD1 } from './helpers';
+import { createTestD1, MIGRATION_FILES } from './helpers';
 import { HAN_RE } from '../src/normalize/i18n';
 import {
+  AI_COMPAT_TIMEOUT_MS,
   AI_MAX_ATTEMPTS,
+  AI_MODEL,
+  createOpenAiCompatBinding,
   hasAiQuotaRemaining,
+  OPENAI_COMPAT_DEFAULT_MODEL,
   parseAndValidateAiJson,
   summarizeClusterWithAi,
   unsafeContentRe,
   type AiBindingLike,
 } from '../src/normalize/summarize';
+
+type FetchCall = { url: string; init: RequestInit };
+
+/** Records every request and answers from a queue (last entry repeats). */
+function stubFetch(...responses: Array<{ status?: number; body: unknown }>): { calls: FetchCall[]; fetch: typeof fetch } {
+  const calls: FetchCall[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url, init: init ?? {} });
+    const next = responses.length > 1 ? responses.shift() : responses[0];
+    return new Response(JSON.stringify(next?.body ?? null), { status: next?.status ?? 200 });
+  }) as typeof fetch;
+  return { calls, fetch: fetchImpl };
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+describe('provider-agnostic OpenAI-compatible LLM binding', () => {
+  test('returns undefined without a complete credential pair, so callers fall back to rule summaries', () => {
+    expect(createOpenAiCompatBinding({})).toBeUndefined();
+    expect(createOpenAiCompatBinding({ baseUrl: 'https://llm.example/v1' })).toBeUndefined();
+    expect(createOpenAiCompatBinding({ apiKey: 'k' })).toBeUndefined();
+    expect(createOpenAiCompatBinding({ cfAccountId: 'acc' })).toBeUndefined();
+    expect(createOpenAiCompatBinding({ cfApiToken: 'tok' })).toBeUndefined();
+    expect(createOpenAiCompatBinding({ baseUrl: 'https://llm.example/v1', apiKey: 'k' })).toBeDefined();
+    expect(createOpenAiCompatBinding({ cfAccountId: 'acc', cfApiToken: 'tok' })).toBeDefined();
+  });
+
+  test('calls /chat/completions with a Bearer token, JSON mode, and a 15s abort timeout', async () => {
+    const content = '```json\n{"summary":"Complete the testnet quests."}\n```';
+    const { calls, fetch } = stubFetch({ body: { choices: [{ message: { content } }] } });
+    const binding = createOpenAiCompatBinding(
+      { baseUrl: 'https://llm.example/v1/', apiKey: 'secret', model: 'gpt-4.1-mini' },
+      { fetch },
+    )!;
+
+    const out = await binding.run(AI_MODEL, {
+      messages: [
+        { role: 'system', content: 'Reply with JSON.' },
+        { role: 'user', content: 'Project: Nova' },
+      ],
+      max_tokens: 120,
+    });
+
+    // Raw provider payload comes back unchanged; the existing text extractor and fence-tolerant parser handle it.
+    expect(out).toEqual({ choices: [{ message: { content } }] });
+    expect(parseAndValidateAiJson(extractText(out))).toEqual({
+      summary: 'Complete the testnet quests.',
+      taskTypes: [],
+      chains: [],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://llm.example/v1/chat/completions');
+    expect(calls[0]!.init.method).toBe('POST');
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe('Bearer secret');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      model: 'gpt-4.1-mini',
+      max_tokens: 120,
+      messages: [
+        { role: 'system', content: 'Reply with JSON.' },
+        { role: 'user', content: 'Project: Nova' },
+      ],
+      response_format: { type: 'json_object' },
+    });
+    const signal = calls[0]!.init.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(AI_COMPAT_TIMEOUT_MS).toBe(15_000);
+  });
+
+  test('defaults to gpt-4o-mini when the Workers AI model name is requested', async () => {
+    const { calls, fetch } = stubFetch({ body: { choices: [{ message: { content: '{}' } }] } });
+    await createOpenAiCompatBinding({ baseUrl: 'https://llm.example', apiKey: 'k' }, { fetch })!.run(AI_MODEL, {
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(JSON.parse(String(calls[0]!.init.body)).model).toBe(OPENAI_COMPAT_DEFAULT_MODEL);
+    expect(OPENAI_COMPAT_DEFAULT_MODEL).toBe('gpt-4o-mini');
+  });
+
+  test('retries once without response_format when the provider rejects JSON mode', async () => {
+    const { calls, fetch } = stubFetch(
+      { status: 400, body: { error: { message: 'response_format is not supported' } } },
+      { body: { choices: [{ message: { content: '{"summary":"ok"}' } }] } },
+    );
+    const binding = createOpenAiCompatBinding({ baseUrl: 'https://llm.example', apiKey: 'k' }, { fetch })!;
+    await binding.run(AI_MODEL, { messages: [{ role: 'user', content: 'hi' }] });
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(String(calls[0]!.init.body)).response_format).toEqual({ type: 'json_object' });
+    expect(JSON.parse(String(calls[1]!.init.body)).response_format).toBeUndefined();
+  });
+
+  test('rejects on a non-2xx response and aborts when the request exceeds the timeout', async () => {
+    const failing = stubFetch({ status: 503, body: { error: 'overloaded' } });
+    await expect(
+      createOpenAiCompatBinding({ baseUrl: 'https://llm.example', apiKey: 'k' }, { fetch: failing.fetch })!.run(AI_MODEL, {
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).rejects.toThrow(/503/);
+
+    const hanging = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      })) as typeof fetch;
+    await expect(
+      createOpenAiCompatBinding({ baseUrl: 'https://llm.example', apiKey: 'k' }, { fetch: hanging, timeoutMs: 20 })!.run(
+        AI_MODEL,
+        { messages: [{ role: 'user', content: 'hi' }] },
+      ),
+    ).rejects.toThrow('aborted');
+  });
+
+  test('Cloudflare Workers AI REST fallback posts to the account endpoint and returns result', async () => {
+    const calls: FetchCall[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      return jsonResponse(200, { success: true, errors: [], result: { response: '{"summary":"ok"}', usage: { prompt: 3 } } });
+    }) as typeof fetch;
+    const binding = createOpenAiCompatBinding({ cfAccountId: 'acc 1', cfApiToken: 'cf-token' }, { fetch: fetchImpl })!;
+
+    const out = await binding.run(AI_MODEL, { messages: [{ role: 'user', content: 'hi' }], max_tokens: 200 });
+    expect(out).toEqual({ response: '{"summary":"ok"}', usage: { prompt: 3 } });
+    expect(calls[0]!.url).toBe(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent('acc 1')}/ai/run/${encodeURIComponent(AI_MODEL)}`);
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe('Bearer cf-token');
+    expect(JSON.parse(String(calls[0]!.init.body)).messages[0].content).toBe('hi');
+    expect(calls[0]!.init.signal).toBeInstanceOf(AbortSignal);
+
+    const failing = stubFetch({ status: 500, body: { success: false } });
+    await expect(
+      createOpenAiCompatBinding({ cfAccountId: 'acc', cfApiToken: 'tok' }, { fetch: failing.fetch })!.run(AI_MODEL, {
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).rejects.toThrow(/500/);
+  });
+});
+
+describe('AI rich field validation and persistence', () => {
+  test('parseAndValidateAiJson keeps safe rich fields, caps steps at 4, and omits the rest', () => {
+    const res = parseAndValidateAiJson(
+      JSON.stringify({
+        summary: 'Complete the Nova testnet quests to earn points.',
+        taskTypes: ['quest'],
+        chains: ['Base'],
+        steps: ['Connect your wallet', 'Complete 5 quests', 'Claim your points', 'Bridge assets', 'Invite friends'],
+        rewardPool: '$500K',
+        deadline: 'Ends Friday',
+        cost: 'Free',
+      }),
+    );
+    expect(res).toEqual({
+      summary: 'Complete the Nova testnet quests to earn points.',
+      taskTypes: ['quest'],
+      chains: ['Base'],
+      steps: ['Connect your wallet', 'Complete 5 quests', 'Claim your points', 'Bridge assets'],
+      rewardPool: '$500K',
+      deadline: 'Ends Friday',
+      cost: 'Free',
+    });
+
+    // A payload without rich fields keeps the original shape.
+    expect(parseAndValidateAiJson(JSON.stringify({ summary: 'Plain summary.', taskTypes: [], chains: [] }))).toEqual({
+      summary: 'Plain summary.',
+      taskTypes: [],
+      chains: [],
+    });
+    expect(parseAndValidateAiJson(JSON.stringify({ summary: 'Plain summary.', steps: 'not an array', rewardPool: 42 }))).toEqual({
+      summary: 'Plain summary.',
+      taskTypes: [],
+      chains: [],
+    });
+  });
+
+  test('parseAndValidateAiJson drops unsafe or oversized rich fields: links, handles, wallets, secrets, scam text, CJK', () => {
+    const res = parseAndValidateAiJson(
+      JSON.stringify({
+        summary: 'Complete the Nova testnet quests to earn points.',
+        taskTypes: [],
+        chains: [],
+        steps: [
+          'Visit https://evil.example/join',
+          'Follow @scam_handle',
+          'Send 0.01 ETH to 0xAbCdEf0123456789AbCdEf0123456789AbCdEf01',
+          'Connect your wallet and enter your seed phrase',
+          'x'.repeat(101),
+          '中文步骤',
+          'Send 100 USDT to receive 1000 back instantly',
+        ],
+        rewardPool: 'https://evil.example/pool',
+        deadline: 'Confirm in your wallet to unlock the deadline',
+        cost: 'a'.repeat(41),
+      }),
+    );
+    expect(res).toEqual({ summary: 'Complete the Nova testnet quests to earn points.', taskTypes: [], chains: [] });
+
+    // Length limits are inclusive: exactly on the limit passes (one over is dropped above).
+    const pad = (text: string, len: number) => `${text}${'pool '.repeat(40)}`.slice(0, len);
+    const rewardPool = pad('$500K ', 60);
+    const deadline = pad('Ends Friday ', 40);
+    const cost = pad('Free entry ', 40);
+    const step = `${pad('Complete the quests ', 99)}x`;
+    expect([rewardPool, deadline, cost, step].map(s => s.length)).toEqual([60, 40, 40, 100]);
+    expect(
+      parseAndValidateAiJson(
+        JSON.stringify({
+          summary: 'Complete the Nova testnet quests to earn points.',
+          rewardPool,
+          deadline,
+          cost,
+          steps: [step],
+        }),
+      ),
+    ).toEqual({
+      summary: 'Complete the Nova testnet quests to earn points.',
+      taskTypes: [],
+      chains: [],
+      rewardPool,
+      deadline,
+      cost,
+      steps: [step],
+    });
+    expect(
+      parseAndValidateAiJson(
+        JSON.stringify({ summary: 'Complete the Nova testnet quests.', rewardPool: `${pad('$500K ', 60)}x` }),
+      ),
+    ).toEqual({ summary: 'Complete the Nova testnet quests.', taskTypes: [], chains: [] });
+  });
+
+  test('persists validated AI rich fields into the cluster alongside the AI summary', async () => {
+    const { db, sqlite, queries } = createTestD1();
+    sqlite.exec(
+      `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+       VALUES ('c1', 'KiteAI', 'KITE', 'kite.ai', '[]', '["other"]', 'KiteAI: other', 'rule', 'ok', '[]', 0.5, 1, 1000, 1000)`,
+    );
+    const ai: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI testnet quests on Base.',
+            taskTypes: ['quest'],
+            chains: ['Base'],
+            rewardPool: '10M $KITE',
+            deadline: 'Ends Friday',
+            cost: 'Free',
+            steps: ['Connect your wallet', 'Complete 5 quests'],
+          }),
+        };
+      },
+    };
+
+    const res = await summarizeClusterWithAi(ai, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+    });
+
+    expect(res).toEqual({
+      summary: 'Complete KiteAI testnet quests on Base.',
+      taskTypes: ['quest'],
+      chains: ['Base'],
+      rewardPool: '10M $KITE',
+      deadline: 'Ends Friday',
+      cost: 'Free',
+      steps: ['Connect your wallet', 'Complete 5 quests'],
+    });
+    expect(
+      sqlite.query('SELECT summary_source, reward_pool, deadline, cost, steps FROM clusters WHERE id = ?1').get('c1'),
+    ).toEqual({
+      summary_source: 'ai',
+      reward_pool: '10M $KITE',
+      deadline: 'Ends Friday',
+      cost: 'Free',
+      steps: '["Connect your wallet","Complete 5 quests"]',
+    });
+    // Persisting rich fields adds no read: the success path still issues zero SELECTs.
+    expect(queries.some(q => /^\s*SELECT\b/i.test(q))).toBe(false);
+  });
+
+  test('AI rich fields only fill gaps: parser-derived values win and steps merge up to 4', async () => {
+    const { db, sqlite } = createTestD1();
+    sqlite.exec(
+      `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, reward_pool, deadline, cost, steps)
+       VALUES ('c1', 'KiteAI', 'KITE', 'kite.ai', '[]', '["other"]', 'KiteAI: other', 'rule', 'ok', '[]', 0.5, 1, 1000, 1000, '$500K', 'May 30', 'Stake $100+', '["Connect your wallet"]')`,
+    );
+    const ai: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI testnet quests on Base.',
+            rewardPool: '10M $KITE',
+            deadline: 'Ends Friday',
+            cost: 'Free',
+            steps: ['Complete 5 quests'],
+          }),
+        };
+      },
+    };
+
+    await summarizeClusterWithAi(ai, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+    });
+
+    expect(sqlite.query('SELECT reward_pool, deadline, cost, steps, summary_source FROM clusters WHERE id = ?1').get('c1')).toEqual({
+      reward_pool: '$500K',
+      deadline: 'May 30',
+      cost: 'Stake $100+',
+      steps: '["Connect your wallet","Complete 5 quests"]',
+      summary_source: 'ai',
+    });
+  });
+
+  test('a pre-0009 schema still gets the AI summary when the rich columns are missing', async () => {
+    const { db, sqlite } = createTestD1(MIGRATION_FILES.slice(0, 8));
+    sqlite.exec(
+      `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+       VALUES ('c1', 'KiteAI', 'KITE', 'kite.ai', '[]', '["other"]', 'KiteAI: other', 'rule', 'ok', '[]', 0.5, 1, 1000, 1000)`,
+    );
+    const ai: AiBindingLike = {
+      async run() {
+        return {
+          response: JSON.stringify({
+            summary: 'Complete KiteAI testnet quests on Base.',
+            rewardPool: '10M $KITE',
+            steps: ['Connect your wallet'],
+          }),
+        };
+      },
+    };
+    const res = await summarizeClusterWithAi(ai, db, {
+      clusterId: 'c1',
+      project: 'KiteAI',
+      rawTexts: ['post'],
+      isNewCluster: true,
+      isNonLatinSource: false,
+      riskLevel: 'ok',
+    });
+    expect(res?.summary).toBe('Complete KiteAI testnet quests on Base.');
+    expect(
+      (sqlite.query('SELECT summary_source FROM clusters WHERE id = ?1').get('c1') as { summary_source: string }).summary_source,
+    ).toBe('ai');
+  });
+});
+
+function extractText(raw: unknown): string {
+  const obj = raw as { choices?: { message?: { content?: unknown } }[] };
+  const content = obj.choices?.[0]?.message?.content;
+  return typeof content === 'string' ? content : '';
+}
 
 function createSqliteD1(): D1Database {
   const { db, sqlite } = createTestD1();

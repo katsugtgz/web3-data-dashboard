@@ -12,15 +12,19 @@ import { stripOrTranslateCjk } from '../normalize/i18n';
 import { URL_SHORTENERS } from '../safety/shorteners';
 import {
   AIRDROPALERT_CALENDAR_URL,
+  GALXE_GRAPHQL_URL,
   MERKL_OPPORTUNITIES_URL,
   PENDLE_POINTS_URL,
+  fetchAirdropAlertAirdrops,
+  fetchGalxeCampaignsToAirdropFeed,
   fetchMerklOpportunities,
   fetchPendlePoints,
-  fetchWpCalendarAirdrops,
+  isCleanProjectDomain,
+  toPlainBlurb,
 } from './feeds';
 import { resolveCuratedSourceUrl, type SourceConfig } from './registry';
 import { ARNDXT_SHEET_URL, ASSO7878_SHEET_URL, fetchArndxtSheet, fetchAsso7878Sheet } from './sheets';
-import { SURF_AIRDROPS_URL, fetchSurfAirdrops } from './surf';
+import { SURF_AIRDROPS_URL, SURF_TIMEOUT_MS, fetchSurfAirdrops } from './surf';
 
 interface ValidLlamaProtocolItem {
   slug?: unknown;
@@ -33,6 +37,7 @@ interface ValidLlamaProtocolItem {
   tvl: number;
   listedAt?: unknown;
   url?: unknown;
+  description?: unknown;
 }
 
 function isValidLlamaProtocolItem(entry: unknown): entry is ValidLlamaProtocolItem {
@@ -117,6 +122,7 @@ export function extractDefiLlamaTokenlessAirdrops(raw: unknown, nowMs = Date.now
           ? [stripOrTranslateCjk(p.chain)].filter(Boolean)
           : [];
     const url = typeof p.url === 'string' ? cleanUrl(p.url) : null;
+    const description = toPlainBlurb(p.description, 200);
     const isRecentlyListed =
       typeof p.listedAt === 'number' && Number.isFinite(p.listedAt) && p.listedAt >= recentCutoffSec;
     const grade: Grade = tvl >= 100_000_000 ? 'S' : tvl >= 30_000_000 ? 'A' : tvl >= 10_000_000 ? 'B' : 'C';
@@ -172,6 +178,9 @@ export function extractDefiLlamaTokenlessAirdrops(raw: unknown, nowMs = Date.now
       sub: [grade === 'S' ? 9 : 7, 7, null],
       url,
       source: 'DefiLlama',
+      tvlUsd: tvl,
+      ...(description ? { description } : {}),
+      ...(url && isCleanProjectDomain(url, name) ? { verifiedDomain: true } : {}),
     });
   }
 
@@ -207,6 +216,39 @@ function eligibleProjectDomains(card: Card): string[] {
 
 function canonicalProjectDomain(card: Card): string | null {
   return eligibleProjectDomains(card)[0] ?? null;
+}
+
+/** Structured enrichment that a trusted secondary card may lend to a primary card lacking it. */
+const STRUCTURED_CARD_FIELDS = [
+  'tvlUsd',
+  'apy',
+  'deadline',
+  'rewardPool',
+  'description',
+  'ogImage',
+  'verifiedDomain',
+] as const;
+
+function fillMissingFrom<K extends keyof Card>(target: Card, source: Card, key: K): void {
+  if (target[key] == null && source[key] != null) target[key] = source[key];
+}
+
+/** Rejects with `${label} timed out after Nms` when `run` neither resolves nor rejects within `ms`. */
+function withDeadline<T>(run: () => Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    // Promise.then() also turns a synchronous throw inside `run` into a rejection.
+    Promise.resolve().then(run).then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      err => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
@@ -256,6 +298,11 @@ function mergeSecondaryIntoPrimary(primary: Card, secondary: Card): Card {
   if (!merged.t && secondary.t && !secondaryIsUntrustedSheet) {
     const cleanTicker = secondary.t.trim().toUpperCase();
     if (cleanTicker) merged.t = cleanTicker;
+  }
+  // Structured enrichment (TVL, APY, deadline, reward, blurb, domain trust) only fills gaps,
+  // and never from editable public sheets.
+  if (!secondaryIsUntrustedSheet) {
+    for (const field of STRUCTURED_CARD_FIELDS) fillMissingFrom(merged, secondary, field);
   }
 
   const badgeSet = new Set(merged.b);
@@ -446,6 +493,10 @@ export interface CuratedAirdropOptions {
   pendleUrl?: string;
   merklUrl?: string;
   airdropAlertUrl?: string;
+  airdropAlertEventsUrl?: string;
+  galxeUrl?: string;
+  /** Total time budget for the optional Surf source (default SURF_TIMEOUT_MS). */
+  surfTimeoutMs?: number;
   sourceRegistry?: ReadonlyMap<string, SourceConfig>;
   defiLlamaFeed?: AirdropFeed | null;
   cachedAsso7878Feed?: AirdropFeed | null;
@@ -461,6 +512,7 @@ export interface CuratedAirdropOptions {
     pendle?: () => Promise<AirdropFeed>;
     merkl?: () => Promise<AirdropFeed>;
     airdropalert?: () => Promise<AirdropFeed>;
+    galxe?: () => Promise<AirdropFeed>;
   };
 }
 
@@ -531,6 +583,7 @@ const CURATED_SOURCE_NAME_BY_ID: Readonly<Record<string, string>> = {
   'feed:pendle_points': 'pendle',
   'feed:merkl_opportunities': 'merkl',
   'feed:airdropalert_calendar': 'airdropalert',
+  'feed:galxe_trending': 'galxe',
 };
 
 function expandDisabledSources(disabledSourceIds: ReadonlySet<string>): Set<string> {
@@ -631,10 +684,30 @@ function hasCachedFeedContent(feed?: AirdropFeed | null): feed is AirdropFeed {
 export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}): Promise<CuratedAirdropResult> {
   const nowMs = opts.nowMs ?? Date.now();
   const reg = opts.sourceRegistry;
-  const jobs: { name: string; sourceId?: string; cachedFeed?: AirdropFeed | null; run: () => Promise<AirdropFeed> }[] = [
+  const surfTimeoutMs = opts.surfTimeoutMs ?? SURF_TIMEOUT_MS;
+  // `trailing` jobs merge after DefiLlama so richer Surf/sheet/Pendle/Merkl/DefiLlama cards stay
+  // primary and only gain the trailing card's tasks and structured fields.
+  // `sharedSourceRow` jobs reuse a source row that pollFeedBatch owns: they honor the row's
+  // enabled flag, ignore its next_poll_at (the drops poll's TTL, which is not phase-locked to
+  // curated refreshes and would defer the job forever), and report outcomes without sourceId
+  // so cursor and health stay with pollFeedBatch.
+  const jobs: {
+    name: string;
+    sourceId?: string;
+    cachedFeed?: AirdropFeed | null;
+    trailing?: boolean;
+    sharedSourceRow?: boolean;
+    run: () => Promise<AirdropFeed>;
+  }[] = [
     {
       name: 'Surf',
-      run: opts.fetchers?.surf ?? (() => fetchSurfAirdrops(opts.surfUrl ?? SURF_AIRDROPS_URL, nowMs)),
+      // Optional source: capped at surfTimeoutMs in total, so a hanging upstream never stalls the refresh.
+      run: () =>
+        withDeadline(
+          () => (opts.fetchers?.surf ?? (() => fetchSurfAirdrops(opts.surfUrl ?? SURF_AIRDROPS_URL, nowMs, surfTimeoutMs)))(),
+          surfTimeoutMs,
+          'Surf',
+        ),
     },
     {
       name: 'ASSO7878',
@@ -685,11 +758,27 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     {
       name: 'AirdropAlert',
       sourceId: 'feed:airdropalert_calendar',
+      trailing: true,
       run:
         opts.fetchers?.airdropalert ??
         (() =>
-          fetchWpCalendarAirdrops(
+          fetchAirdropAlertAirdrops(
             resolveCuratedSourceUrl(opts.airdropAlertUrl, 'feed:airdropalert_calendar', AIRDROPALERT_CALENDAR_URL, reg),
+            nowMs,
+            opts.airdropAlertEventsUrl,
+          )),
+    },
+    {
+      // High-signal verified trending campaigns.
+      name: 'Galxe',
+      sourceId: 'feed:galxe_trending',
+      trailing: true,
+      sharedSourceRow: true,
+      run:
+        opts.fetchers?.galxe ??
+        (() =>
+          fetchGalxeCampaignsToAirdropFeed(
+            resolveCuratedSourceUrl(opts.galxeUrl, 'feed:galxe_trending', GALXE_GRAPHQL_URL, reg),
             nowMs,
           )),
     },
@@ -712,7 +801,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     } else if (hasCachedFeedContent(jobs[i].cachedFeed)) {
       jobModes.push('cached');
       excludedTaskSources.add(jobNameLower);
-    } else if (deferredLower.has(matchKey)) {
+    } else if (!jobs[i].sharedSourceRow && deferredLower.has(matchKey)) {
       jobModes.push('deferred');
       deferredCount++;
     } else {
@@ -721,7 +810,10 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     }
   }
 
-  const settledLive = await Promise.allSettled(liveIndices.map(idx => jobs[idx].run()));
+  // Promise.resolve().then() turns a synchronous throw from a fetcher into a failed source.
+  const settledLive = await Promise.allSettled(
+    liveIndices.map(idx => Promise.resolve().then(() => jobs[idx].run())),
+  );
   const settledByJobIdx = new Map<number, PromiseSettledResult<AirdropFeed>>();
   for (let i = 0; i < liveIndices.length; i++) {
     const idx = liveIndices[i];
@@ -732,16 +824,19 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
   }
 
   const fulfilledFeeds: AirdropFeed[] = [];
+  const trailingFeeds: AirdropFeed[] = [];
   const outcomes: CuratedSourceOutcome[] = [];
   let liveFulfilledCount = 0;
 
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const mode = jobModes[i];
+    const target = job.trailing ? trailingFeeds : fulfilledFeeds;
+    const outcomeSourceId = job.sharedSourceRow ? undefined : job.sourceId;
     if (mode === 'disabled') continue;
     if (mode === 'cached') {
       const cached = job.cachedFeed!;
-      fulfilledFeeds.push(cached);
+      target.push(cached);
       outcomes.push({
         name: job.name,
         ok: true,
@@ -752,16 +847,16 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
     }
     if (mode === 'deferred') {
       const prior = slicePrevFeedForSource(opts.prevFeed, job.name, excludedTaskSources);
-      if (prior) fulfilledFeeds.push(prior);
+      if (prior) target.push(prior);
       continue;
     }
 
     const res = settledByJobIdx.get(i)!;
     if (res.status === 'fulfilled') {
       liveFulfilledCount++;
-      fulfilledFeeds.push(res.value);
+      target.push(res.value);
       outcomes.push({
-        sourceId: job.sourceId,
+        sourceId: outcomeSourceId,
         name: job.name,
         ok: true,
         cards: res.value.cards.length,
@@ -769,7 +864,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
       });
     } else {
       outcomes.push({
-        sourceId: job.sourceId,
+        sourceId: outcomeSourceId,
         name: job.name,
         ok: false,
         cards: 0,
@@ -777,7 +872,7 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
         error: res.reason instanceof Error ? res.reason.message : String(res.reason),
       });
       const prior = slicePrevFeedForSource(opts.prevFeed, job.name, excludedTaskSources);
-      if (prior) fulfilledFeeds.push(prior);
+      if (prior) target.push(prior);
     }
   }
 
@@ -790,6 +885,8 @@ export async function buildCuratedAirdropFeed(opts: CuratedAirdropOptions = {}):
       tge: opts.defiLlamaFeed.tge.length,
     });
   }
+  // Low-priority sources merge last.
+  fulfilledFeeds.push(...trailingFeeds);
 
   if (opts.onOutcomes) {
     await opts.onOutcomes(outcomes);

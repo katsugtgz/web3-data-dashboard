@@ -153,27 +153,45 @@ const MIRROR_TIMEOUT_MS = Math.min(FETCH_TIMEOUT_MS, 7000);
 
 const MAX_MIRROR_REDIRECTS = 3;
 
-function validateSafeMirrorUrl(u: URL): { host: string; reg: string } | null {
-  if (u.protocol !== 'https:') return null;
+/**
+ * Hosts an operator may point X_RSS_MIRROR_BASE at over plain http: loopback or a
+ * single-label Docker Compose service name such as `rsshub`. Every other raw IP
+ * (cloud metadata 169.254.169.254, RFC1918), IPv6 literals and multi-label
+ * internal DNS names stay rejected.
+ */
+const LOCAL_MIRROR_HOST_RE = /^(?:localhost|127\.0\.0\.1|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/;
+
+/**
+ * Returns the mirror host for a public `https:` URL, or for a local http(s) URL
+ * whose origin equals `localOrigin` (the explicitly configured mirror base).
+ * Redirect targets never receive that trust: a different port, host or scheme
+ * falls back to the public rule, so private/http targets stay rejected.
+ */
+function validateSafeMirrorUrl(u: URL, localOrigin?: string): string | null {
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
   if (u.username || u.password) return null;
   const host = u.hostname.toLowerCase();
+  const isLocal = localOrigin !== undefined && u.origin === localOrigin;
   if (
-    !host ||
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    !host.includes('.') ||
-    host.includes(':') ||
-    isRawIpHost(host)
+    !isLocal &&
+    (u.protocol !== 'https:' ||
+      !host ||
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      !host.includes('.') ||
+      host.includes(':') ||
+      isRawIpHost(host) ||
+      !getRegistrableDomain(u.origin))
   ) {
     return null;
   }
-  const reg = getRegistrableDomain(u.origin);
-  if (!reg) return null;
-  return { host, reg };
+  return host;
 }
 
-function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: string; reg: string } | null {
+function parseSafeMirrorBase(
+  rssMirrorBase?: string,
+): { base: string; host: string; localOrigin?: string } | null {
   const trimmed = rssMirrorBase?.trim();
   if (!trimmed) return null;
   let u: URL;
@@ -183,13 +201,18 @@ function parseSafeMirrorBase(rssMirrorBase?: string): { base: string; host: stri
     return null;
   }
   if (u.search || u.hash) return null;
-  const valid = validateSafeMirrorUrl(u);
-  if (!valid) return null;
+  const localOrigin = LOCAL_MIRROR_HOST_RE.test(u.hostname.toLowerCase()) ? u.origin : undefined;
+  const host = validateSafeMirrorUrl(u, localOrigin);
+  if (!host) return null;
   const pathname = u.pathname.replace(/\/+$/, '');
-  return { base: `${u.origin}${pathname}`, host: valid.host, reg: valid.reg };
+  return { base: `${u.origin}${pathname}`, host, localOrigin };
 }
 
-function parseSafeMirrorRedirectUrl(location: string, currentUrl: string): { url: string; host: string } | null {
+function parseSafeMirrorRedirectUrl(
+  location: string,
+  currentUrl: string,
+  localOrigin?: string,
+): { url: string; host: string } | null {
   const trimmed = location.trim();
   if (!trimmed) return null;
   let u: URL;
@@ -198,10 +221,10 @@ function parseSafeMirrorRedirectUrl(location: string, currentUrl: string): { url
   } catch {
     return null;
   }
-  const valid = validateSafeMirrorUrl(u);
-  if (!valid) return null;
+  const host = validateSafeMirrorUrl(u, localOrigin);
+  if (!host) return null;
   u.hash = '';
-  return { url: u.toString(), host: valid.host };
+  return { url: u.toString(), host };
 }
 
 export function computeXBackoff(
@@ -351,7 +374,7 @@ export function parseXRssTimeline(
       .replace(/\n{2,}/g, '\n')
       .trim();
     const rawIpSourceText = (plainDesc || rawTitle).trim();
-    const rawIpUrls = extractSuspiciousRawIpUrls(rawIpSourceText, rawIpHrefs);
+    const rawIpUrls = extractSuspiciousRawIpUrls(rawIpSourceText, rawIpHrefs).filter(u => !isMirrorUrl(u));
 
     const cleanedDesc = stripMirrorTokens(plainDesc);
     const cleanedTitle = stripMirrorTokens(rawTitle);
@@ -406,7 +429,7 @@ export async function fetchXTimelineBestEffort(
             res = null;
             break;
           }
-          const nextTarget = parseSafeMirrorRedirectUrl(location, currentUrl);
+          const nextTarget = parseSafeMirrorRedirectUrl(location, currentUrl, mirror.localOrigin);
           if (!nextTarget) {
             res = null;
             break;

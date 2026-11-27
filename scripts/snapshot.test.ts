@@ -232,8 +232,9 @@ describe('finalizeSnapshotCluster (Worker safety & link parity)', () => {
     expect(cappedItem.links.length).toBe(6);
     expect(cappedItem.links[0]).toEqual({ url: 'https://alphaproto.xyz/claim', known: true });
     expect(cappedItem.links[1].known).toBe(false);
-    expect(cappedItem.risk.level).toBe('warn');
-    expect(cappedItem.risk.reasons.some(r => r.includes('Domain not in verified registry'))).toBe(true);
+    expect(cappedItem.risk.level).toBe('ok');
+    expect(cappedItem.risk.reasons).toEqual([]);
+    expect(cappedItem.verifiedDomain).toBe(true);
     expect(cappedItem.taskTypes).toEqual(['testnet']);
 
     // Reconciles plain-http exact https twin cleanly (no stale Insecure transport warning).

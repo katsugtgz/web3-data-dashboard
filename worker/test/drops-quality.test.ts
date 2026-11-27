@@ -1,3 +1,4 @@
+import type { TaskType } from '../../shared/types';
 import { describe, expect, test } from 'bun:test';
 import worker from '../src/index';
 import { applyMigrations, createTestD1, MIGRATION_FILES } from './helpers';
@@ -29,7 +30,7 @@ import {
   translateAssoInteraction,
   translateAssoStep,
 } from '../src/normalize/i18n';
-import { parseDropPost } from '../src/normalize/parse';
+import { extractRichMetadata, parseDropPost } from '../src/normalize/parse';
 import {
   classifyDropRelevance,
   cleanSummaryText,
@@ -40,7 +41,7 @@ import {
   stripNonEnglishLines,
   truncateAtWordBoundary,
 } from '../src/normalize/text';
-import { DRAINER_RE, evaluateSafety, findLookalikeDomain, reconcileSafetyReasons, URL_SHORTENERS } from '../src/safety';
+import { DRAINER_RE, evaluateSafety, findLookalikeDomain, reconcileSafetyReasons, type SafetyInput, type SafetyResult, URL_SHORTENERS } from '../src/safety';
 import { normalizeSurf } from '../src/sources/surf';
 import { parseTelegramHtml, pollTelegramBatch } from '../src/sources/telegram';
 
@@ -149,7 +150,7 @@ describe('Telegram HTML parser — reply separation, bare-domain https, raw IP &
     expect(summary.polled).toBe(1);
     expect(summary.insertedPosts).toBe(1);
     expect(summary.ingestedResults[0].parsed.project).toBe('Clocked');
-    expect(summary.ingestedResults[0].riskLevel).toBe('warn'); // only unverified registry, no plain http!
+    expect(summary.ingestedResults[0].riskLevel).toBe('ok'); // unverified registry alone is not a warning
 
     const src = await db
       .prepare(`SELECT last_seen_id FROM sources WHERE id = 'telegram:airdropfind'`)
@@ -605,6 +606,41 @@ describe('Drop relevance classifier — real production live & snapshot regressi
     });
     expect(wireNoColon).toEqual({ isDrop: false, reason: 'news-wire' });
   });
+
+  test('hard-drops linkless stubs, label-only statuses, thin social reposts, and single-sentence banter', () => {
+    const stubs: { text: string; taskTypes: TaskType[] }[] = [
+      { text: 'Voice: social', taskTypes: ['social'] },
+      { text: 'Update Buzzchain.', taskTypes: ['other'] },
+      { text: 'Voice airdrop, retweet and join our discord', taskTypes: ['social'] },
+      { text: 'kapan klaim airdropnya?', taskTypes: ['other'] },
+      { text: 'ada yg punya link testnet nya?', taskTypes: ['other'] },
+      { text: 'Is the testnet live yet?', taskTypes: ['other'] },
+      { text: 'testnet kapan launch bro?', taskTypes: ['other'] },
+    ];
+    for (const stub of stubs) {
+      expect(classifyDropRelevance({ text: stub.text, urls: [], taskTypes: stub.taskTypes })).toEqual({
+        isDrop: false,
+        reason: 'linkless-stub',
+      });
+      expect(parseDropPost(stub.text).isRelevantDrop).toBe(false);
+    }
+
+    // The same banter with an actionable link is still a drop: the link carries the action.
+    expect(parseDropPost('when claim? https://nova.xyz/claim').isRelevantDrop).toBe(true);
+    expect(
+      parseDropPost('Voice airdrop, retweet and join our discord', ['https://voice.xyz/quest']).isRelevantDrop,
+    ).toBe(true);
+
+    // Linkless announcements that carry real drop content keep passing.
+    for (const text of [
+      'Update garapan baru nih, langsung klaim poin harian',
+      'Kaito leaderboard rewards are live for top contributors',
+      'Nova testnet is live. Claim your rewards.',
+      'GenLayer Tokenomics is Live! Genesis Supply: 4.2B GEN Allocation details announced',
+    ]) {
+      expect(parseDropPost(text).isRelevantDrop).toBe(true);
+    }
+  });
 });
 
 describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n handling', () => {
@@ -709,6 +745,144 @@ describe('Project naming, ticker extraction, text cleanup, and bilingual/i18n ha
     for (const s of ['bitly.com', 'x.gd', 'soo.gd', 'j.mp']) {
       expect(URL_SHORTENERS[s]).toBe(true);
     }
+  });
+
+  test('strips Telegram channel footers, subscribe promos, leading emoji, and dangling link labels', () => {
+    // Channel signature rows made only of caption labels.
+    expect(cleanSummaryText('Nova testnet is live. Complete 5 quests to earn points.\nAtoms | Chat')).toBe(
+      'Nova testnet is live. Complete 5 quests to earn points.',
+    );
+    expect(cleanSummaryText('Nova testnet is live\n| Chat')).toBe('Nova testnet is live');
+    expect(cleanSummaryText('Nova testnet is live\nWebsite | Chat | X | Telegram')).toBe('Nova testnet is live');
+    expect(cleanSummaryText('Nova testnet is live | Chat')).toBe('Nova testnet is live');
+    // Caption lines left behind once their URLs are removed.
+    expect(
+      cleanSummaryText('Clocked Waitlist https://getclocked.com/?ref=ABC\nChat https://t.me/atoms_chat\nBoost https://t.me/jacks'),
+    ).toBe('Clocked Waitlist');
+
+    // Emoji-prefixed channel promos and subscribe / join-channel tails.
+    expect(cleanSummaryText('Nova testnet is live. Earn points.\n\u{1F514} Subscribe to our channel for more airdrops')).toBe(
+      'Nova testnet is live. Earn points.',
+    );
+    expect(cleanSummaryText('Nova testnet is live. Join our Telegram channel for updates.')).toBe('Nova testnet is live.');
+    expect(cleanSummaryText('Nova testnet is live.\u{1F4E3} Follow us on X for more')).toBe('Nova testnet is live.');
+    // A promo phrased as a quest step inside a bullet list is real content and stays.
+    expect(cleanSummaryText('Nova quest • Join our Telegram channel • Done')).toBe(
+      'Nova quest · Join our Telegram channel · Done',
+    );
+
+    // Noisy leading emoji prefixes are dropped; emoji inside the text are untouched.
+    expect(cleanSummaryText('\u{1F680} Nova testnet is live')).toBe('Nova testnet is live');
+    expect(cleanSummaryText('\u{1F525}\u{1F525}\u{1F525} JASPER VAULT \u{1F381} Reward : 5 USDT')).toBe(
+      'JASPER VAULT \u{1F381} Reward : 5 USDT',
+    );
+
+    // Dangling link labels whose URL was removed.
+    expect(cleanSummaryText('Nova quest is live on Galxe. Join here')).toBe('Nova quest is live on Galxe.');
+    expect(cleanSummaryText('Claim your allocation\nOfficial announcement')).toBe('Claim your allocation');
+    expect(cleanSummaryText('Buzzchain points are live. Check your points here')).toBe('Buzzchain points are live.');
+    expect(cleanSummaryText('Nova airdrop checker is open. Link here')).toBe('Nova airdrop checker is open.');
+    // The same words as a leading header are real content.
+    expect(cleanSummaryText('Official announcement: Nova testnet is live')).toBe('Official announcement: Nova testnet is live');
+  });
+
+  test('humanizes glued domain labels and matches project names across up to 5 words', () => {
+    // Dictionary word-boundary split of the registrable label, with known acronyms and brand casing kept.
+    expect(parseDropPost('Testnet is live. Claim rewards now.', ['https://lawoftheabyss.xyz/claim']).project).toBe(
+      'Law Of The Abyss',
+    );
+    expect(parseDropPost('Free mint is live now', ['http://rgbstone.com/']).project).toBe('RGB Stone');
+    expect(parseDropPost('Quest is live this week', ['https://defiplaza.io/quest']).project).toBe('DeFi Plaza');
+    expect(parseDropPost('Points program is live', ['https://cityprotocol.co/campaign']).project).toBe('City Protocol');
+    expect(parseDropPost('Airdrop checker is live', ['https://coinisland.io/play']).project).toBe('Coin Island');
+    expect(parseDropPost('NFT drop is live', ['https://nftstone.xyz/']).project).toBe('NFT Stone');
+    // One dictionary word or an unknown label stays a single capitalized name: nothing to split.
+    expect(parseDropPost('Quest is live', ['https://topnod.com/']).project).toBe('Topnod');
+    expect(parseDropPost('Quest is live', ['https://platform.de1.ai/waitlist']).project).toBe('De1');
+    expect(parseDropPost('Quest is live', ['https://arbitrum.io/']).project).toBe('Arbitrum');
+
+    // Glued mixed-case tokens in the post text are split too, but author camel case is kept.
+    expect(parseDropPost('Lawoftheabyss testnet is live', ['https://lawoftheabyss.xyz/']).project).toBe('Law Of The Abyss');
+    expect(parseDropPost('RGBSTONE testnet is live', ['https://rgbstone.com/']).project).toBe('RGB Stone');
+    expect(parseDropPost('MagicBlock Quest Update', ['https://quests.magicblock.app/']).project).toBe('MagicBlock');
+
+    // 5-word phrase match (previously capped at 3 words).
+    expect(parseDropPost('The Big Book Of Crypto quest is live', ['https://thebigbookofcrypto.xyz/quest']).project).toBe(
+      'The Big Book Of Crypto',
+    );
+  });
+
+  test('extracts deterministic reward pool, deadline, cost, and task steps onto ParsedDrop', () => {
+    const rich = parseDropPost(
+      [
+        'Nova Protocol quest is live. Reward pool: $500k. Deadline: May 30. Free to join.',
+        '1. Connect your wallet',
+        '2. Complete 5 quests',
+        '3. Claim your points',
+      ].join('\n'),
+      ['https://novaprotocol.xyz/quest'],
+    );
+    expect({ rewardPool: rich.rewardPool, deadline: rich.deadline, cost: rich.cost }).toEqual({
+      rewardPool: '$500K',
+      deadline: 'May 30',
+      cost: 'Free',
+    });
+    expect(rich.steps).toEqual(['Connect your wallet', 'Complete 5 quests', 'Claim your points']);
+
+    // Reward pool: only amounts sitting next to reward language.
+    const pool = (text: string) => extractRichMetadata(text).rewardPool;
+    expect(pool('Airdrop pool 10M $TOKEN for early users. Claim now')).toBe('10M $TOKEN');
+    expect(pool('Genesis drop: 2% of total supply')).toBe('2% supply');
+    expect(pool('Testnet rewards worth 50,000 USDC')).toBe('50,000 USDC');
+    expect(pool('$500K prize pool for the trading competition')).toBe('$500K');
+    expect(pool('Nova raised $12M. Testnet is live')).toBeUndefined();
+    expect(pool('Nova token trades at $1.20. Testnet is live')).toBeUndefined();
+
+    // Deadline: absolute dates and durations as written, relative ones with their keyword.
+    const deadline = (text: string) => extractRichMetadata(text).deadline;
+    expect(deadline('Testnet campaign ends May 30')).toBe('May 30');
+    expect(deadline('Quest ends 2026-06-01. Claim rewards')).toBe('2026-06-01');
+    expect(deadline('Testnet live, ends in 48h')).toBe('48h');
+    expect(deadline('Points program ends Friday')).toBe('Ends Friday');
+    expect(deadline('Testnet is live with no end date')).toBeUndefined();
+
+    // Cost: label, stake requirement, gas-only, free, then zero price.
+    const cost = (text: string) => extractRichMetadata(text).cost;
+    expect(cost('Mint is live and free to join')).toBe('Free');
+    expect(cost('Cost: $0. Quest live')).toBe('$0');
+    expect(cost('Free mint, gas only')).toBe('Gas only');
+    expect(cost('Stake $100+ to earn points')).toBe('Stake $100+');
+    expect(cost('Deposit 0.5 ETH to join the testnet')).toBe('Deposit 0.5 ETH');
+    expect(cost('Testnet is live')).toBeUndefined();
+
+    // Steps: at most 4, with links cut out; scam, secret, and promo lines are never steps.
+    const steps = parseDropPost(
+      [
+        'Testnet quest live https://nova.xyz/quest',
+        '1. Connect your wallet',
+        '2. Connect wallet and enter your seed phrase',
+        '3. Open https://evil.example/join',
+        '4. Follow @nova',
+        '5. Share https://x.com/nova/status/1',
+        '6. Complete 5 quests',
+        '7. Subscribe to our channel',
+      ].join('\n'),
+      ['https://nova.xyz/quest'],
+    );
+    expect(steps.steps).toEqual(['Connect your wallet', 'Complete 5 quests']);
+
+    // Bullet-led steps come from the post body as well, capped at four.
+    expect(
+      parseDropPost('City Protocol quest • Connect EVM Wallet • Start your own funds simulation • Earn Points • Done', [
+        'https://cityprotocol.co/campaign',
+      ]).steps,
+    ).toEqual(['Connect EVM Wallet', 'Start your own funds simulation', 'Earn Points']);
+
+    // Noise never carries metadata.
+    const noise = parseDropPost('Voice: social');
+    expect(noise.isRelevantDrop).toBe(false);
+    expect(noise.steps).toBeUndefined();
+    expect(noise.cost).toBeUndefined();
   });
 });
 
@@ -873,8 +1047,9 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     ]);
     const platforms = new Set(['galxe.com', 'zealy.io']);
 
-    // M-07a: secondary non-platform URL not in knownProjectDomains triggers warn even when primary domain is known.
-    const secondaryWarn = evaluateSafety({
+    // M-07a: an unverified secondary URL is not a threat by itself. The primary domain is known and
+    // the partner host impersonates nothing, so the post stays ok with zero reasons.
+    const secondaryUnverified = evaluateSafety({
       domain: 'novaprotocol.xyz',
       urls: ['https://novaprotocol.xyz/quest', 'https://unverified-partner.xyz/claim', 'https://galxe.com/nova'],
       text: 'Nova Protocol quest live',
@@ -883,9 +1058,21 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
       trustMax: 0.8,
       sourceCount: 2,
     });
-    expect(secondaryWarn.level).toBe('warn');
-    expect(secondaryWarn.reasons).toContain('Domain not in verified registry: unverified-partner.xyz');
-    expect(secondaryWarn.reasons.some(r => r.includes('galxe.com'))).toBe(false);
+    expect(secondaryUnverified.level).toBe('ok');
+    expect(secondaryUnverified.reasons).toEqual([]);
+
+    // A secondary URL that impersonates a verified brand is still a risk-level lookalike.
+    const secondaryLookalike = evaluateSafety({
+      domain: 'novaprotocol.xyz',
+      urls: ['https://novaprotocol.xyz/quest', 'https://uniswop.org/claim', 'https://galxe.com/nova'],
+      text: 'Nova Protocol quest live',
+      knownProjectDomains: known,
+      platformDomains: platforms,
+      trustMax: 0.8,
+      sourceCount: 2,
+    });
+    expect(secondaryLookalike.level).toBe('risk');
+    expect(secondaryLookalike.reasons.some(r => r.includes('lookalike') && r.includes('uniswop.org'))).toBe(true);
 
     // M-07b: subdomain impersonation, cross-TLD exact SLD, hyphenated brand+scam-word, 4-char maxDist=1.
     expect(findLookalikeDomain('arbitrum.io.evil.xyz', known)).toBe('arbitrum.io');
@@ -976,6 +1163,130 @@ describe('Safety precision — doubling scams, raw IP links, exact http twin sup
     expect(DRAINER_RE.test('StrikeLabs Waitlist Register Submit Details Connect New Wallet Done')).toBe(false);
     expect(DRAINER_RE.test('City Protocol Wall Street Survival: Connect EVM Wallet, Start funds simulation, Earn Points')).toBe(false);
     expect(DRAINER_RE.test('The airdrop is live! Claim your allocation before Friday.')).toBe(false);
+  });
+
+  test('risk policy: an unverified domain alone stays ok while real threats still warn or flag risk', () => {
+    const known = new Map([
+      ['arbitrum.io', 'Arbitrum'],
+      ['uniswap.org', 'Uniswap'],
+    ]);
+    const trusted = { knownProjectDomains: known, trustMax: 0.8, sourceCount: 2 };
+
+    // Unknown project domain, unknown domain-less app: neither is a reason to warn.
+    expect(
+      evaluateSafety({ domain: 'brandnewprotocol.xyz', urls: ['https://brandnewprotocol.xyz/quest'], text: 'Testnet quest live', ...trusted }),
+    ).toEqual({ level: 'ok', reasons: [] });
+    expect(
+      evaluateSafety({ urls: ['https://some-new-app.pages.dev/testnet'], text: 'MyApp testnet live', ...trusted }),
+    ).toEqual({ level: 'ok', reasons: [] });
+    // An unverified domain never adds a registry reason even next to a real warning.
+    const unverifiedWithShortener = evaluateSafety({
+      domain: 'brandnewprotocol.xyz',
+      urls: ['https://brandnewprotocol.xyz/quest', 'https://bit.ly/3xyz'],
+      text: 'Testnet quest live',
+      ...trusted,
+    });
+    expect(unverifiedWithShortener).toEqual({ level: 'warn', reasons: ['URL shortener used: bit.ly'] });
+    expect(unverifiedWithShortener.reasons.some(r => /registry|unverified/i.test(r))).toBe(false);
+
+    const threat = (patch: Partial<Omit<SafetyInput, 'urls'>> & Pick<SafetyInput, 'urls'>): SafetyResult =>
+      evaluateSafety({
+        knownProjectDomains: known,
+        trustMax: 0.8,
+        sourceCount: 2,
+        domain: patch.domain,
+        urls: patch.urls,
+        rawIpUrls: patch.rawIpUrls,
+        text: patch.text ?? '',
+        platformDomains: patch.platformDomains,
+      });
+
+    // risk: lookalike of a verified brand
+    const lookalike = threat({ domain: 'arbitrurn.io', urls: ['https://arbitrurn.io/claim'], text: 'Arbitrum claim live' });
+    expect(lookalike.level).toBe('risk');
+    expect(lookalike.reasons).toEqual(['Possible lookalike domain (arbitrurn.io vs arbitrum.io)']);
+
+    // risk: punycode project domain
+    const punycode = threat({ domain: 'xn--arbitrm-91a.io', urls: ['https://xn--arbitrm-91a.io/'], text: 'Quest live' });
+    expect(punycode.level).toBe('risk');
+    expect(punycode.reasons).toContain('Punycode or mixed-script project domain: xn--arbitrm-91a.io');
+
+    // risk: raw IP link
+    const rawIp = threat({ urls: ['http://45.33.12.9/claim'], text: 'Airdrop claim live now http://45.33.12.9/claim' });
+    expect(rawIp.level).toBe('risk');
+    expect(rawIp.reasons).toContain('Raw IP link: 45.33.12.9');
+
+    // risk: drainer phrasing
+    const drainer = threat({ domain: 'brandnewprotocol.xyz', urls: ['https://brandnewprotocol.xyz/claim'], text: 'Claim now and connect your wallet to claim rewards' });
+    expect(drainer.level).toBe('risk');
+    expect(drainer.reasons).toContain('Suspicious wallet-connect or claim phrasing');
+
+    // risk: doubling scam phrasing
+    const doubling = threat({ domain: 'brandnewprotocol.xyz', urls: [], text: 'Send 100 USDT to receive 1000 back instantly' });
+    expect(doubling.level).toBe('risk');
+    expect(doubling.reasons).toContain('Crypto doubling / advance-fee scam phrasing');
+
+    // warn: URL shortener
+    expect(threat({ urls: ['https://bit.ly/3xyz'], text: 'Testnet quest live' })).toEqual({
+      level: 'warn',
+      reasons: ['URL shortener used: bit.ly'],
+    });
+
+    // warn: plain http:// transport
+    expect(threat({ domain: 'brandnewprotocol.xyz', urls: ['http://brandnewprotocol.xyz/claim'], text: 'Claim live' })).toEqual({
+      level: 'warn',
+      reasons: ['Insecure transport (plain http): http://brandnewprotocol.xyz/claim'],
+    });
+
+    // warn: single low-trust source
+    expect(
+      evaluateSafety({
+        domain: 'brandnewprotocol.xyz',
+        urls: ['https://brandnewprotocol.xyz/quest'],
+        text: 'Testnet quest live',
+        knownProjectDomains: known,
+        trustMax: 0.3,
+        sourceCount: 1,
+      }),
+    ).toEqual({ level: 'warn', reasons: ['Single low-trust source'] });
+  });
+
+  test('reconcileSafetyReasons strips the retired registry warning from legacy warn rows and downgrades to ok', () => {
+    const legacy = (knownDomains: Set<string>) =>
+      reconcileSafetyReasons({
+        level: 'warn',
+        reasons: ['Domain not in verified registry: magicblock.app'],
+        domain: 'magicblock.app',
+        cleanedLinks: ['https://magicblock.app/quests'],
+        knownDomains,
+      });
+
+    // Domain still unknown: no real warn reason remains, so the row is served as ok.
+    expect(legacy(new Set())).toEqual({ level: 'ok', reasons: [] });
+    // Domain seeded later: same outcome.
+    expect(legacy(new Set(['magicblock.app']))).toEqual({ level: 'ok', reasons: [] });
+
+    // A real warn reason next to the retired one survives at warn.
+    expect(
+      reconcileSafetyReasons({
+        level: 'warn',
+        reasons: ['Domain not in verified registry: magicblock.app', 'URL shortener used: t.co'],
+        domain: 'magicblock.app',
+        cleanedLinks: ['https://magicblock.app/quests'],
+        knownDomains: new Set(),
+      }),
+    ).toEqual({ level: 'warn', reasons: ['URL shortener used: t.co'] });
+
+    // risk is never downgraded, with or without the retired reason.
+    expect(
+      reconcileSafetyReasons({
+        level: 'risk',
+        reasons: ['Domain not in verified registry: magicblock.app', 'Raw IP link: 45.33.12.9'],
+        domain: 'magicblock.app',
+        cleanedLinks: [],
+        knownDomains: new Set(),
+      }),
+    ).toEqual({ level: 'risk', reasons: ['Raw IP link: 45.33.12.9'] });
   });
 });
 
@@ -1298,7 +1609,287 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
     expect(feed.items[0].summary).not.toContain('\u2013 Link');
   });
 
-  test('L2: known domain clears ONLY its own unverified registry warning and preserves another unverified domain warning', async () => {
+  test('queryFeed serves legacy warn rows that hold only the retired registry warning as ok with no reasons', async () => {
+    const db = createSqliteD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.75, 1)`)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO clusters (id, project, ticker, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen)
+         VALUES ('legacy-warn', 'Buzzchain', NULL, 'buzzchain.io', '[]', '["quest"]', 'Buzzchain quest is live', 'rule', 'warn', '["Domain not in verified registry: buzzchain.io"]', 0.9, 1, ?1, ?1)`,
+      )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+         VALUES ('p_legacy', 'telegram:ch1', 'https://t.me/ch1/7', ?1, 'Buzzchain quest is live https://buzzchain.io/quest', '["https://buzzchain.io/quest"]', 'legacy-warn', ?1)`,
+      )
+      .bind(now)
+      .run();
+
+    // Domain unknown to the registry: the row is still served, without the stale warning.
+    const feed = await queryFeed(db, new Set(), { risk: 'include' });
+    expect(feed.items.map(i => i.id)).toEqual(['legacy-warn']);
+    expect(feed.items[0].risk).toEqual({ level: 'ok', reasons: [] });
+  });
+
+  test('ingestPostIntoCluster persists and merges rich drop metadata onto the cluster', async () => {
+    const { db, sqlite } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const surfIndex = { byDomain: new Map(), byTicker: new Map(), byName: new Map() };
+    const ingest = (postId: string, text: string) =>
+      ingestPostIntoCluster(
+        db,
+        {
+          postId: `telegram:ch1:${postId}`,
+          sourceId: 'telegram:ch1',
+          sourceTrust: 0.8,
+          postUrl: `https://t.me/ch1/${postId}`,
+          postedAt: now,
+          text,
+        },
+        { knownDomains: new Map([['novaprotocol.xyz', 'Nova Protocol']]) },
+        surfIndex,
+        new Map(),
+        new Set<string>(),
+        now,
+      );
+
+    const first = await ingest(
+      '1',
+      'Nova Protocol quest is live https://novaprotocol.xyz/quest. Reward pool: $500k. Ends Friday. Free to join\n1. Connect your wallet\n2. Complete 5 quests',
+    );
+    const row = () =>
+      sqlite
+        .query('SELECT reward_pool, deadline, cost, steps FROM clusters WHERE id = ?1')
+        .get(first.clusterId) as { reward_pool: string | null; deadline: string | null; cost: string | null; steps: string | null };
+    expect(row()).toEqual({
+      reward_pool: '$500K',
+      deadline: 'Ends Friday',
+      cost: 'Free',
+      steps: '["Connect your wallet","Complete 5 quests"]',
+    });
+
+    // A follow-up post fills only what is missing (pool, cost), lets the newest deadline win, and merges steps up to 4.
+    await ingest(
+      '2',
+      'Nova Protocol points update https://novaprotocol.xyz/points. Deposit 0.5 ETH to join. Deadline: May 30\n3. Claim your points\n4. Bridge assets\n5. Invite friends\n6. Stake tokens',
+    );
+    expect(row()).toEqual({
+      reward_pool: '$500K',
+      deadline: 'May 30',
+      cost: 'Free',
+      steps: '["Connect your wallet","Complete 5 quests","Claim your points","Bridge assets"]',
+    });
+
+    // A post without metadata never clears stored fields.
+    await ingest('3', 'Nova Protocol testnet is live https://novaprotocol.xyz/testnet');
+    expect(row()!.reward_pool).toBe('$500K');
+    expect(row()!.steps).toBe('["Connect your wallet","Complete 5 quests","Claim your points","Bridge assets"]');
+
+    // A cluster created before migration 0009 (no rich columns) still ingests without throwing.
+    const legacy = createTestD1(MIGRATION_FILES.slice(0, 8));
+    await legacy.db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const legacyRes = await ingestPostIntoCluster(
+      legacy.db,
+      {
+        postId: 'telegram:ch1:9',
+        sourceId: 'telegram:ch1',
+        sourceTrust: 0.8,
+        postUrl: 'https://t.me/ch1/9',
+        postedAt: now,
+        text: 'Nova Protocol quest is live https://novaprotocol.xyz/quest. Reward pool: $500k.',
+      },
+      { knownDomains: new Map([['novaprotocol.xyz', 'Nova Protocol']]) },
+      surfIndex,
+      new Map(),
+      new Set<string>(),
+      now,
+    );
+    expect(legacyRes.riskLevel).toBe('ok');
+  });
+
+  test('queryFeed enriches items with domain trust, Radar card links, rich metadata, and cached domain_meta', async () => {
+    const { db } = createTestD1();
+    const now = 1_795_364_909_000;
+    await db
+      .prepare(`INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1)`)
+      .run();
+    const clusters: [string, string, string | null, string, string, string | null, string | null, string | null][] = [
+      // id, project, domain, summary, risk, reward_pool, deadline, cost
+      ['verified', 'Nova Protocol', 'novaprotocol.xyz', 'Nova Protocol quest is live', 'ok', '$500K', 'Ends Friday', 'Free'],
+      ['unverified', 'Buzzchain', 'buzzchain.io', 'Buzzchain quest is live', 'ok', null, null, null],
+      ['risk', 'Rogue', 'rogue.app', 'Rogue claim is live', 'risk', null, null, null],
+      ['domainless', 'Domainless', null, 'Domainless testnet is live', 'ok', null, null, null],
+      ['stale', 'Stale Meta', 'domainless.io', 'Stale Meta quest is live', 'ok', null, null, null],
+    ];
+    for (const [id, project, domain, summary, riskLevel, rewardPool, deadline, cost] of clusters) {
+      await db
+        .prepare(
+          `INSERT INTO clusters (id, project, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop, reward_pool, deadline, cost, steps)
+           VALUES (?1, ?2, ?3, '[]', '["quest"]', ?4, 'rule', ?5, ?6, 1.0, 1, ?7, ?7, 1, ?8, ?9, ?10, '["Connect your wallet"]')`,
+        )
+        .bind(
+          id,
+          project,
+          domain,
+          summary,
+          riskLevel,
+          JSON.stringify(riskLevel === 'risk' ? ['Raw IP link: 45.33.12.9'] : []),
+          now,
+          rewardPool,
+          deadline,
+          cost,
+        )
+        .run();
+      await db
+        .prepare(
+          `INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+           VALUES (?1, 'telegram:ch1', ?2, ?3, ?4, '[]', ?1, ?3)`,
+        )
+        .bind(id, `https://t.me/ch1/${id}`, now, summary)
+        .run();
+    }
+
+    // Cached enrichment rows, as written by the domain_meta refresh cron.
+    const insertMeta = (domain: string, logo: string | null, tvl: number | null, expiresAt: number, ogTitle = 'Meta title') =>
+      db
+        .prepare(
+          `INSERT INTO domain_meta (domain, logo_url, og_image, og_title, og_description, tvl_usd, source, fetched_at, expires_at)
+           VALUES (?1, ?2, ?3, ?4, 'Meta description', ?5, 'defillama', ?6, ?7)`,
+        )
+        .bind(domain, logo, logo ? `https://${domain}/og.png` : null, ogTitle, tvl, now, expiresAt)
+        .run();
+    await insertMeta('buzzchain.io', 'https://buzzchain.io/logo.png', 1_234_567, Date.now() + 3_600_000);
+    await insertMeta('rogue.app', 'https://rogue.app/logo.png', null, Date.now() + 3_600_000);
+    // Expired cache rows are ignored even when the domain is unverified.
+    await insertMeta('domainless.io', 'https://domainless.io/logo.png', 99, Date.now() - 1_000);
+    const radarCard = (id: string, name: string, url: string, funding: string, tvlUsd?: number) => ({
+      r: 1,
+      id,
+      n: name,
+      t: null,
+      g: 'S' as const,
+      b: ['live' as const],
+      img: `https://images.asksurf.ai/${id}.png`,
+      f: funding,
+      tk: '1/1',
+      h: 1,
+      u: 'today',
+      fit: ['zero' as const],
+      best: { n: 'Task', ty: 'testnet', c: 'Free', m: '5 min' },
+      sc: 90,
+      sub: [9, 9, null] as [number, number, number | null],
+      url,
+      source: 'Surf',
+      tvlUsd,
+    });
+    const logoIndex = buildFeedLogoIndex(
+      {
+        cards: [radarCard('surf-nova', 'Nova Protocol', 'https://novaprotocol.xyz/', '$10M', 25_000_000)],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: now,
+      },
+      null,
+    );
+
+    const feed = await queryFeed(db, new Set(['novaprotocol.xyz']), { logoIndex, risk: 'include' });
+    const byId = new Map(feed.items.map(i => [i.id, i]));
+    expect([...byId.keys()].sort()).toEqual(['domainless', 'risk', 'stale', 'unverified', 'verified']);
+
+    // Known domain: verified, linked to its Radar card (id, funding, TVL) with the card logo.
+    expect(byId.get('verified')).toMatchObject({
+      domain: 'novaprotocol.xyz',
+      verifiedDomain: true,
+      radarId: 'surf-nova',
+      funding: '$10M',
+      tvlUsd: 25_000_000,
+      logo: 'https://images.asksurf.ai/surf-nova.png',
+      rewardPool: '$500K',
+      deadline: 'Ends Friday',
+      cost: 'Free',
+      steps: ['Connect your wallet'],
+    });
+
+    // Unknown domain: not verified, no Radar link, enriched from cached domain_meta instead.
+    const unverified = byId.get('unverified')!;
+    expect(unverified.verifiedDomain).toBe(false);
+    expect(unverified.radarId).toBeUndefined();
+    expect(unverified.funding).toBeUndefined();
+    expect(unverified.logo).toBe('https://buzzchain.io/logo.png');
+    expect(unverified.ogImage).toBe('https://buzzchain.io/og.png');
+    expect(unverified.ogTitle).toBe('Meta title');
+    expect(unverified.ogDescription).toBe('Meta description');
+    expect(unverified.tvlUsd).toBe(1_234_567);
+
+    // Risk clusters never borrow a third-party logo; the rest of the preview is still allowed.
+    const risk = byId.get('risk')!;
+    expect(risk.verifiedDomain).toBe(false);
+    expect(risk.logo).toBeUndefined();
+    expect(risk.ogImage).toBe('https://rogue.app/og.png');
+
+    // No domain resolves to verified (nothing untrusted to flag).
+    const domainless = byId.get('domainless')!;
+    expect(domainless.verifiedDomain).toBe(true);
+    expect(domainless.domain).toBeUndefined();
+    expect(domainless.logo).toBeUndefined();
+
+    // An expired cache row lends nothing.
+    const stale = byId.get('stale')!;
+    expect(stale.verifiedDomain).toBe(false);
+    expect(stale.logo).toBeUndefined();
+    expect(stale.tvlUsd).toBeUndefined();
+
+    expect(feed.items.every(i => typeof i.verifiedDomain === 'boolean')).toBe(true);
+
+    // DefiLlama protocol rows lend TVL and logos by domain without claiming a Radar card id.
+    const defiIndex = buildFeedLogoIndex(null, {
+      id: 'defi',
+      title: 'DeFi TVL',
+      blurb: '',
+      cols: ['Protocol', 'Category', 'Chains', 'TVL', '1d', '7d'],
+      rows: [
+        {
+          cells: ['Buzzchain', 'Dex', 'Ethereum', '$42.0M', '+1%', '+2%'],
+          sortValues: ['Buzzchain', 'Dex', 'Ethereum', 42_000_000, 0.01, 0.02],
+          href: 'https://buzzchain.io/',
+          icon: 'https://icons.llama.fi/buzzchain.png',
+        },
+      ],
+      source: 'DefiLlama',
+      sourceUrl: 'https://defillama.com',
+      fetchedAt: now,
+      stale: false,
+    });
+    const viaDefi = (await queryFeed(db, new Set(), { logoIndex: defiIndex, risk: 'include' })).items.find(i => i.id === 'unverified')!;
+    expect(viaDefi.tvlUsd).toBe(42_000_000);
+    expect(viaDefi.logo).toBe('https://icons.llama.fi/buzzchain.png');
+    expect(viaDefi.radarId).toBeUndefined();
+
+    // A pre-0009 database (no rich columns, no domain_meta table) still serves the feed.
+    const legacy = createTestD1(MIGRATION_FILES.slice(0, 8));
+    await legacy.sqlite.exec(
+      `INSERT INTO sources (id, platform, handle, lang, trust, enabled) VALUES ('telegram:ch1', 'telegram', 'ch1', 'en', 0.8, 1);
+       INSERT INTO clusters (id, project, domain, chains, task_types, summary, summary_source, risk_level, risk_reasons, score, source_count, first_seen, last_seen, is_drop)
+       VALUES ('legacy-rich', 'Nova Protocol', 'novaprotocol.xyz', '[]', '["quest"]', 'Nova Protocol quest is live', 'rule', 'ok', '[]', 1.0, 1, 5, 5, 1);
+       INSERT INTO posts (id, source_id, post_url, posted_at, text, urls, cluster_id, created_at)
+       VALUES ('legacy-rich', 'telegram:ch1', 'https://t.me/ch1/1', 5, 'Nova Protocol quest is live', '[]', 'legacy-rich', 5);`,
+    );
+    const legacyFeed = await queryFeed(legacy.db, new Set(['novaprotocol.xyz']));
+    expect(legacyFeed.items[0]).toMatchObject({ id: 'legacy-rich', verifiedDomain: true });
+    expect(legacyFeed.items[0]!.steps).toBeUndefined();
+  });
+
+  test('L2: ingest strips every retired registry warning from a legacy row and keeps only real warn reasons', async () => {
     const db = createSqliteD1();
     const now = 1_795_200_000_000;
     await db
@@ -1306,7 +1897,7 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .run();
     const surfIndex = { byDomain: new Map(), byTicker: new Map() };
 
-    // First ingest before known_domains was seeded -> warn "Domain not in verified registry: magicblock.app".
+    // First ingest before known_domains was seeded: an unknown domain alone is no longer a warning.
     const first = await ingestPostIntoCluster(
       db,
       {
@@ -1323,22 +1914,23 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       new Set(),
       now,
     );
-    expect(first.riskLevel).toBe('warn');
+    expect(first.riskLevel).toBe('ok');
 
-    // Inject a second unverified domain warning on the same cluster (e.g. from another linked domain).
+    // Legacy row written by the old policy: registry warnings for two domains next to a real shortener warning.
     await db
-      .prepare(`UPDATE clusters SET risk_reasons = ?2 WHERE id = ?1`)
+      .prepare(`UPDATE clusters SET risk_level = 'warn', risk_reasons = ?2 WHERE id = ?1`)
       .bind(
         first.clusterId,
         JSON.stringify([
           'Domain not in verified registry: magicblock.app',
           'Domain not in verified registry: unverified-partner.xyz',
+          'URL shortener used: bit.ly',
         ]),
       )
       .run();
 
-    // Second ingest after known_domains seeds magicblock.app ONLY -> magicblock.app warning clears,
-    // while unverified-partner.xyz warning MUST survive!
+    // Second ingest after known_domains seeds magicblock.app ONLY: both registry warnings clear
+    // (seeded or not) while the real shortener warning MUST survive.
     const knownNow = new Map([['magicblock.app', 'MagicBlock']]);
     const second = await ingestPostIntoCluster(
       db,
@@ -1363,12 +1955,10 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       .bind(first.clusterId)
       .first<{ risk_level: string; risk_reasons: string }>();
     expect(row?.risk_level).toBe('warn');
-    expect(JSON.parse(row?.risk_reasons ?? '[]')).toEqual([
-      'Domain not in verified registry: unverified-partner.xyz',
-    ]);
+    expect(JSON.parse(row?.risk_reasons ?? '[]')).toEqual(['URL shortener used: bit.ly']);
   });
 
-  test('ingestPostIntoCluster clears sole stale registry warning to ok when domain becomes known', async () => {
+  test('ingestPostIntoCluster clears a legacy stale registry warning to ok even while the domain stays unknown', async () => {
     const db = createSqliteD1();
     const now = 1_795_200_000_000;
     await db
@@ -1392,9 +1982,16 @@ describe('D1 clustering, sliding windows, pagination, ingest verdict persistence
       new Set(),
       now,
     );
-    expect(first.riskLevel).toBe('warn');
+    expect(first.riskLevel).toBe('ok');
 
-    const knownNow = new Map([['magicblock.app', 'MagicBlock']]);
+    // Legacy row written by the old policy: warn with only the retired registry reason.
+    await db
+      .prepare(`UPDATE clusters SET risk_level = 'warn', risk_reasons = ?2 WHERE id = ?1`)
+      .bind(first.clusterId, JSON.stringify(['Domain not in verified registry: magicblock.app']))
+      .run();
+
+    // The domain is still absent from known_domains on re-ingest; the retired warning must clear anyway.
+    const knownNow = new Map<string, string>();
     const second = await ingestPostIntoCluster(
       db,
       {

@@ -30,6 +30,7 @@ import {
 import { decayClusterScores } from './normalize/score';
 import {
   AI_MAX_ATTEMPTS,
+  createOpenAiCompatBinding,
   hasAiQuotaRemaining,
   summarizeClusterWithAi,
   type AiBindingLike,
@@ -57,7 +58,16 @@ import { pollXBatch } from './sources/x';
 
 export interface Env {
   DB: D1Database;
+  /** Native Workers AI binding. When absent, the LLM_* / CF_* vars below supply an equivalent binding. */
   AI?: AiBindingLike;
+  /** Base URL of an OpenAI-compatible `/chat/completions` endpoint (trailing slash tolerated). */
+  LLM_BASE_URL?: string;
+  LLM_API_KEY?: string;
+  /** Overrides the model sent to the OpenAI-compatible endpoint (default `gpt-4o-mini`). */
+  LLM_MODEL?: string;
+  /** Cloudflare account id + API token: talks to Workers AI over REST when no `AI` binding exists. */
+  CF_ACCOUNT_ID?: string;
+  CF_API_TOKEN?: string;
   TG_BATCH_SIZE?: string;
   X_BATCH_SIZE?: string;
   FEED_BATCH_SIZE?: string;
@@ -249,15 +259,27 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
     await Promise.all(candidateJobs);
   }
 
-  // 2. Workers AI summaries for eligible non-RISK clusters.
+  // 2. AI summaries for eligible non-RISK clusters.
   // The clusters table itself is the single-source-of-truth priority queue:
   // a cluster still on its rule summary (summary_source = 'rule', non-risk,
   // below AI_MAX_ATTEMPTS, past ai_retry_after, has posts) is eligible, and
   // each tick drains up to AI_SUMMARY_CHUNK highest-priority clusters first
   // (score DESC, last_seen DESC) while persisting the remainder.
+  // The native Workers AI binding wins. Without one, an OpenAI-compatible or
+  // Workers AI REST binding is built from env; with no credentials at all the
+  // clusters simply keep their rule summaries.
+  const ai =
+    env.AI ??
+    createOpenAiCompatBinding({
+      baseUrl: env.LLM_BASE_URL,
+      apiKey: env.LLM_API_KEY,
+      model: env.LLM_MODEL,
+      cfAccountId: env.CF_ACCOUNT_ID,
+      cfApiToken: env.CF_API_TOKEN,
+    });
   const dailyMax = parseNonNegativeInt(env.AI_DAILY_MAX, 300);
   const chunk = Math.min(100, parseNonNegativeInt(env.AI_SUMMARY_CHUNK, 6));
-  if (!env.AI || dailyMax <= 0 || chunk <= 0) return;
+  if (!ai || dailyMax <= 0 || chunk <= 0) return;
   if (!(await hasAiQuotaRemaining(env.DB, dailyMax, nowMs))) return;
 
   // Priority by score DESC, last_seen DESC; literal attempt cap and drop filter
@@ -299,7 +321,7 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
 
   await Promise.all(
     backlog.results.map(row =>
-      summarizeClusterWithAi(env.AI, env.DB, {
+      summarizeClusterWithAi(ai, env.DB, {
         clusterId: row.id,
         project: row.project,
         rawTexts: (textsByCluster.get(row.id) ?? []).slice(0, 3),
@@ -315,7 +337,7 @@ export async function postProcessIngest(env: Env, ingested: IngestPostResult[], 
   );
 }
 
-async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
+export async function runOneMinCron(env: Env, nowMs: number): Promise<void> {
   await ensureSourcesSynced(env.DB);
   const batchSize = parseNonNegativeInt(env.TG_BATCH_SIZE, 4);
   const summary =
@@ -434,7 +456,7 @@ async function recordCuratedSourceOutcomes(
   );
 }
 
-async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
+export async function runFiveMinCron(env: Env, nowMs: number): Promise<void> {
   await ensureSourcesSynced(env.DB);
   const urls: MarketUrls = {
     coingeckoMarkets: env.COINGECKO_MARKETS_URL,
@@ -706,7 +728,7 @@ function isSectionStale(id: MarketSectionId, ok: number, fetchedAt: number, nowM
   return nowMs - fetchedAt > maxAge;
 }
 
-async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag?: string } | null> {
+export async function buildMarketsPayload(db: D1Database, nowMs: number): Promise<{ body: string; etag?: string } | null> {
   const rows = await listSnapshotsByPrefix(db, 'markets:');
   const byKey = new Map(rows.map(r => [r.key, r]));
   const sections: MarketSection[] = [];
@@ -792,11 +814,14 @@ async function handleCachedJson(
   cacheControl: string,
   loader: () => Promise<{ body: string; etag?: string } | null>,
 ): Promise<Response> {
-  const cache = caches.default;
+  // `caches` does not exist outside Workers (for example under a Bun server
+  // host). Without it the edge cache step is skipped; ETags, conditional 304s,
+  // and Cache-Control headers still work because they never depend on it.
+  const cache = typeof caches !== 'undefined' && 'default' in caches ? caches.default : null;
   const cacheKey = buildCacheKey(request.url);
   const ifNoneMatch = request.headers.get('If-None-Match');
 
-  const cached = await cache.match(cacheKey);
+  const cached = cache ? await cache.match(cacheKey) : undefined;
   if (cached) {
     const cachedEtag = cached.headers.get('ETag');
     if (cachedEtag && etagMatches(ifNoneMatch, cachedEtag)) {
@@ -828,11 +853,11 @@ async function handleCachedJson(
   });
 
   if (etagMatches(ifNoneMatch, etag)) {
-    ctx.waitUntil(cache.put(cacheKey, res));
+    if (cache) ctx.waitUntil(cache.put(cacheKey, res));
     return notModified(etag, cacheControl);
   }
 
-  ctx.waitUntil(cache.put(cacheKey, res.clone()));
+  if (cache) ctx.waitUntil(cache.put(cacheKey, res.clone()));
   return res;
 }
 

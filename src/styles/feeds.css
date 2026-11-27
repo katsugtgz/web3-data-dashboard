@@ -753,3 +753,345 @@
     grid-column: 1 / -1;
   }
 }
+
+/* ==== OG preview: reserved box; a broken image swaps for a tonal placeholder in place, so nothing shifts ==== */
+.feed-card.has-og {
+  padding-top: 0;
+}
+
+.og-strip {
+  margin: 0 -16px;
+  border-radius: calc(var(--radius-container) - 1px) calc(var(--radius-container) - 1px) 0 0;
+  overflow: hidden;
+}
+
+.og-media {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 6 / 1;
+  background: linear-gradient(120deg, var(--color-accent-muted), var(--color-background-muted) 55%, var(--color-tier-s-bg));
+}
+
+.og-media img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.og-media.is-failed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(135deg, transparent 0 12px, var(--color-overlay-hover) 12px 24px);
+}
+
+.og-banner,
+.og-card {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-muted);
+}
+
+.og-banner .og-media {
+  aspect-ratio: 21 / 9;
+}
+
+.og-card .og-media {
+  aspect-ratio: 16 / 9;
+}
+
+.og-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.og-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.og-description {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Clickable drop title opens the detail drawer */
+.feed-title-btn {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.feed-title-btn:hover {
+  color: var(--color-text-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.feed-title-btn:focus-visible {
+  border-radius: var(--radius-inner);
+}
+
+/* Offer pills (reward pool, deadline, cost, TVL, funding), shared by drops and curated cards */
+.feed-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.feed-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-element);
+  background: var(--color-background-body);
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.feed-meta-icon {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.feed-meta-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.feed-meta-val {
+  min-width: 0;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.feed-meta-pill.is-soon {
+  border-color: color-mix(in srgb, var(--color-status-warning) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-status-warning-bg) 55%, var(--color-background-body));
+}
+
+.feed-meta-pill.is-soon .feed-meta-icon,
+.feed-meta-pill.is-soon .feed-meta-val {
+  color: var(--color-status-warning);
+}
+
+.feed-meta-pill.is-upcoming .feed-meta-icon,
+.feed-meta-pill.is-upcoming .feed-meta-val {
+  color: var(--color-text-accent);
+}
+
+.feed-meta-pill.is-past .feed-meta-val {
+  color: var(--color-text-supporting);
+  text-decoration: line-through;
+}
+
+/* Radar cross-link: the one pill that acts like a button */
+button.feed-radar-pill {
+  cursor: pointer;
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  background: var(--color-accent-muted);
+  font-weight: 600;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+button.feed-radar-pill .feed-meta-icon,
+button.feed-radar-pill .feed-meta-label,
+button.feed-radar-pill .feed-meta-val {
+  color: var(--color-text-accent);
+}
+
+button.feed-radar-pill:hover {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-background-card));
+}
+
+/* Task steps preview (first three); the full numbered list lives in the drawer */
+.feed-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.feed-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--color-text-primary);
+}
+
+.feed-step-num {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-muted);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.feed-step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feed-step-more {
+  padding-left: 26px;
+}
+
+/* Footer actions: copy brief plus the Details entry point */
+.feed-foot-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  flex: none;
+  gap: 6px;
+}
+
+.feed-details-btn {
+  gap: 4px;
+  padding: 4px 9px;
+  border-color: var(--color-border-emphasized);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.feed-details-btn:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-muted);
+  color: var(--color-text-accent);
+}
+
+/* Curated card: rich pills and a two-line description */
+.project-card .feed-meta {
+  margin-top: 10px;
+}
+
+.project-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+/* TGE timeline: date node, countdown chip, funding chip */
+.tge-timeline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tge-node {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-text-supporting);
+  box-shadow: 0 0 0 3px var(--color-background-body);
+}
+
+.tge-node.is-soon {
+  background: var(--color-status-warning);
+}
+
+.tge-node.is-upcoming {
+  background: var(--color-accent);
+}
+
+.tge-node.is-unknown {
+  background: transparent;
+  border: 1.5px dashed var(--color-border-emphasized);
+}
+
+.tge-card .tge-date {
+  gap: 4px;
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.tge-countdown {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tge-countdown.is-soon {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning);
+}
+
+.tge-countdown.is-upcoming {
+  background: var(--color-status-info-bg);
+  color: var(--color-status-info);
+}
+
+.tge-funding {
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-inner);
+  background: var(--color-background-card);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .feed-foot {
+    flex-wrap: wrap;
+  }
+
+  .feed-foot-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

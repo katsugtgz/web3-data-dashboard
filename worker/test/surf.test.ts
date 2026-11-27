@@ -247,4 +247,71 @@ describe('surf normalizer + i18n', () => {
       globalThis.fetch = prevFetch;
     }
   });
+
+  test('fetchSurfAirdrops bounds Surf to one 4000ms deadline shared by both attempts (overridable via timeoutMs)', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevTimeout = AbortSignal.timeout;
+    const budgets: number[] = [];
+    const createdSignals: AbortSignal[] = [];
+    const usedSignals: (AbortSignal | undefined | null)[] = [];
+    AbortSignal.timeout = ((ms: number) => {
+      budgets.push(ms);
+      const signal = prevTimeout(ms);
+      createdSignals.push(signal);
+      return signal;
+    }) as typeof AbortSignal.timeout;
+
+    try {
+      const validPayload = JSON.stringify({ active: [{ project_name: 'Alpha' }], tge: [] });
+      let calls = 0;
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        calls++;
+        usedSignals.push(init?.signal);
+        return calls === 1 ? new Response('bad gateway', { status: 502 }) : new Response(validPayload, { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const feed = await fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000);
+      expect(feed.cards[0].n).toBe('Alpha');
+      expect(calls).toBe(2);
+      // Default is 4000ms and a 5xx retry reuses the same deadline instead of starting a second 15s window.
+      expect(budgets).toEqual([4000]);
+      expect(usedSignals).toEqual([createdSignals[0], createdSignals[0]]);
+
+      budgets.length = 0;
+      calls = 0;
+      await fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000, 250);
+      expect(budgets).toEqual([250]);
+    } finally {
+      AbortSignal.timeout = prevTimeout;
+      globalThis.fetch = prevFetch;
+    }
+  });
+
+  test('a hanging Surf upstream costs at most timeoutMs in total, not timeoutMs per attempt', async () => {
+    const prevFetch = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      attempts++;
+      return new Promise<Response>((_resolve, reject) => {
+        // Real fetch rejects immediately when handed an already-aborted signal.
+        if (init?.signal?.aborted) {
+          reject(init.signal.reason);
+          return;
+        }
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const started = Date.now();
+      await expect(fetchSurfAirdrops('https://surf.test/api', 1_700_000_000_000, 40)).rejects.toThrow();
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(30);
+      expect(elapsed).toBeLessThan(1_000);
+      // The retry still runs, but against the same expired deadline.
+      expect(attempts).toBe(2);
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
+  });
 });

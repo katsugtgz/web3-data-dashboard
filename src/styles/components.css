@@ -1788,7 +1788,7 @@ th[aria-sort="descending"] .arr {
 }
 
 /* Native Dialogs (Detail right-side drawer on >= 768px, centered Agent Profile modal) */
-dialog#detail,
+dialog:is(#detail, #drops-detail),
 dialog#agent-profile-dialog {
   padding: 0;
   background: var(--color-background-popover);
@@ -1803,7 +1803,7 @@ dialog#agent-profile-dialog {
   max-height: calc(100dvh - 48px);
 }
 
-dialog#detail {
+dialog:is(#detail, #drops-detail) {
   position: fixed;
   inset: auto 0 0 0;
   margin: 0;
@@ -1816,7 +1816,7 @@ dialog#detail {
 }
 
 @media (min-width: 768px) {
-  dialog#detail {
+  dialog:is(#detail, #drops-detail) {
     inset: 0 0 0 auto;
     width: min(560px, 100vw);
     height: 100dvh;
@@ -1836,14 +1836,14 @@ dialog:modal::backdrop {
   overscroll-behavior: contain;
 }
 
-dialog#detail::backdrop,
+dialog:is(#detail, #drops-detail)::backdrop,
 dialog#agent-profile-dialog::backdrop {
   background: rgba(10, 14, 20, 0.56);
   backdrop-filter: blur(4px);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  dialog#detail,
+  dialog:is(#detail, #drops-detail),
   dialog#agent-profile-dialog {
     transition: opacity var(--duration-medium) var(--ease-standard),
       transform var(--duration-medium) var(--ease-standard),
@@ -1851,7 +1851,7 @@ dialog#agent-profile-dialog::backdrop {
       display var(--duration-medium) allow-discrete;
   }
 
-  dialog#detail[open],
+  dialog:is(#detail, #drops-detail)[open],
   dialog#agent-profile-dialog[open] {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
@@ -1863,13 +1863,13 @@ dialog#agent-profile-dialog::backdrop {
       transform: translateY(10px) scale(0.98);
     }
 
-    dialog#detail[open] {
+    dialog:is(#detail, #drops-detail)[open] {
       opacity: 0;
       transform: translateY(20px);
     }
 
     @media (min-width: 768px) {
-      dialog#detail[open] {
+      dialog:is(#detail, #drops-detail)[open] {
         opacity: 0;
         transform: translateX(24px);
       }
@@ -2736,4 +2736,235 @@ dialog#agent-profile-dialog::backdrop {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ==== Visual Elevation: card sheen, tinted hover edge, frosted sticky headers, tabular numerals ==== */
+.cardx,
+.kpi-card,
+.tge-section,
+.filter-dock {
+  background-color: var(--color-background-card);
+  background-image: linear-gradient(180deg, var(--color-surface-sheen), transparent 72%);
+  box-shadow: var(--shadow-card);
+}
+
+/* Hover lift. Active KPI cards keep their inset accent bar instead. */
+.cardx:hover,
+.kpi-card:not(.is-active):not(.is-risk-active):not(.kpi-card-static):hover {
+  border-color: var(--color-border-accent);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.cardx.is-saved:hover {
+  border-color: var(--color-tier-s-fg);
+}
+
+.kpi-card-static:hover {
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+/* Rows scroll under a blurred surface instead of a hard edge. */
+table.demo thead th[scope="col"],
+table.demo thead th:first-child {
+  background: var(--color-glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.kpi-val,
+.score b,
+.ranknum,
+.countchip,
+.tab-count,
+.feed-meta-val,
+.delta-momentum,
+.sector-pill-delta,
+.compact-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* View toggle and results bar */
+.results-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.view-toggle {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+/* Domain trust badges: green = verified, muted = not verified yet (never an alert color) */
+.pill-verified {
+  background: var(--color-status-success-bg);
+  border-color: transparent;
+  color: var(--color-status-success);
+}
+
+.pill-unverified {
+  background: var(--color-background-muted);
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+/* KPI micro-charts: inline SVG sparkline plus stacked distribution bars */
+.kpi-viz {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+}
+
+.kpi-sparkline {
+  display: block;
+  width: 100%;
+  height: 22px;
+}
+
+.kpi-spark-svg {
+  display: block;
+  width: 100%;
+  height: 22px;
+  overflow: visible;
+}
+
+.kpi-spark-area {
+  fill: var(--color-accent-muted);
+  stroke: none;
+}
+
+.kpi-spark-line {
+  fill: none;
+  stroke: var(--color-text-accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kpi-viz-note {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--color-text-supporting);
+}
+
+.kpi-dist {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+
+.kpi-dist-bar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: var(--color-background-muted);
+}
+
+.kpi-dist-seg {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+}
+
+.kpi-dist-seg.is-s,
+.kpi-dist-dot.is-s {
+  background: var(--color-tier-s-fg);
+}
+
+.kpi-dist-seg.is-a,
+.kpi-dist-dot.is-a {
+  background: var(--color-tier-a-fg);
+}
+
+.kpi-dist-seg.is-b,
+.kpi-dist-dot.is-b {
+  background: var(--color-tier-b-fg);
+}
+
+.kpi-dist-seg.is-c,
+.kpi-dist-dot.is-c {
+  background: var(--color-tier-c-fg);
+}
+
+.kpi-dist-seg.is-accent,
+.kpi-dist-dot.is-accent {
+  background: var(--color-accent);
+}
+
+.kpi-dist-seg.is-info,
+.kpi-dist-dot.is-info {
+  background: var(--color-status-info);
+}
+
+.kpi-dist-seg.is-success,
+.kpi-dist-dot.is-success {
+  background: var(--color-status-success);
+}
+
+.kpi-dist-seg.is-warning,
+.kpi-dist-dot.is-warning {
+  background: var(--color-status-warning);
+}
+
+.kpi-dist-seg.is-neutral,
+.kpi-dist-dot.is-neutral {
+  background: var(--color-segment-neutral);
+}
+
+.kpi-dist-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 9px;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  color: var(--color-text-secondary);
+}
+
+.kpi-dist-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.kpi-dist-item b {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.kpi-dist-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+/* 24h momentum bar inside signed market cells; length repeats the printed number */
+.delta-momentum {
+  gap: 6px;
+}
+
+.delta-momentum-track {
+  flex: none;
+  width: 28px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: var(--color-overlay-pressed);
+}
+
+.delta-momentum-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
 }

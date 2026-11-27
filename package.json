@@ -7,9 +7,10 @@
   ],
   "scripts": {
     "dev": "vite",
+    "start": "bun run server/index.ts",
     "build": "vite build",
     "build:pages": "bun scripts/build-pages.mts",
-    "typecheck": "tsc --noEmit && tsc -p worker/tsconfig.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p worker/tsconfig.json --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test": "bun test",
     "doctor": "bunx react-doctor@0.9.23 . --yes",
     "snapshot": "bun scripts/snapshot.mts",

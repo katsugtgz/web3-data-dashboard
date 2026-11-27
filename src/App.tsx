@@ -1,6 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FIT, TYPE_MAP } from '../shared/constants';
-import type { Card, Tge } from '../shared/types';
+import type { Card, FeedItem, Tge } from '../shared/types';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
 import { DashboardFooter } from './components/DashboardFooter';
@@ -20,11 +20,21 @@ import { useMarkets } from './hooks/useMarkets';
 import { useSourcesHealth } from './hooks/useSourcesHealth';
 import { useTheme } from './hooks/useTheme';
 import { isCardSaved, useWatchlist } from './hooks/useWatchlist';
+import { indexRadarCards } from './lib/feedDisplay';
 import { buildProjectLogoIndex } from './lib/visualAssets';
 
 const DetailDialog = lazy(() => import('./components/DetailDialog').then(m => ({ default: m.DetailDialog })));
+const DropsDetailDialog = lazy(() =>
+  import('./components/DropsDetailDialog').then(m => ({ default: m.DropsDetailDialog })),
+);
 const EMPTY_CARDS: Card[] = [];
 const EMPTY_TGE: Tge[] = [];
+
+/** The selected drop, looked up in the live feed. Null when nothing is selected or the drop left the feed. */
+function resolveDropsDetail(items: readonly FeedItem[], id: string | null): FeedItem | null {
+  if (id === null) return null;
+  return items.find(item => item.id === id) ?? null;
+}
 
 export default function App() {
   const reconcileCardsRef = useRef<((nextCards: readonly Card[]) => void) | null>(null);
@@ -35,6 +45,8 @@ export default function App() {
   const drops = useFeed();
   const airdrops = useAirdropFeed(handleAirdropCardsChange);
   const cards = airdrops.feed?.cards ?? EMPTY_CARDS;
+  const radarIndex = useMemo(() => indexRadarCards(cards), [cards]);
+  const [dropsDetailId, setDropsDetailId] = useState<string | null>(null);
   const {
     markets,
     loading: marketsLoading,
@@ -63,6 +75,20 @@ export default function App() {
     getVisibleCards: airdrops.getVisibleCards,
   });
   const { handleCopyBrief, copyStatus, clearCopyStatus, toast, dismissToast } = copyFlow;
+
+  // Resolved against the live feed on every render: a refresh updates the open drawer, a removal closes it.
+  const dropsDetail = resolveDropsDetail(drops.items, dropsDetailId);
+  const handleSelectDropsDetail = useCallback(
+    (item: FeedItem) => {
+      clearCopyStatus();
+      setDropsDetailId(item.id);
+    },
+    [clearCopyStatus],
+  );
+  const handleCloseDropsDetail = useCallback(() => {
+    clearCopyStatus();
+    setDropsDetailId(null);
+  }, [clearCopyStatus]);
 
   const tgeItems = airdrops.feed?.tge ?? EMPTY_TGE;
   const projectLogoIndex = useMemo(
@@ -93,7 +119,7 @@ export default function App() {
 
   const { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey } = useDashboardTabs({
     searchRefs: { drops: dropsSearchRef, airdrops: airdropSearchRef, markets: marketSearchRef },
-    isModalOpen: () => Boolean(detail) || copyFlow.profileOpen,
+    isModalOpen: () => Boolean(detail) || dropsDetail !== null || copyFlow.profileOpen,
   });
 
   const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
@@ -118,6 +144,16 @@ export default function App() {
     refreshMarkets();
     refreshSources();
   }, [drops, airdrops, refreshMarkets, refreshSources]);
+
+  /** Radar cross-link: leave the drawer, switch to the Airdrops tab, and open the matched curated card. */
+  const handleOpenRadar = useCallback(
+    (card: Card) => {
+      setDropsDetailId(null);
+      handleSelectTab('airdrops');
+      handleSelectDetail(card);
+    },
+    [handleSelectTab, handleSelectDetail],
+  );
 
   const {
     xUnavailable,
@@ -193,13 +229,17 @@ export default function App() {
               loading: drops.loading,
               failed: drops.failed,
               logoIndex: projectLogoIndex,
+              radarIndex,
               searchRef: dropsSearchRef,
               onApplyPending: drops.applyPending,
+              onSelectDetail: handleSelectDropsDetail,
               onCopyBrief: handleCopyBrief,
+              onOpenRadar: handleOpenRadar,
             }}
             airdropsProps={{
               filters: airdropFilters,
               cardCount: cards.length,
+              cards,
               tgeItems,
               fetchedAt: airdrops.feed?.fetchedAt ?? null,
               hasFeed: airdrops.feed !== null,
@@ -241,6 +281,23 @@ export default function App() {
         onCopyPending={copyFlow.copyPendingNow}
         onClose={copyFlow.closeProfile}
       />
+
+      {dropsDetail && (
+        <ChunkErrorBoundary label="drop details" onReset={handleCloseDropsDetail}>
+          <Suspense fallback={null}>
+            <DropsDetailDialog
+              item={dropsDetail}
+              radarIndex={radarIndex}
+              profile={profile}
+              logoIndex={projectLogoIndex}
+              copyStatus={copyStatus}
+              onCopyBrief={(item: FeedItem) => handleCopyBrief(item, 'detail')}
+              onOpenRadar={handleOpenRadar}
+              onClose={handleCloseDropsDetail}
+            />
+          </Suspense>
+        </ChunkErrorBoundary>
+      )}
 
       {detail && (
         <ChunkErrorBoundary label="project details" onReset={handleCloseDetail}>

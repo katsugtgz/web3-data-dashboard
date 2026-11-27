@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { AgentProfile, Card, CardTask, FitKey } from '../../shared/types';
 import { buildBrief } from '../lib/agentBrief';
-import { downloadMarkdown } from '../lib/clipboard';
 import { orderDetailTasks, type OrderedDetailTask } from '../lib/detailTasks';
+import { buildCardMeta, cleanMetaText, describeDeadline } from '../lib/feedDisplay';
 import { hostnameLabel, normalizeExternalUrl, orDash } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
-import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
+import { extractTickerFallback, resolveOgPreview, type ProjectLogoIndex } from '../lib/visualAssets';
 import {
   cardLegacyStorageKey,
   cardStorageKey,
@@ -14,23 +14,21 @@ import {
   isTaskKeyDone,
   type TaskKeyPair,
 } from '../hooks/useWatchlist';
-import { useBackdropDismiss } from '../hooks/useBackdropDismiss';
+import { BriefActions } from './BriefActions';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
+import { DomainPill } from './DomainPill';
 import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
 import {
   ClockIcon,
-  CopyIcon,
-  DownloadIcon,
   ExternalLinkIcon,
-  EyeIcon,
-  EyeOffIcon,
   FlameIcon,
   GlobeIcon,
   LockIcon,
-  ShieldAlertIcon,
   StarIcon,
   XIcon,
 } from './Icons';
+import { ModalDrawer } from './ModalDrawer';
+import { OgPreview } from './OgPreview';
 import { BadgeChip } from './ProjectCard';
 
 function resolveCardChains(card: Card): string[] {
@@ -42,6 +40,32 @@ interface DetailSpecRow {
   label: string;
   value: ReactNode;
   mono?: boolean;
+}
+
+/** TVL, APY, deadline, and reward pool rows; only the facts the card actually carries. */
+function buildRichRows(card: Card): DetailSpecRow[] {
+  const deadline = describeDeadline(card.deadline);
+  return buildCardMeta(card).map(pill => ({
+    label: pill.label,
+    value: pill.id === 'deadline' && deadline.countdown ? `${pill.value} · ${deadline.countdown}` : pill.value,
+    mono: true,
+  }));
+}
+
+function cardDomainHost(card: Card): string | null {
+  const projectUrl = normalizeExternalUrl(card.url);
+  return projectUrl ? hostnameLabel(projectUrl) : null;
+}
+
+/** Site preview banner and the short project description, above the scores. */
+function DetailIntro({ card, description }: { card: Card; description: string | null }) {
+  const ogPreview = resolveOgPreview({ ogImage: card.ogImage, fallbackTitle: card.n });
+  return (
+    <>
+      <OgPreview preview={ogPreview} variant="banner" />
+      {description && <p className="dlg-description">{description}</p>}
+    </>
+  );
 }
 
 function buildDetailRows(
@@ -79,6 +103,7 @@ function buildDetailRows(
     { label: 'Ticker', value: tickerValue },
     { label: 'Chains', value: chainsValue },
     { label: 'Funding', value: card.f, mono: true },
+    ...buildRichRows(card),
     { label: 'Tasks (Open / Total)', value: card.tk, mono: true },
     { label: 'Heat (X Score)', value: safeHeat.toLocaleString('en-US'), mono: true },
     { label: 'Updated', value: card.u === 'today' ? 'Today' : card.u },
@@ -169,55 +194,6 @@ function DetailScores({ card }: { card: Card }) {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-interface BriefActionsProps {
-  card: Card;
-  profile: AgentProfile;
-  slug: string;
-  showBrief: boolean;
-  onToggleBrief: () => void;
-  onCopyBrief: (card: Card) => void;
-}
-
-function DetailBriefActions({ card, profile, slug, showBrief, onToggleBrief, onCopyBrief }: BriefActionsProps) {
-  if (card.b.includes('risk')) {
-    return (
-      <div className="dlg-risk-callout">
-        <ShieldAlertIcon size={15} className="dlg-risk-icon" />
-        <p className="note risk-blocked">Brief unavailable for RISK items.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="dlg-brief-bar">
-      <button type="button" className="btn" onClick={() => onCopyBrief(card)}>
-        <CopyIcon size={14} />
-        <span>Copy agent brief</span>
-      </button>
-      <button
-        type="button"
-        className="chip"
-        aria-expanded={showBrief}
-        onClick={onToggleBrief}
-      >
-        {showBrief ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
-        <span>{showBrief ? 'Hide preview' : 'Preview brief'}</span>
-      </button>
-      <button
-        type="button"
-        className="chip"
-        onClick={() => {
-          const md = buildBrief(card, profile);
-          if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
-        }}
-      >
-        <DownloadIcon size={14} />
-        <span>Download .md</span>
-      </button>
     </div>
   );
 }
@@ -486,6 +462,7 @@ function DetailDialogBody({
                   ·
                 </span>
                 <span className={`gradetip dlg-tier-pill ${card.g}`}>Tier {card.g}</span>
+                <DomainPill verified={card.verifiedDomain} domain={cardDomainHost(card)} />
               </div>
             </div>
           </div>
@@ -518,16 +495,19 @@ function DetailDialogBody({
       <div className="dlg-scroll-body">
         <CopyStatusBanner status={copyStatus} />
 
-        <DetailBriefActions
-          card={card}
+        <BriefActions<Card>
+          target={card}
           profile={profile}
           slug={slug}
+          blocked={card.b.includes('risk')}
           showBrief={showBrief}
           onToggleBrief={() => setShowBrief(v => !v)}
           onCopyBrief={onCopyBrief}
         />
 
         {showBrief && renderedBrief && <pre className="brief-preview mono">{renderedBrief}</pre>}
+
+        <DetailIntro card={card} description={cleanMetaText(card.description, 280)} />
 
         <DetailScores card={card} />
 
@@ -583,41 +563,26 @@ export function DetailDialog({
   onClose,
   copyStatus,
 }: Props) {
-  const ref = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg) return;
-    if (card && !dlg.open) dlg.showModal();
-    if (!card && dlg.open) dlg.close();
-  }, [card]);
-
-  useBackdropDismiss(ref);
-
   return (
-    <dialog
-      id="detail"
-      ref={ref}
-      aria-labelledby="detail-title"
-      onClose={onClose}
-      {...({ closedby: 'any' } as Record<string, string>)}
-    >
-      {card && (
-        <DetailDialogBody
-          key={cardStorageKey(card)}
-          card={card}
-          fit={fit}
-          profile={profile}
-          saved={saved}
-          doneTasks={doneTasks}
-          logoIndex={logoIndex}
-          onToggleSaved={onToggleSaved}
-          onToggleTask={onToggleTask}
-          onCopyBrief={onCopyBrief}
-          onDismiss={() => ref.current?.close()}
-          copyStatus={copyStatus}
-        />
-      )}
-    </dialog>
+    <ModalDrawer id="detail" labelledBy="detail-title" open={card !== null} onClose={onClose}>
+      {dismiss =>
+        card && (
+          <DetailDialogBody
+            key={cardStorageKey(card)}
+            card={card}
+            fit={fit}
+            profile={profile}
+            saved={saved}
+            doneTasks={doneTasks}
+            logoIndex={logoIndex}
+            onToggleSaved={onToggleSaved}
+            onToggleTask={onToggleTask}
+            onCopyBrief={onCopyBrief}
+            onDismiss={dismiss}
+            copyStatus={copyStatus}
+          />
+        )
+      }
+    </ModalDrawer>
   );
 }

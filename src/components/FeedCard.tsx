@@ -1,7 +1,12 @@
-import { useState, type ReactElement } from 'react';
-import type { FeedItem } from '../../shared/types';
+import { useState } from 'react';
+import type { Card, FeedItem } from '../../shared/types';
 import {
+  buildFeedMeta,
+  cleanFeedSteps,
+  cleanLinkLabel,
   dedupeFeedSources,
+  dedupeStrings,
+  describeDeadline,
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
@@ -12,25 +17,27 @@ import {
   type FormattedSummary,
 } from '../lib/feedDisplay';
 import { formatRelativeTime, isHttpUrl } from '../lib/format';
-import { resolveEntityVisual, type ProjectLogoIndex } from '../lib/visualAssets';
+import { resolveEntityVisual, resolveOgPreview, type ProjectLogoIndex } from '../lib/visualAssets';
 import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
+import { FeedLinkLeadingIcon } from './FeedLinkIcon';
+import { MetaPills, RadarPill } from './MetaPills';
+import { FeedStepsPreview } from './FeedStepsPreview';
+import { DomainPill } from './DomainPill';
+import { OgPreview } from './OgPreview';
+import { RiskBadge } from './RiskBadge';
 import {
   AlertTriangleIcon,
-  CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ChevronUpIcon,
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
-  GithubIcon,
   GlobeIcon,
   LockIcon,
-  SheetIcon,
   ShieldAlertIcon,
   SparklesIcon,
   TagIcon,
-  TelegramIcon,
-  XBrandIcon,
 } from './Icons';
 
 const MAX_VISIBLE_RISK_NOTES = 2;
@@ -41,24 +48,11 @@ const ROUTINE_CAUTION_RE = /(?:not in verified registry|unverified domain|shorte
 interface Props {
   item: FeedItem;
   logoIndex?: ProjectLogoIndex;
+  /** Curated card matched through `radarId`, or null. */
+  radarCard?: Card | null;
+  onDetails: (item: FeedItem) => void;
   onCopyBrief: (item: FeedItem) => void;
-}
-
-function StatusDot({ tone }: { tone: 'ok' | 'degraded' | 'down' }) {
-  return <span className={`status-dot status-dot-${tone}`} aria-hidden="true" />;
-}
-
-function RiskBadge({ level, notes }: { level: FeedItem['risk']['level']; notes: DisplayRiskNote[] }) {
-  if (level === 'ok') return null;
-  const title =
-    notes.map(n => n.text).join(' · ') ||
-    (level === 'risk' ? 'High risk signals detected' : 'Caution advised');
-  return (
-    <span className={`badge ${level === 'risk' ? 'badge-risk' : 'badge-warn'}`} title={title}>
-      <StatusDot tone={level === 'risk' ? 'down' : 'degraded'} />
-      <span>{level === 'risk' ? 'RISK' : 'Warn'}</span>
-    </span>
-  );
+  onOpenRadar: (card: Card) => void;
 }
 
 function buildSummaryPreview(text: string, limit: number): string {
@@ -69,12 +63,18 @@ function buildSummaryPreview(text: string, limit: number): string {
   return `${cut.replace(/[,:;\-–—(\u00b7]+$/, '').trimEnd()}\u2026`;
 }
 
-function FeedSummaryBlock({ summary }: { summary: FormattedSummary }) {
+function feedCardClass(isRisk: boolean, hasOgImage: boolean): string {
+  return `cardx feed-card${isRisk ? ' is-risk' : ''}${hasOgImage ? ' has-og' : ''}`;
+}
+
+function FeedSummaryBlock({ summary, hasSteps }: { summary: FormattedSummary; hasSteps: boolean }) {
   const [expanded, setExpanded] = useState(false);
   if (!summary.lead && summary.bullets.length === 0) return null;
 
   const isLongLead = summary.lead.length > SUMMARY_COLLAPSE_THRESHOLD;
   const leadText = isLongLead && !expanded ? buildSummaryPreview(summary.lead, SUMMARY_PREVIEW_LIMIT) : summary.lead;
+  // Structured steps replace the bullets extracted from the summary so the card never lists them twice.
+  const bullets = hasSteps ? [] : summary.bullets;
 
   return (
     <div className="feed-summary-wrap">
@@ -97,9 +97,9 @@ function FeedSummaryBlock({ summary }: { summary: FormattedSummary }) {
           )}
         </p>
       )}
-      {summary.bullets.length > 0 && (
+      {bullets.length > 0 && (
         <ul className="feed-bullets" aria-label="Task steps">
-          {summary.bullets.map(bullet => (
+          {bullets.map(bullet => (
             <li key={bullet}>{bullet}</li>
           ))}
         </ul>
@@ -153,34 +153,6 @@ function SafetyNotes({ level, notes }: { level: FeedItem['risk']['level']; notes
   );
 }
 
-function cleanLinkLabel(label: string): string {
-  return label.replace(/[-/_]+(?=\u2026$)/, '').replace(/[-_]+$/, '\u2026');
-}
-
-function renderLinkLeadingIcon(url: string, known: boolean): ReactElement {
-  if (known) {
-    return <CheckCircle2Icon size={13} className="feed-link-verified" />;
-  }
-  try {
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-    if (host === 't.me' || host === 'telegram.me') {
-      return <TelegramIcon size={12} className="feed-link-platform is-telegram" />;
-    }
-    if (host === 'x.com' || host === 'twitter.com') {
-      return <XBrandIcon size={12} className="feed-link-platform is-x" />;
-    }
-    if (host === 'github.com') {
-      return <GithubIcon size={12} className="feed-link-platform is-github" />;
-    }
-    if (host === 'docs.google.com') {
-      return <SheetIcon size={12} className="feed-link-platform is-sheet" />;
-    }
-  } catch {
-    // Fall back to globe icon for any unparseable href
-  }
-  return <GlobeIcon size={12} className="feed-link-platform" />;
-}
-
 function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectTitle: string }) {
   if (links.length === 0) return null;
   return (
@@ -196,7 +168,7 @@ function FeedLinkPills({ links, projectTitle }: { links: DisplayLink[]; projectT
             title={link.url}
             className={`feed-link${link.known ? ' is-known' : ''}`}
           >
-            {renderLinkLeadingIcon(link.url, link.known)}
+            <FeedLinkLeadingIcon url={link.url} known={link.known} />
             <span className="feed-link-label">{displayLabel}</span>
             <span className="sr"> — {projectTitle} (opens in a new tab)</span>
             <ExternalLinkIcon size={12} className="feed-link-ext" />
@@ -238,27 +210,25 @@ function FeedSourceRefs({ sources }: { sources: FeedItem['sources'] }) {
   );
 }
 
-function dedupeStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const v of values) {
-    if (!v || seen.has(v)) continue;
-    seen.add(v);
-    out.push(v);
-  }
-  return out;
-}
-
-export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
+export function FeedCard({
+  item,
+  logoIndex,
+  radarCard = null,
+  onDetails,
+  onCopyBrief,
+  onOpenRadar,
+}: Props) {
   const [showSources, setShowSources] = useState(false);
   const isRisk = item.risk.level === 'risk';
   const title = formatProjectTitle(item.project);
   const summary = formatFeedSummary(item.summary, title);
   const riskNotes = formatRiskReasons(item);
   const displayLinks = prepareFeedLinks(item, { max: 3 });
+  const steps = cleanFeedSteps(item.steps);
   const chains = dedupeStrings(item.chains);
   const taskTypes = dedupeStrings(item.taskTypes);
   const sources = dedupeFeedSources(item.sources);
+  const ogPreview = resolveOgPreview({ ogImage: item.ogImage, fallbackTitle: title });
   const visual = resolveEntityVisual({
     name: title,
     logo: item.logo,
@@ -273,12 +243,18 @@ export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
   const resolvedTicker = visual.resolvedTicker;
 
   return (
-    <article className={`cardx feed-card${isRisk ? ' is-risk' : ''}`}>
+    <article className={feedCardClass(isRisk, Boolean(ogPreview?.image))}>
+      <OgPreview preview={ogPreview} variant="strip" />
+
       <div className="feed-head">
         <div className="feed-head-left">
           <EntityAvatar name={title} resolved={visual} size={38} />
           <div className="feed-title-wrap">
-            <h3 className="feed-title">{title}</h3>
+            <h3 className="feed-title">
+              <button type="button" className="feed-title-btn" onClick={() => onDetails(item)}>
+                {title}
+              </button>
+            </h3>
             <div className="ticker">
               {resolvedTicker ? (
                 <CryptoTickerPill ticker={resolvedTicker} size={13} />
@@ -291,6 +267,7 @@ export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
                   <span>{item.domain}</span>
                 </span>
               )}
+              <DomainPill verified={item.verifiedDomain} domain={item.domain} />
               {item.summarySource === 'ai' && (
                 <span className="ai-tag">
                   <SparklesIcon size={11} />
@@ -315,7 +292,13 @@ export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
         </div>
       </div>
 
-      <FeedSummaryBlock summary={summary} />
+      <MetaPills pills={buildFeedMeta(item)} deadline={describeDeadline(item.deadline)}>
+        {radarCard && <RadarPill card={radarCard} onOpen={onOpenRadar} />}
+      </MetaPills>
+
+      <FeedSummaryBlock summary={summary} hasSteps={steps.length > 0} />
+
+      <FeedStepsPreview steps={steps} />
 
       <SafetyNotes level={item.risk.level} notes={riskNotes} />
 
@@ -354,23 +337,35 @@ export function FeedCard({ item, logoIndex, onCopyBrief }: Props) {
           <span className="note mono feed-time">{formatRelativeTime(item.lastSeen)}</span>
         </div>
 
-        {isRisk ? (
-          <span
-            className="status-pill risk-blocked-status"
-            aria-disabled="true"
-            title="Blocked: high risk / agent guardrail"
-            aria-label={`Copy agent brief blocked for ${title}: high risk`}
+        <div className="feed-foot-actions">
+          {isRisk ? (
+            <span
+              className="status-pill risk-blocked-status"
+              aria-disabled="true"
+              title="Blocked: high risk / agent guardrail"
+              aria-label={`Copy agent brief blocked for ${title}: high risk`}
+            >
+              <LockIcon size={13} />
+              <span>Risk blocked</span>
+            </span>
+          ) : (
+            <button type="button" className="chip feed-copy-btn" onClick={() => onCopyBrief(item)}>
+              <CopyIcon size={13} />
+              <span>Copy agent brief</span>
+              <span className="sr"> for {title}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="chip feed-details-btn"
+            title="Open full details, steps, and links"
+            aria-label={`Details for ${title}`}
+            onClick={() => onDetails(item)}
           >
-            <LockIcon size={13} />
-            <span>Risk blocked</span>
-          </span>
-        ) : (
-          <button type="button" className="chip feed-copy-btn" onClick={() => onCopyBrief(item)}>
-            <CopyIcon size={13} />
-            <span>Copy agent brief</span>
-            <span className="sr"> for {title}</span>
+            <span>Details</span>
+            <ChevronRightIcon size={13} />
           </button>
-        )}
+        </div>
       </div>
 
       {showSources && sources.length > 0 && <FeedSourceRefs sources={sources} />}

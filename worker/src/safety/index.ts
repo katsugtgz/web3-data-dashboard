@@ -220,6 +220,12 @@ export interface SafetyResult {
   reasons: string[];
 }
 
+/**
+ * An unknown domain alone is never a warn reason. `warn` / `risk` are reserved
+ * for real threats: raw IP links, punycode or mixed-script hosts, lookalike
+ * domains, drainer and doubling-scam phrasing (risk); URL shorteners, plain
+ * http:// transport, and a single low-trust source (warn).
+ */
 export function evaluateSafety(input: SafetyInput): SafetyResult {
   let level: RiskLevel = 'ok';
   const reasons = new Set<string>();
@@ -296,17 +302,13 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
         bump('warn', `URL shortener used: ${reg}`);
       }
       if (reg && !URL_SHORTENERS[reg]) {
-        const isPlatform = isPlatformDomain(reg);
         const cleanHost = host.replace(/^www\./, '');
         const isSharedTenant = isSharedHostingDomain(reg) && cleanHost !== reg;
-        if (!isPlatform || isSharedTenant) {
+        if (!isPlatformDomain(reg) || isSharedTenant) {
           const similar = findLookalikeDomain(cleanHost, lookalikeBaseline);
           if (similar) {
             bump('risk', `Possible lookalike domain (${cleanHost} vs ${similar})`);
           }
-        }
-        if (!isPlatform && !input.knownProjectDomains.has(reg.toLowerCase())) {
-          bump('warn', `Domain not in verified registry: ${reg}`);
         }
       }
     } catch {
@@ -325,18 +327,14 @@ export function evaluateSafety(input: SafetyInput): SafetyResult {
   if (input.domain) {
     const normInputDomain = input.domain.trim().toLowerCase().replace(/^www\./, '').replace(/\.+$/, '');
     const inputReg = getRegistrableDomain(`https://${normInputDomain}`) ?? normInputDomain;
-    const isPlatform = isPlatformDomain(normInputDomain);
     const isSharedTenant = isSharedHostingDomain(inputReg) && normInputDomain !== inputReg;
-    if (!isPlatform || isSharedTenant) {
+    if (!isPlatformDomain(normInputDomain) || isSharedTenant) {
       if (isPunycodeOrMixedScript(input.domain)) {
         bump('risk', `Punycode or mixed-script project domain: ${input.domain}`);
       } else {
         const similar = findLookalikeDomain(input.domain, lookalikeBaseline);
         if (similar) {
           bump('risk', `Possible lookalike domain (${input.domain} vs ${similar})`);
-        }
-        if (!isPlatform && !input.knownProjectDomains.has(normInputDomain)) {
-          bump('warn', `Domain not in verified registry: ${input.domain}`);
         }
       }
     }
@@ -357,12 +355,21 @@ export interface ReconcileSafetyInput {
   knownDomains: ReadonlySet<string>;
 }
 
+/** Lowercase prefix of the retired unverified-registry warning still stored on legacy D1 rows. */
+export const UNVERIFIED_REGISTRY_REASON_PREFIX = 'domain not in verified registry:';
+
+export function isUnverifiedRegistryReason(reason: string): boolean {
+  return reason.trim().toLowerCase().startsWith(UNVERIFIED_REGISTRY_REASON_PREFIX);
+}
+
 /**
  * Reconciles stored cluster safety reasons against the live `known_domains`
- * registry and cleaned links (handles legacy D1 rows where a domain was seeded
- * after initial ingest or bare-domain `http://` twins were stored previously).
- * Never downgrades `'risk'` to `'warn'` or `'ok'`, and preserves URL shortener
- * warnings even when shorteners are not shown in `cleanedLinks`.
+ * registry and cleaned links (handles legacy D1 rows where bare-domain
+ * `http://` twins were stored previously). The retired unverified-registry
+ * warning is always stripped and the level drops to `'ok'` when no real warn
+ * reason remains. Never downgrades `'risk'` to `'warn'` or `'ok'`, and
+ * preserves URL shortener warnings even when shorteners are not shown in
+ * `cleanedLinks`.
  */
 export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResult {
   const httpsKeys = new Set<string>();
@@ -385,11 +392,7 @@ export function reconcileSafetyReasons(input: ReconcileSafetyInput): SafetyResul
   const kept: string[] = [];
 
   for (const reason of input.reasons) {
-    const unverifiedMatch = reason.match(/^Domain not in verified registry:\s*(.+)$/i);
-    if (unverifiedMatch) {
-      const dom = unverifiedMatch[1].trim().toLowerCase();
-      if (input.knownDomains.has(dom) || isPlatformDomain(dom)) continue;
-    }
+    if (isUnverifiedRegistryReason(reason)) continue;
 
     const httpMatch = reason.match(/^Insecure transport \(plain http\):\s*(.+)$/i);
     if (httpMatch) {

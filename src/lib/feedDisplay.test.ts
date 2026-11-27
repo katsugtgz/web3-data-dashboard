@@ -1,12 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import type { FeedItem, SourceHealth } from '../../shared/types';
 import {
+  buildCardMeta,
+  buildFeedMeta,
+  buildFeedTimeline,
+  cleanFeedSteps,
+  describeDeadline,
   dedupeFeedSources,
+  dedupeStrings,
   formatFeedSummary,
   formatProjectTitle,
   formatRiskReasons,
   formatSourceHandle,
   formatSourcesSummary,
+  indexRadarCards,
+  matchRadarCard,
   prepareFeedLinks,
 } from './feedDisplay';
 
@@ -957,5 +965,149 @@ describe('formatSourcesSummary', () => {
         makeSource(' Curated ', 'ok', 'c1'),
       ]),
     ).toBe('X 1 · Api 1 · Curated 1 — 2 ok · 0 degraded · 1 down');
+  });
+});
+
+describe('buildCardMeta', () => {
+  test('emits TVL, APY, deadline, and reward pool only when present', () => {
+    expect(
+      buildCardMeta({ tvlUsd: 2_500_000, apy: ' 12.4% ', deadline: '2026-12-01', rewardPool: '$1M' }),
+    ).toEqual([
+      { id: 'tvl', label: 'TVL', value: '$2.50M' },
+      { id: 'apy', label: 'APY', value: '12.4%' },
+      { id: 'deadline', label: 'Deadline', value: '2026-12-01' },
+      { id: 'reward', label: 'Reward pool', value: '$1M' },
+    ]);
+    expect(buildCardMeta({})).toEqual([]);
+  });
+});
+
+describe('dedupeStrings', () => {
+  test('keeps first-seen order and drops empty and duplicate values', () => {
+    expect(dedupeStrings(['Base', undefined, '', 'base', 'Base', 'Solana'])).toEqual(['Base', 'base', 'Solana']);
+    expect(dedupeStrings([])).toEqual([]);
+  });
+});
+
+describe('buildFeedMeta', () => {
+  test('emits only the pills whose value exists, in a fixed order, with cleaned text', () => {
+    expect(
+      buildFeedMeta({
+        rewardPool: ' $50,000\u0000 USDC ',
+        deadline: 'Nov\u200B 30 ',
+        cost: 'Free',
+        tvlUsd: 12_400_000,
+        funding: '$1.20M',
+      }),
+    ).toEqual([
+      { id: 'reward', label: 'Reward pool', value: '$50,000 USDC' },
+      { id: 'deadline', label: 'Deadline', value: 'Nov 30' },
+      { id: 'cost', label: 'Cost', value: 'Free' },
+      { id: 'tvl', label: 'TVL', value: '$12.40M' },
+      { id: 'funding', label: 'Funding', value: '$1.20M' },
+    ]);
+  });
+
+  test('drops blank, placeholder, and non-positive values', () => {
+    expect(buildFeedMeta({ rewardPool: '   ', deadline: '—', cost: '', tvlUsd: 0, funding: '-' })).toEqual([]);
+    expect(buildFeedMeta({ tvlUsd: Number.NaN })).toEqual([]);
+    expect(buildFeedMeta({})).toEqual([]);
+  });
+});
+
+describe('cleanFeedSteps', () => {
+  test('strips enumerators and control characters, then removes blanks and duplicates', () => {
+    expect(
+      cleanFeedSteps([
+        '1. Connect wallet',
+        'Step 2: Follow @acme',
+        '',
+        'connect wallet',
+        '3)',
+        '\u0007Do the quest',
+        '4. Swap\ntokens',
+        'Step 4 - Bridge funds',
+      ]),
+    ).toEqual(['Connect wallet', 'Follow @acme', 'Do the quest', 'Swap tokens', 'Bridge funds']);
+  });
+
+  test('returns an empty list when no steps exist', () => {
+    expect(cleanFeedSteps(undefined)).toEqual([]);
+    expect(cleanFeedSteps([])).toEqual([]);
+  });
+});
+
+describe('describeDeadline', () => {
+  // 2026-11-27T12:00:00Z
+  const now = Date.UTC(2026, 10, 27, 12);
+
+  test('adds a countdown to ISO dates, treating a date-only deadline as end of day', () => {
+    expect(describeDeadline('2026-11-30', now)).toEqual({ text: '2026-11-30', state: 'upcoming', countdown: 'in 3d' });
+    expect(describeDeadline('2026-11-27', now)).toEqual({ text: '2026-11-27', state: 'soon', countdown: 'today' });
+    expect(describeDeadline('2026-11-28T09:00:00Z', now)).toEqual({ text: '2026-11-28', state: 'soon', countdown: 'in 21h' });
+    expect(describeDeadline('2026-11-20', now)).toEqual({ text: '2026-11-20', state: 'past', countdown: '7d ago' });
+    expect(describeDeadline('2027-03-01', now)).toEqual({ text: '2027-03-01', state: 'upcoming', countdown: 'in ~3 mo' });
+  });
+
+  test('passes free text through without guessing', () => {
+    expect(describeDeadline('TBA', now)).toEqual({ text: 'TBA', state: 'unknown', countdown: null });
+    expect(describeDeadline('End of Q4', now)).toEqual({ text: 'End of Q4', state: 'unknown', countdown: null });
+  });
+});
+
+describe('buildFeedTimeline', () => {
+  test('orders posts newest first, dedupes by URL, and sinks entries without a usable timestamp', () => {
+    const timeline = buildFeedTimeline(
+      makeItem({
+        sources: [
+          { platform: 'telegram', handle: 'alpha_ch', postUrl: 'https://t.me/alpha_ch/9', postedAt: 300 },
+          { platform: 'feed', handle: 'The Drop', postUrl: 'https://blog.example.com/post', postedAt: 500 },
+          { platform: 'telegram', handle: 'alpha_ch', postUrl: 'https://t.me/alpha_ch/9', postedAt: 300 },
+          { platform: 'x', handle: 'acme', postUrl: 'https://x.com/acme/status/1', postedAt: 0 },
+        ],
+      }),
+    );
+
+    expect(timeline.map(e => e.label)).toEqual(['The Drop', '@alpha_ch', '@acme']);
+    expect(timeline.map(e => e.url)).toEqual([
+      'https://blog.example.com/post',
+      'https://t.me/alpha_ch/9',
+      'https://x.com/acme/status/1',
+    ]);
+    expect(timeline[2].platform).toBe('x');
+  });
+
+  test('drops sources whose post URL is unsafe', () => {
+    expect(
+      buildFeedTimeline(
+        makeItem({
+          sources: [{ platform: 'telegram', handle: 'alpha_ch', postUrl: 'javascript:alert(1)', postedAt: 300 }],
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('matchRadarCard & indexRadarCards', () => {
+  const cards = [
+    { id: 'surf-7', n: 'Zora' },
+    { id: 'surf-8', n: 'Zora' },
+    { id: null, n: 'NoId' },
+  ];
+
+  test('matches strictly on radarId and never falls back to a name lookalike', () => {
+    const index = indexRadarCards(cards);
+
+    expect(matchRadarCard({ radarId: 'surf-8' }, index)).toBe(cards[1]);
+    expect(matchRadarCard({ radarId: ' surf-7 ' }, index)).toBe(cards[0]);
+    expect(matchRadarCard({ radarId: 'NoId' }, index)).toBeNull();
+    expect(matchRadarCard({ radarId: 'missing' }, index)).toBeNull();
+    expect(matchRadarCard({ radarId: undefined }, index)).toBeNull();
+  });
+
+  test('indexes cards by id once so a large feed can resolve its radar link in constant time', () => {
+    const index = indexRadarCards(cards);
+    expect(index.size).toBe(2);
+    expect(index.get('surf-8')).toBe(cards[1]);
   });
 });

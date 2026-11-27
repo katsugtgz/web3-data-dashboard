@@ -1,5 +1,5 @@
-import type { FeedItem, SourceHealth } from '../../shared/types';
-import { normalizeExternalUrl } from './format';
+import type { Card, FeedItem, SourceHealth } from '../../shared/types';
+import { formatRaiseShort, normalizeExternalUrl } from './format';
 
 export interface DisplayLink {
   url: string;
@@ -1283,4 +1283,270 @@ export function formatSourcesSummary(sources: Pick<SourceHealth, 'platform' | 's
 
   const platformSummary = parts.length > 0 ? parts.join(' · ') : '0 sources';
   return `${platformSummary} — ${okCount} ok · ${degradedCount} degraded · ${downCount} down`;
+}
+
+/* ---- Rich drop metadata: reward, deadline, cost, TVL, funding, steps, timeline, radar link ---- */
+
+const META_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
+const META_PLACEHOLDER_RE = /^[\s\-–—·•\u2026]+$/;
+const STEP_ENUMERATOR_RE = /^\s*(?:(?:step|#)\s*)?\d{1,3}\s*[.):\-–—]\s*|^\s*step\s+\d{1,3}\s*[\-–—:]\s*/i;
+const ISO_DEADLINE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * Single-line display text for an untrusted metadata value. Returns null for
+ * blank, control-only, or placeholder-only input (an em dash alone is a placeholder).
+ */
+export function cleanMetaText(raw: string | null | undefined, max = 64): string | null {
+  if (typeof raw !== 'string') return null;
+  // Fold line breaks first so stripped control characters never glue two words together.
+  const cleaned = raw.replace(/\s+/g, ' ').replace(META_CONTROL_RE, '').trim();
+  if (!cleaned || META_PLACEHOLDER_RE.test(cleaned)) return null;
+  if (cleaned.length <= max) return cleaned;
+  const window = cleaned.slice(0, max);
+  const lastSpace = window.lastIndexOf(' ');
+  const cut = lastSpace >= Math.floor(max * 0.6) ? window.slice(0, lastSpace) : window;
+  return `${cut.trimEnd()}\u2026`;
+}
+
+export type FeedMetaId = 'reward' | 'deadline' | 'cost' | 'tvl' | 'funding';
+
+export interface FeedMetaPill {
+  id: FeedMetaId;
+  label: string;
+  value: string;
+}
+
+function usdCompact(value: number | null | undefined): string | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? formatRaiseShort(value) : null;
+}
+
+/** Structured pills for the offer facts a drop carries. Missing facts are omitted, never guessed. */
+export function buildFeedMeta(
+  item: Pick<FeedItem, 'rewardPool' | 'deadline' | 'cost' | 'tvlUsd' | 'funding'>,
+): FeedMetaPill[] {
+  const pill = (id: FeedMetaId, label: string, raw: string | null | undefined): FeedMetaPill[] => {
+    const value = cleanMetaText(raw, 48);
+    return value ? [{ id, label, value }] : [];
+  };
+  const tvl = usdCompact(item.tvlUsd);
+
+  return [
+    ...pill('reward', 'Reward pool', item.rewardPool),
+    ...pill('deadline', 'Deadline', item.deadline),
+    ...pill('cost', 'Cost', item.cost),
+    ...(tvl ? [{ id: 'tvl' as const, label: 'TVL', value: tvl }] : []),
+    ...pill('funding', 'Funding', item.funding),
+  ];
+}
+
+export type CardMetaId = 'tvl' | 'apy' | 'deadline' | 'reward';
+
+export interface CardMetaPill {
+  id: CardMetaId;
+  label: string;
+  value: string;
+}
+
+/** Same idea as `buildFeedMeta`, for the extra facts a curated card can carry. */
+export function buildCardMeta(card: Pick<Card, 'tvlUsd' | 'apy' | 'deadline' | 'rewardPool'>): CardMetaPill[] {
+  const pill = (id: CardMetaId, label: string, raw: string | null | undefined): CardMetaPill[] => {
+    const value = cleanMetaText(raw, 48);
+    return value ? [{ id, label, value }] : [];
+  };
+  const tvl = usdCompact(card.tvlUsd);
+
+  return [
+    ...(tvl ? [{ id: 'tvl' as const, label: 'TVL', value: tvl }] : []),
+    ...pill('apy', 'APY', card.apy),
+    ...pill('deadline', 'Deadline', card.deadline),
+    ...pill('reward', 'Reward pool', card.rewardPool),
+  ];
+}
+
+export type DeadlineState = 'past' | 'soon' | 'upcoming' | 'unknown';
+
+export interface DeadlineInfo {
+  /** Normalized deadline text (the date part for ISO input). */
+  text: string;
+  state: DeadlineState;
+  /** Human countdown such as "in 3d" or "7d ago"; null when the deadline is not an ISO date. */
+  countdown: string | null;
+}
+
+/**
+ * Describes a deadline string. ISO dates get a countdown (a date-only value
+ * means the end of that day); any other text is shown as written and never parsed.
+ */
+export function describeDeadline(raw: string | null | undefined, now = Date.now()): DeadlineInfo {
+  const text = cleanMetaText(raw, 40);
+  if (!text) return { text: '', state: 'unknown', countdown: null };
+
+  const match = text.match(ISO_DEADLINE_RE);
+  if (!match) return { text, state: 'unknown', countdown: null };
+
+  const [year, month, day, hour, minute, second] = match
+    .slice(1)
+    .map(part => (part === undefined ? Number.NaN : Number(part)));
+  const dateOnly = Number.isNaN(hour);
+  const deadline = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day,
+      dateOnly ? 23 : hour,
+      dateOnly ? 59 : minute,
+      dateOnly ? 59 : second,
+      dateOnly ? 999 : 0,
+    ),
+  );
+  // Reject rolled-over calendar dates such as 2026-02-30.
+  if (deadline.getUTCFullYear() !== year || deadline.getUTCMonth() !== month - 1 || deadline.getUTCDate() !== day) {
+    return { text, state: 'unknown', countdown: null };
+  }
+
+  const label = `${match[1]}-${match[2]}-${match[3]}`;
+  if (dateOnly) {
+    const days = Math.floor(Date.UTC(year, month - 1, day) / DAY_MS) - Math.floor(now / DAY_MS);
+    if (days < 0) return { text: label, state: 'past', countdown: `${-days}d ago` };
+    if (days === 0) return { text: label, state: 'soon', countdown: 'today' };
+    if (days === 1) return { text: label, state: 'soon', countdown: 'tomorrow' };
+    if (days < 60) return { text: label, state: 'upcoming', countdown: `in ${days}d` };
+    return { text: label, state: 'upcoming', countdown: `in ~${Math.round(days / 30)} mo` };
+  }
+
+  const hours = (deadline.getTime() - now) / HOUR_MS;
+  if (hours < 0) {
+    const late = Math.ceil(-hours);
+    return { text: label, state: 'past', countdown: late < 24 ? `${late}h ago` : `${Math.ceil(late / 24)}d ago` };
+  }
+  if (hours < 1) return { text: label, state: 'soon', countdown: 'in <1h' };
+  if (hours < 24) return { text: label, state: 'soon', countdown: `in ${Math.ceil(hours)}h` };
+  const days = hours / 24;
+  if (days < 2) return { text: label, state: 'soon', countdown: 'tomorrow' };
+  if (days < 60) return { text: label, state: 'upcoming', countdown: `in ${Math.ceil(days)}d` };
+  return { text: label, state: 'upcoming', countdown: `in ~${Math.round(days / 30)} mo` };
+}
+
+/** Cleaned, de-duplicated task steps in source order. Enumerators and control characters are removed. */
+export function cleanFeedSteps(steps: readonly string[] | null | undefined, max = 160): string[] {
+  if (!steps) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of steps) {
+    if (typeof raw !== 'string') continue;
+    const cleaned = cleanMetaText(raw.replace(STEP_ENUMERATOR_RE, ''), max);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+export interface FeedTimelineEntry {
+  id: string;
+  platform: string;
+  label: string;
+  /** Safe https post URL, or null when the source carries none. */
+  url: string | null;
+  /** Unix timestamp in ms; 0 when the source has no usable timestamp. */
+  postedAt: number;
+}
+
+/** Every source post of a drop, newest first. Entries without a timestamp sink to the end. */
+export function buildFeedTimeline(item: Pick<FeedItem, 'sources'>): FeedTimelineEntry[] {
+  const entries = dedupeFeedSources(item.sources).map((src, index) => ({
+    id: `${src.platform}:${index}`,
+    platform: src.platform,
+    label: formatSourceHandle(src.platform, src.handle) || src.platform,
+    url: normalizeExternalUrl(src.postUrl),
+    postedAt: Number.isFinite(src.postedAt) && src.postedAt > 0 ? src.postedAt : 0,
+  }));
+  return entries.sort((a, b) => {
+    if (a.postedAt === 0) return b.postedAt === 0 ? 0 : 1;
+    if (b.postedAt === 0) return -1;
+    return b.postedAt - a.postedAt;
+  });
+}
+
+/** Curated cards keyed by their upstream id, for O(1) radar cross-links from drops. */
+export function indexRadarCards<T extends Pick<Card, 'id'>>(cards: readonly T[]): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const card of cards) {
+    const id = typeof card.id === 'string' ? card.id.trim() : '';
+    if (id) index.set(id, card);
+  }
+  return index;
+}
+
+/** Non-empty, non-duplicate tag values (chains, task types) in first-seen order. */
+export function dedupeStrings(values: readonly (string | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+/** Shortens a link label so a trailing ellipsis never sits on a dangling separator. */
+export function cleanLinkLabel(label: string): string {
+  return label.replace(/[-/_]+(?=\u2026$)/, '').replace(/[-_]+$/, '\u2026');
+}
+
+export type TgeDateState = DeadlineState | 'unknown';
+
+export interface TgeDateInfo {
+  /** Short label such as "Nov 30"; the year is added when it differs from the current one. */
+  dateLabel: string;
+  state: TgeDateState;
+  /** Countdown for a dated event ("in 3d"), or null. */
+  countdown: string | null;
+  /** UTC ms used to order a timeline; undated events sort last. */
+  sortKey: number;
+}
+
+/**
+ * Interprets a TGE date cell. Only ISO dates are parsed; "TBA" and free text
+ * are shown as written instead of being guessed into a date.
+ */
+export function describeTgeDate(dateText: string, now = Date.now()): TgeDateInfo {
+  const deadline = describeDeadline(dateText, now);
+  const isTba = deadline.text.toUpperCase() === 'TBA';
+  if (!deadline.countdown) {
+    return {
+      dateLabel: !deadline.text || isTba ? 'Date TBA' : deadline.text,
+      state: 'unknown',
+      countdown: null,
+      sortKey: Number.MAX_SAFE_INTEGER,
+    };
+  }
+
+  const date = new Date(`${deadline.text}T00:00:00Z`);
+  const sameYear = date.getUTCFullYear() === new Date(now).getUTCFullYear();
+  return {
+    dateLabel: date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+      timeZone: 'UTC',
+    }),
+    state: deadline.state,
+    countdown: deadline.countdown,
+    sortKey: date.getTime(),
+  };
+}
+
+/** The curated card a drop points at via `radarId`, or null. Names are never used as a fallback. */
+export function matchRadarCard<T extends Pick<Card, 'id'>>(
+  item: Pick<FeedItem, 'radarId'>,
+  index: ReadonlyMap<string, T>,
+): T | null {
+  const radarId = typeof item.radarId === 'string' ? item.radarId.trim() : '';
+  return radarId ? (index.get(radarId) ?? null) : null;
 }

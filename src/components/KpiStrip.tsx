@@ -1,9 +1,12 @@
 import type { Grade } from '../../shared/types';
 import type { StatusFilter } from '../hooks/useAirdropFilters';
+import type { CardMix } from '../lib/viz';
 import { CalendarIcon, LayersIcon, SparklesIcon, StarIcon, ZapIcon } from './Icons';
+import { KpiActivity, MiniBars } from './KpiSparkline';
 
 interface Props {
   counts: { total: number; pre: number; sTier: number; savedMatch: number };
+  mix: CardMix;
   tgeCount: number;
   isLive: boolean;
   failed: boolean;
@@ -18,6 +21,7 @@ interface Props {
 
 export function KpiStrip({
   counts,
+  mix,
   tgeCount,
   isLive,
   failed,
@@ -41,6 +45,7 @@ export function KpiStrip({
         className="kpi-card"
         aria-pressed={!hasActiveFilter}
         title={hasActiveFilter ? 'Reset status and tier filters' : 'All actively tracked projects'}
+        aria-label={`Active tracked projects: ${counts.total}. Resets status and tier filters.`}
         onClick={onSelectAll}
       >
         <span className="kpi-label-row">
@@ -49,6 +54,10 @@ export function KpiStrip({
         </span>
         <strong className="kpi-val mono">{counts.total}</strong>
         <span className="kpi-sub">{failed ? 'Last available data' : isLive ? 'Live API feed' : 'Snapshot'}</span>
+        <span className="kpi-viz">
+          <KpiActivity timestamps={mix.updated} label="Projects updated per day" />
+          <MiniBars segments={mix.tiers} label="Projects by tier" />
+        </span>
       </button>
 
       <button
@@ -69,6 +78,7 @@ export function KpiStrip({
         type="button"
         className={`kpi-card${isSTierActive ? ' is-active' : ''}`}
         aria-pressed={isSTierActive}
+        aria-label={`S-Tier projects: ${counts.sTier}. Filters to S-Tier.`}
         onClick={onToggleSTier}
       >
         <span className="kpi-label-row">
@@ -77,6 +87,9 @@ export function KpiStrip({
         </span>
         <strong className="kpi-val mono">{counts.sTier}</strong>
         <span className="kpi-sub">Highest conviction</span>
+        <span className="kpi-viz">
+          <MiniBars segments={mix.sources} label="Projects by source" />
+        </span>
       </button>
 
       <button type="button" className="kpi-card kpi-card-jump" onClick={onJumpTge}>

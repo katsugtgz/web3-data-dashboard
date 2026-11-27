@@ -569,6 +569,7 @@ export function finalizeSnapshotCluster(
     { project: acc.project, domain: acc.domain, ticker: acc.ticker, riskLevel: safety.level },
     ctx.logoIndex,
   );
+  const verifiedDomain = !acc.domain || ctx.allKnownDomains.has(acc.domain.toLowerCase());
   return {
     id: acc.id,
     project: acc.project,
@@ -589,6 +590,7 @@ export function finalizeSnapshotCluster(
     sourceCount: acc.sourceIds.size,
     score,
     risk: safety as { level: RiskLevel; reasons: string[] },
+    verifiedDomain,
     ...(acc.surf ? { surf: acc.surf } : {}),
     firstSeen: acc.firstSeen,
     lastSeen: acc.lastSeen,

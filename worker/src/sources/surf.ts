@@ -1,5 +1,5 @@
 import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../../../shared/types';
-import { FETCH_TIMEOUT_MS, fmtUsd, USER_AGENT } from '../lib/format';
+import { fmtUsd, USER_AGENT } from '../lib/format';
 import { safeHttpUrl, safeHttpsUrl } from '../lib/url';
 import {
   mapFitKey,
@@ -283,15 +283,27 @@ export function normalizeSurf(raw: unknown, nowMs = Date.now()): AirdropFeed {
   };
 }
 
-export async function fetchSurfAirdrops(url = SURF_AIRDROPS_URL, nowMs = Date.now()): Promise<AirdropFeed> {
+/**
+ * Total time budget for one Surf refresh. Surf is an optional source that
+ * hangs in production, so both attempts share a single short deadline instead
+ * of the 15s default fetch timeout.
+ */
+export const SURF_TIMEOUT_MS = 4000;
+
+export async function fetchSurfAirdrops(
+  url = SURF_AIRDROPS_URL,
+  nowMs = Date.now(),
+  timeoutMs = SURF_TIMEOUT_MS,
+): Promise<AirdropFeed> {
   const maxAttempts = 2;
+  const deadline = AbortSignal.timeout(timeoutMs);
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let res: Response;
     try {
       res = await fetch(url, {
         headers: { 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: deadline,
       });
     } catch (err) {
       if (attempt + 1 >= maxAttempts) throw err;

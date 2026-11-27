@@ -1,4 +1,5 @@
 import type { TaskType } from '../../../shared/types';
+import { DOUBLING_SCAM_RE, DRAINER_RE } from '../safety';
 import { URL_SHORTENERS } from '../safety/shorteners';
 import {
   cleanUrl,
@@ -16,6 +17,7 @@ import {
   detectNonEnglishLatin,
   isStopName,
   MAJOR_TICKERS,
+  stripEmoji,
   truncateAtWordBoundary,
 } from './text';
 
@@ -104,7 +106,18 @@ const PAYOUT_CURRENCY_PREFIX_RE =
 
 const DOMAIN_VERB_PREFIX_RE = /^(?:get|use|try|join|play|app|go|my|the)(?=[a-z]{4,})/;
 
-export interface ParsedDrop {
+/**
+ * Structured, deterministic drop metadata extracted from the post text.
+ * All fields are optional plain display strings; `steps` holds at most 4 entries.
+ */
+export interface RichDropMeta {
+  rewardPool?: string;
+  deadline?: string;
+  cost?: string;
+  steps?: string[];
+}
+
+export interface ParsedDrop extends RichDropMeta {
   urls: string[];
   rawIpUrls?: string[];
   projectDomain?: string;
@@ -166,9 +179,110 @@ export function extractTaskTypes(text: string, urls: string[]): TaskType[] {
   return types;
 }
 
-function titleFromDomain(domain: string): string {
-  const label = domain.split('.')[0] ?? domain;
-  return label.charAt(0).toUpperCase() + label.slice(1);
+// Acronyms and brand words that keep their own casing after a split.
+const LABEL_CASING: Record<string, string> = {
+  rgb: 'RGB', nft: 'NFT', nfts: 'NFTs', dex: 'DEX', dao: 'DAO', ai: 'AI', btc: 'BTC', eth: 'ETH', defi: 'DeFi',
+  zksync: 'zkSync', dydx: 'dYdX', l1: 'L1', l2: 'L2', evm: 'EVM', usd: 'USD', usdc: 'USDC', usdt: 'USDT', tvl: 'TVL',
+  apr: 'APR', apy: 'APY', pfp: 'PFP', sbt: 'SBT', rwa: 'RWA', ido: 'IDO', ico: 'ICO', api: 'API', sdk: 'SDK', gm: 'GM',
+};
+
+// Words that can split a glued registrable label: `lawoftheabyss` -> `Law Of The Abyss`,
+// `rgbstone` -> `RGB Stone`. Kept to nouns and a few function words on purpose;
+// an unknown label stays one word.
+const LABEL_SPLIT_WORDS = new Set(
+  (
+    // Function words (useful only inside three-plus-word labels).
+    'of the to in on by my at up for and all out ' +
+    // Web3 and product vocabulary.
+    'chain coin token money bank pay swap stake pool farm mine mint vault forge block protocol finance ' +
+    'network web app lab labs hub base core main genesis origin node wallet ledger book data code byte ' +
+    'point points trade market exchange fund funds grant yield earn win drop drops gift prize reward rewards ' +
+    'bonus loot treasure budget squad crew club house home studio team group union pact ' +
+    // Plain English nouns and adjectives that show up in project names.
+    'law abyss stone rock star moon sun sky sea ocean deep wave waves fire ice snow rain wind storm cloud ' +
+    'light shadow dark bright blue green gold silver iron steel city island land world zone space gate bridge ' +
+    'path road magic pixel cube game play quest dragon wolf bear bull whale shark frog ape cat dog fox owl bee ' +
+    'ant bird snake king queen hero legend titan giant guys soul mind brain smart wise key lock clock strike ' +
+    'force power energy pulse flux drift echo voice sound signal speed turbo hyper mega ultra super cyber meta ' +
+    'virtual digital future frontier edge apex peak summit prime royal noble holy sacred eternal infinite ' +
+    'quantum atom atoms orbit comet planet rocket ship journey mission guide compass map scout ranger hunter ' +
+    'wizard witch knight angel ghost phantom demon devil monster beast eagle hawk raven crow lion tiger horse ' +
+    'pony rabbit deer duck goose crane swan fish octopus crab turtle cobra viper spider beetle moth butterfly ' +
+    'plaza garden flower tree leaf root seed wood forest river mountain valley desert wall street survival crypto ' +
+    'crystal pearl gem amber jade ruby obsidian neon chrome carbon helium hydrogen oxygen plasma photon ' +
+    'neutron proton electron drone robot droid machine engine motor gear wheel pilot captain sailor voyager voyage ' +
+    'alpha omega zero one two ten first last next big small little great grand top free open safe secure fast ' +
+    'quick slow wild brave bold true real rich lucky wealth fortune page story tale song art ink line ring loop ' +
+    'port harbor bay cape reef coral jack'
+  )
+    .split(/\s+/)
+    .concat(Object.keys(LABEL_CASING))
+    .filter(word => /^[a-z0-9]{2,}$/.test(word)),
+);
+
+/**
+ * Splits a lowercase glued label into dictionary words with the fewest parts
+ * (longest words first on ties). Short labels, labels with digits, and timid
+ * two-word splits are left alone, which protects brand names such as `bitget`,
+ * `coinbase`, `stargate`, or `topnod`.
+ */
+function splitLabelWords(label: string): string[] | undefined {
+  if (label.length < 8 || label.length > 32 || /\d/.test(label)) return undefined;
+  const n = label.length;
+  const best = new Array<number>(n + 1).fill(Infinity);
+  const prev = new Array<number>(n + 1).fill(-1);
+  best[0] = 0;
+  for (let i = 0; i < n; i++) {
+    const base = best[i];
+    if (!Number.isFinite(base)) continue;
+    for (let j = Math.min(n, i + 14); j > i + 1; j--) {
+      const word = label.slice(i, j);
+      if (!LABEL_SPLIT_WORDS.has(word)) continue;
+      const cost = base + 1 + 1 / (word.length + 2);
+      if (cost < best[j]) {
+        best[j] = cost;
+        prev[j] = i;
+      }
+    }
+  }
+  if (!Number.isFinite(best[n])) return undefined;
+  const parts: string[] = [];
+  for (let end = n; end > 0; ) {
+    const start = prev[end] ?? -1;
+    if (start < 0) return undefined;
+    parts.unshift(label.slice(start, end));
+    end = start;
+  }
+  if (parts.length < 2 || parts.length > 5) return undefined;
+  if (parts.length === 2) {
+    // A two-word split is trusted only with an acronym head (`rgbstone`) or two long words (`coinisland`).
+    const head = parts[0] ?? '';
+    const tail = parts[1] ?? '';
+    const confident =
+      LABEL_CASING[head] !== undefined || (label.length >= 10 && head.length >= 4 && tail.length >= 4);
+    if (!confident) return undefined;
+  }
+  return parts;
+}
+
+/** Turns a registrable domain or wrapper label into a readable project name. */
+function titleFromDomain(domainOrLabel: string): string {
+  const raw = domainOrLabel.includes('.') ? (domainOrLabel.split('.')[0] ?? domainOrLabel) : domainOrLabel;
+  const name = raw
+    .toLowerCase()
+    .split(/[-_]+/)
+    .map(part => {
+      const words = splitLabelWords(part) ?? [part];
+      if (words.length === 1) {
+        const word = words[0] ?? part;
+        // `zklend` -> `zkLend`: the zk prefix is written in camel case by convention.
+        if (/^zk[a-z]{3,}$/.test(word)) return `zk${word.charAt(2).toUpperCase()}${word.slice(3)}`;
+      }
+      return words.map(w => LABEL_CASING[w] ?? w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    })
+    .filter(Boolean)
+    .join(' ');
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 function normalizeAlphaNum(s: string): string {
@@ -177,9 +291,11 @@ function normalizeAlphaNum(s: string): string {
 
 /**
  * Matches a registrable domain label (e.g. `zeroguys.fun`, `getclocked.com`,
- * `cityprotocol.co`, `decalabs.ai`) against human-cased 1-3 word phrases in the
+ * `cityprotocol.co`, `decalabs.ai`) against human-cased 1-5 word phrases in the
  * post text so cards display `"Zero Guys"`, `"Clocked"`, `"City Protocol"`,
- * `"DECA Labs"` instead of glued lowercase domain labels.
+ * `"DECA Labs"` instead of glued lowercase domain labels. A glued single token
+ * (`Lawoftheabyss`, `RGBSTONE`) is split into words; author camel case
+ * (`MagicBlock`, `StrikeLabs`) is kept as written.
  */
 function matchDomainNameInText(domainOrLabel: string, text: string): string | undefined {
   const rawLabel = domainOrLabel.includes('.') ? (domainOrLabel.split('.')[0] ?? domainOrLabel) : domainOrLabel;
@@ -190,7 +306,8 @@ function matchDomainNameInText(domainOrLabel: string, text: string): string | un
 
   const tokens = strippedText.match(/[A-Za-z0-9][A-Za-z0-9._-]*/g) ?? [];
   for (let i = 0; i < tokens.length; i++) {
-    for (let span = 3; span >= 1; span--) {
+    // Longest phrase first, so `The Big Book Of Crypto` wins over its tail.
+    for (let span = 5; span >= 1; span--) {
       if (i + span > tokens.length) continue;
       const slice = tokens.slice(i, i + span);
       // Avoid grabbing lowercase filler phrases; require at least one capitalized token.
@@ -203,7 +320,14 @@ function matchDomainNameInText(domainOrLabel: string, text: string): string | un
         (target.endsWith('s') && norm === target.slice(0, -1)) ||
         (norm.endsWith('s') && norm.slice(0, -1) === target)
       ) {
-        if (!isStopName(phrase)) return phrase;
+        if (isStopName(phrase)) continue;
+        const token = slice[0] ?? phrase;
+        // Only a glued single token that spells the whole label is re-cased.
+        if (slice.length === 1 && norm === target && !/[a-z0-9][A-Z]/.test(token)) {
+          const split = titleFromDomain(target);
+          if (split !== token && !isStopName(split)) return split;
+        }
+        return phrase;
       }
     }
   }
@@ -364,5 +488,167 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
     summary,
     isNonLatinSource: isNonLatin,
     isRelevantDrop: relevance.isDrop,
+    // Only relevant drops carry structured metadata; noise is never persisted.
+    ...(relevance.isDrop ? extractRichMetadata(text) : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Structured drop metadata: reward pool, deadline, cost, and task steps.
+// Everything here is a deterministic regex extraction over the raw post text.
+// ---------------------------------------------------------------------------
+
+// Reward amounts: `$500K`, `$1.2M`, `$50,000`, `10M $TOKEN`, `2% of total supply`, `50,000 USDC`.
+const REWARD_AMOUNT_RE =
+  /\$\s?\d[\d.,]*\s?[kmb]?(?![a-z])|\d[\d.,]*\s?[kmb]?\s+\$[A-Z][A-Z0-9]{1,9}\b|\d+(?:\.\d+)?\s*%\s*(?:of\s+)?(?:the\s+)?(?:total\s+|token\s+|genesis\s+)?supply|\d[\d.,]*\s?[kmb]?\s+(?:usdc|usdt|usd|dai|eth|sol|btc|bnb|ton|sui|matic|arb|op|avax|ftm|near|apt|sei|tia|hype)\b/gi;
+
+// A reward amount counts only next to reward language; `Raised $12M` is funding, not a pool.
+const REWARD_CONTEXT_BEFORE_RE =
+  /\b(?:reward|prize|airdrop|giveaway|incentive|grant|trading|liquidity|mining|staking)s?\s+pool\b|\bpool\b|\btotal\s+rewards?\b|\brewards?\s+(?:worth|of)\b|\bworth\b|\bup\s+(?:to|for\s+grabs)\b|\bgiveaway\b|\bairdrop\b|\bdrops?\b|\bgenesis\b|\ballocation\b|\brewards?\b|\bprizes?\b|\bgrand\s+prize\b|\bbudget\b|\bincentives?\b|\bwin\b|\bearns?\b|\bpaid\s+out\b|\bpayout\b|\bbacked\s+by\b|\bfunded\b[^.;:\n]{0,14}$/i;
+const REWARD_CONTEXT_AFTER_RE =
+  /^\s*(?:usd|usdc|usdt|tokens?|points?)?\s*(?:in\s+)?(?:reward|prize|airdrop|trading|liquidity|mining|staking)\s+pool\b|^\s*(?:in\s+)?rewards?\b|^\s+(?:airdrop|giveaway|prizes?|grand\s+prize)\b|^\s+supply\b/i;
+
+function extractRewardPool(text: string): string | undefined {
+  for (const match of text.matchAll(REWARD_AMOUNT_RE)) {
+    const start = match.index ?? 0;
+    const before = text.slice(Math.max(0, start - 32), start);
+    const after = text.slice(start + match[0].length, start + match[0].length + 24);
+    if (!REWARD_CONTEXT_BEFORE_RE.test(before) && !REWARD_CONTEXT_AFTER_RE.test(after)) continue;
+
+    const percent = match[0].match(/(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?(?:the\s+)?(?:total\s+|token\s+|genesis\s+)?supply$/i);
+    if (percent) return `${percent[1]}% supply`;
+    return match[0]
+      .replace(/\$\s+/g, '$')
+      .replace(/\s+/g, ' ')
+      .replace(/(\d)\s*([kmb])(?![a-z])/gi, (_m, digit: string, suffix: string) => digit + suffix.toUpperCase())
+      .trim();
+  }
+  return undefined;
+}
+
+const MONTH_SRC =
+  '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const WEEKDAY_SRC = '(?:mon|tues|wednes|thurs|fri|satur|sun)day';
+// Absolute values are returned as written; relative ones keep their keyword (`Ends Friday`).
+const RELATIVE_DEADLINE_VALUE_RE = new RegExp(
+  `^(?:today|tonight|tomorrow|tmrw|eod|eof|end\\s+of|this\\s+|next\\s+|q[1-4](?:\\s|$)|${WEEKDAY_SRC}$)`,
+  'i',
+);
+const DEADLINE_RE = new RegExp(
+  `\\b(end\\s+date|closing\\s+date|deadline|last\\s+call|last\\s+chance|last\\s+day|final\\s+day|time\\s+left|cut\\s*-\\s*off|cutoff|runs\\s+until|ending|ends?|closing|closes?|expiring|expires?|lasting|lasts?|until|till|before|within|through|hurry|due|only|by)\\b` +
+    `(?:\\s*(?:[:=]|\\b(?:in|on|at|by|until|before|the|this|of|around)\\b))?\\s*` +
+    `(\\d{4}-\\d{2}-\\d{2}|${MONTH_SRC}\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{1,2}\\s+${MONTH_SRC}(?:,?\\s+\\d{4})?|${MONTH_SRC}\\s+20\\d{2}|\\d{1,3}\\s*-\\s*\\d{1,3}\\s*h|\\d{1,3}\\s*(?:h|hr|hrs)\\b|(?:\\d+|a|an|one|two|three|few|several|couple\\s+of)\\s+(?:hours?|hrs?|days?|weeks?)\\b|today|tonight|tomorrow|tmrw|eod|eof|end\\s+of\\s+(?:day|week|month|year|quarter)|this\\s+(?:week|month|year|${WEEKDAY_SRC})|next\\s+(?:week|month|year|${WEEKDAY_SRC})|${WEEKDAY_SRC}|q[1-4](?:\\s*20\\d{2})?)`,
+  'i',
+);
+const DEADLINE_KEYWORD_CANON: Record<string, string> = {
+  'end date': 'End date', 'closing date': 'Closing date', deadline: 'Deadline', 'last call': 'Last call',
+  'last chance': 'Last chance', 'last day': 'Last day', 'final day': 'Final day', 'time left': 'Time left',
+  cutoff: 'Cutoff', 'cut-off': 'Cutoff', 'runs until': 'Runs until', ending: 'Ends', end: 'Ends', ends: 'Ends',
+  closing: 'Closes', close: 'Closes', closes: 'Closes', expiring: 'Expires', expire: 'Expires',
+  expires: 'Expires', lasting: 'Lasts', last: 'Lasts', lasts: 'Lasts', until: 'Until', till: 'Till',
+  before: 'Before', within: 'Within', through: 'Through', hurry: 'Hurry', due: 'Due', only: 'Only', by: 'By',
+};
+
+function extractDeadline(text: string): string | undefined {
+  const match = text.match(DEADLINE_RE);
+  if (!match) return undefined;
+  const keyword = (match[1] ?? '').toLowerCase();
+  const value = (match[2] ?? '').replace(/\s+/g, ' ').trim();
+  if (RELATIVE_DEADLINE_VALUE_RE.test(value)) {
+    const label =
+      DEADLINE_KEYWORD_CANON[keyword] ?? keyword.charAt(0).toUpperCase() + keyword.slice(1);
+    return truncateAtWordBoundary(`${label} ${value}`, 40);
+  }
+  return truncateAtWordBoundary(value, 40);
+}
+
+// Costs, most specific first: an explicit price label, a stake/deposit requirement,
+// gas-only wording, free entry, and a zero price. No wording means no cost field.
+const COST_LABEL_RE =
+  /\b(?:cost|price|fee|entry(?:\s+fee)?|mint\s+(?:price|cost))\s*[:=→]\s*(\S.{0,15}?)(?=\s+(?:to|for|until|and|if|when|per)\b|[.,;\n]|$)/i;
+const STAKE_COST_RE =
+  /\b(?:stake|deposit|hold|lock|pay|spend|swap|bridge|buy|bond)(?:\s+(?:at\s+least|min(?:imum)?(?:\s+of)?))?\s+(\$\s?[\d.,]+[kmb]?\+?|[\d.,]+[kmb]?\+?\s*\$?[a-z]{2,6}\+?)(?=\s|[.,;]|$)/i;
+const GAS_ONLY_RE = /\b(?:gas\s*(?:fees?\s*)?only|only\s+gas|just\s+gas|\+\s*gas|excluding\s+gas)\b/i;
+const FREE_RE = /\bfree\b(?!\s+(?:trial|version|vpn|range|fall|tax|from)\b)/i;
+const ZERO_COST_RE = /\$\s?0\b|\b0\s*(?:usd|usdc|usdt|dai|eth|sol)\b|\bno\s+(?:entry\s+)?(?:fee|cost)\b|\bzero\s+(?:fee|cost)\b/i;
+
+function capitalizePhrase(phrase: string): string {
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
+function extractCost(text: string): string | undefined {
+  const labeled = text.match(COST_LABEL_RE)?.[1]?.replace(/\s+/g, ' ').trim();
+  if (labeled) return truncateAtWordBoundary(capitalizePhrase(labeled), 40);
+  const stake = text.match(STAKE_COST_RE)?.[0].replace(/\s+/g, ' ').trim();
+  if (stake) return truncateAtWordBoundary(capitalizePhrase(stake), 40);
+  if (GAS_ONLY_RE.test(text)) return 'Gas only';
+  if (FREE_RE.test(text)) return 'Free';
+  const zero = text.match(ZERO_COST_RE)?.[0].replace(/\s+/g, ' ').trim();
+  return zero ? truncateAtWordBoundary(capitalizePhrase(zero), 40) : undefined;
+}
+
+const MAX_STEPS = 4;
+const MAX_STEP_LEN = 100;
+// Links, bare domains, and @handles are cut out of a step before it is judged.
+const STEP_URL_RE =
+  /https?:\/\/\S+|\bt\.me\/\S+|(?<![\w@.])(?:[\w-]+\.)+(?:com|io|xyz|fun|app|gg|ai|org|net|co|me|site|fi|so|to|dev|eth|sol)(?:\/\S*)?|@\w{2,32}\b/gi;
+// A step must open with an imperative task verb; descriptive sentences never qualify.
+const STEP_VERB_RE =
+  /^(?:please\s+)?(?:add|answer|bind|boost|bridge|browse|buy|claim|collect|comment|complete|connect|create|delegate|deposit|download|earn|explore|fill|finish|follow|get|go|grab|hold|install|invite|join|learn|like|link|lock|log\s*in|login|mint|open|opt\s+in|participate|play|post|provide|redeem|refer|register|restake|retweet|run|set\s+up|share|sign\s+(?:up|in)|spin|stake|start|submit|swap|tag|test|trade|transfer|try|upload|verify|vote|watch|win)\b/i;
+// Wallet secrets, drainer phrasing, referral handles, and channel promos are never steps.
+const STEP_UNSAFE_RE =
+  /\b(?:seed\s+phrase|recovery\s+phrase|private\s+key|mnemonic|passphrase)\b|0x[a-fA-F0-9]{6,}|\b[1-9A-HJ-NP-Za-km-z]{32,44}\b|\bfor\s+more\s+(?:airdrops?|updates?|alpha)\b|\bsubscribe\b/i;
+const STEP_LIST_MARKER_RE =
+  /^\s*(?:\d{1,2}\s*[.):\-]|[*(•▪●▸►➖❯‣⁃]️?|[-–—]\s+|step\s*\d{1,2}\s*[:.\-)]?\s*|step\s*[:\-]\s*)/iu;
+
+function extractSteps(text: string): string[] {
+  const steps: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string): boolean => {
+    if (steps.length >= MAX_STEPS) return true;
+    const step = stripEmoji(raw)
+      .replace(STEP_URL_RE, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,;:|/\\)\]}]+/, '')
+      .replace(/[\s,;:|/\\)+–—.]+$/, '')
+      .trim();
+    if (step.length < 8 || step.length > MAX_STEP_LEN) return false;
+    if (!STEP_VERB_RE.test(step)) return false;
+    if (STEP_UNSAFE_RE.test(step) || DRAINER_RE.test(step) || DOUBLING_SCAM_RE.test(step)) return false;
+    const key = normalizeAlphaNum(step);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    steps.push(step);
+    return steps.length >= MAX_STEPS;
+  };
+
+  const lines = stripOrTranslateCjk(text).split('\n');
+  // Numbered or bulleted lines first: they are the author's own task list.
+  for (const line of lines) {
+    const cleaned = line.replace(STEP_URL_RE, ' ');
+    const marker = cleaned.match(STEP_LIST_MARKER_RE);
+    if (marker && push(cleaned.slice(marker[0].length))) return steps;
+  }
+  // Then any sentence that opens with a task verb. A dot only ends a sentence before whitespace,
+  // so decimals such as `Deposit 0.5 ETH` stay whole.
+  for (const line of lines) {
+    for (const segment of line.split(/(?<=[.!?])\s+|[•●▪➖|]+/)) {
+      if (push(segment)) return steps;
+    }
+  }
+  return steps;
+}
+
+/** Extracts deterministic structured metadata for a relevant drop (absent fields are omitted). */
+export function extractRichMetadata(text: string): RichDropMeta {
+  const rewardPool = extractRewardPool(text);
+  const deadline = extractDeadline(text);
+  const cost = extractCost(text);
+  const steps = extractSteps(text);
+  return {
+    ...(rewardPool ? { rewardPool } : {}),
+    ...(deadline ? { deadline } : {}),
+    ...(cost ? { cost } : {}),
+    ...(steps.length > 0 ? { steps } : {}),
   };
 }

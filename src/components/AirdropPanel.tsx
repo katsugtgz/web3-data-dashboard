@@ -1,20 +1,27 @@
-import type { RefObject } from 'react';
+import { useMemo, type RefObject } from 'react';
 import { CATEGORIES, FIT, TYPES } from '../../shared/constants';
 import type { Card, Tge } from '../../shared/types';
 import { PAGE_STEP, type AirdropFiltersState } from '../hooks/useAirdropFilters';
 import { cardStorageKey, isCardSaved } from '../hooks/useWatchlist';
 import { formatRelativeTime, isStaleTimestamp } from '../lib/format';
 import type { ProjectLogoIndex } from '../lib/visualAssets';
+import { summarizeCardMix } from '../lib/viz';
+import { CompactProjectsTable } from './CompactProjectRow';
 import { FilterDock } from './FilterDock';
 import { KpiStrip } from './KpiStrip';
 import { ProjectCard } from './ProjectCard';
 import { TgeCarousel } from './TgeCarousel';
+import { useViewMode, ViewToggle } from './ViewToggle';
 
 const STALE_AIRDROPS_MS = 6 * 3_600_000;
+const AIRDROPS_VIEW_KEY = 'radar.airdrops.view';
+const EMPTY_CARDS: readonly Card[] = [];
 
 interface Props {
   filters: AirdropFiltersState;
   cardCount: number;
+  /** Every curated card, for the KPI tier/source distribution (filters do not apply). */
+  cards?: readonly Card[];
   tgeItems: Tge[];
   fetchedAt: number | null;
   isLive: boolean;
@@ -31,6 +38,7 @@ interface Props {
 export function AirdropPanel({
   filters,
   cardCount,
+  cards = EMPTY_CARDS,
   tgeItems,
   fetchedAt,
   isLive,
@@ -44,6 +52,8 @@ export function AirdropPanel({
   onCopyBrief,
 }: Props) {
   const isStale = isStaleTimestamp(fetchedAt, STALE_AIRDROPS_MS);
+  const [view, selectView] = useViewMode(AIRDROPS_VIEW_KEY);
+  const mix = useMemo(() => summarizeCardMix(cards), [cards]);
   const emptyMsg =
     filters.status === 'saved' && filters.counts.savedMatch === 0
       ? 'No saved projects yet. Click the star icon on any project card to build your watchlist.'
@@ -57,6 +67,7 @@ export function AirdropPanel({
         </p>
       )}
       <KpiStrip
+        mix={mix}
         counts={filters.counts}
         tgeCount={tgeItems.length}
         isLive={isLive}
@@ -95,25 +106,21 @@ export function AirdropPanel({
             Reset filters
           </button>
         )}
+        <ViewToggle view={view} onChange={selectView} label="airdrops" />
       </div>
 
       {filters.visible.length > 0 ? (
         <>
-          <div className="grid">
-            {filters.renderedCards.map(c => (
-              <ProjectCard
-                key={cardStorageKey(c)}
-                card={c}
-                fit={FIT}
-                saved={isCardSaved(saved, c)}
-                doneTasks={doneTasks}
-                logoIndex={logoIndex}
-                onToggleSaved={onToggleSaved}
-                onDetails={onSelectDetail}
-                onCopyBrief={onCopyBrief}
-              />
-            ))}
-          </div>
+          <ProjectList
+            view={view}
+            cards={filters.renderedCards}
+            saved={saved}
+            doneTasks={doneTasks}
+            logoIndex={logoIndex}
+            onToggleSaved={onToggleSaved}
+            onSelectDetail={onSelectDetail}
+            onCopyBrief={onCopyBrief}
+          />
           {filters.remaining > 0 && (
             <div className="loadmore-bar">
               <button type="button" className="btn btn-subtle" onClick={filters.showMore}>
@@ -161,5 +168,53 @@ export function AirdropPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+type ProjectView = 'card' | 'compact';
+
+interface ProjectListProps {
+  view: ProjectView;
+  cards: readonly Card[];
+  saved: Set<string>;
+  doneTasks: Set<string>;
+  logoIndex?: ProjectLogoIndex;
+  onToggleSaved: (key: string, legacyKey?: string) => void;
+  onSelectDetail: (card: Card) => void;
+  onCopyBrief: (card: Card) => void;
+}
+
+/** Curated projects as cards or as a compact table, per the view toggle. */
+function ProjectList({ view, cards, saved, doneTasks, logoIndex, onToggleSaved, onSelectDetail, onCopyBrief }: ProjectListProps) {
+  if (view === 'compact') {
+    return (
+      <CompactProjectsTable
+        cards={cards}
+        saved={saved}
+        doneTasks={doneTasks}
+        logoIndex={logoIndex}
+        onToggleSaved={onToggleSaved}
+        onDetails={onSelectDetail}
+        onCopyBrief={onCopyBrief}
+      />
+    );
+  }
+
+  return (
+    <div className="grid">
+      {cards.map(c => (
+        <ProjectCard
+          key={cardStorageKey(c)}
+          card={c}
+          fit={FIT}
+          saved={isCardSaved(saved, c)}
+          doneTasks={doneTasks}
+          logoIndex={logoIndex}
+          onToggleSaved={onToggleSaved}
+          onDetails={onSelectDetail}
+          onCopyBrief={onCopyBrief}
+        />
+      ))}
+    </div>
   );
 }
