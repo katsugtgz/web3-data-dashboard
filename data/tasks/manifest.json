@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "kind": "task_manifest",
+  "tasks": [
+    {
+      "task_id": "voucher-demo",
+      "revision": 1,
+      "ref_path": "voucher-demo.v1.json",
+      "ref_sha256": "0411014bfab9d13f0a1aa7772e36ad7ee01422514e2ea7fbe49e2e93611cdae0",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [],
+        "domains": []
+      }
+    },
+    {
+      "task_id": "browser-email-demo",
+      "revision": 1,
+      "ref_path": "browser-email-demo.v1.json",
+      "ref_sha256": "d2021ea311d6a3753bcdc5aa32cb88ba45505958121fd54be401d2849a603481",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [],
+        "domains": []
+      }
+    },
+    {
+      "task_id": "flop-testnet-voucher",
+      "revision": 1,
+      "ref_path": "flop-testnet-voucher.v1.json",
+      "ref_sha256": "5f059e3f5f47b25db4d94f8e50426e942b275f963bc2308615fd1263eca51a3c",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [
+          "7331604250321743f7293ccd2a8740720b4df8b1",
+          "3d019ff90b3736d50cba052cbe3a4bc4a40cf77e"
+        ],
+        "domains": []
+      }
+    }
+  ]
+}

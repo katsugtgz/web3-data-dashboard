@@ -1,0 +1,569 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Web3 Radar task reference v1",
+  "description": "A reviewed, versioned task reference. Cross-field rules (adapter matches mode, fixture only for synthetic tasks, dependencies point to earlier steps, human steps carry a checkpoint, an inactive task declares an await_activation checkpoint) are enforced by scripts/contract.py validate_ref and its TypeScript twin shared/taskContract.ts, not by this schema. Title, summary, review and step title hold reviewed text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "task_id",
+    "revision",
+    "title",
+    "summary",
+    "mode",
+    "adapter",
+    "review",
+    "networks",
+    "activation",
+    "required_capabilities",
+    "official_sources",
+    "steps",
+    "checkpoints",
+    "proof",
+    "fixture"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "task_ref"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "$ref": "#/$defs/reviewed_text"
+    },
+    "summary": {
+      "$ref": "#/$defs/reviewed_text"
+    },
+    "mode": {
+      "enum": [
+        "synthetic_fixture",
+        "live_read_only"
+      ]
+    },
+    "adapter": {
+      "enum": [
+        "fixture_voucher",
+        "fixture_browser_email",
+        "http_read_only"
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_by",
+        "reviewed_at"
+      ],
+      "properties": {
+        "reviewed_by": {
+          "$ref": "#/$defs/reviewed_text"
+        },
+        "reviewed_at": {
+          "$ref": "#/$defs/reviewed_text"
+        }
+      }
+    },
+    "networks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9:._-]{0,127}$"
+      },
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "source_ids"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "active",
+            "not_active",
+            "unknown"
+          ]
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "required_capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "official_sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      },
+      "maxItems": 32
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      },
+      "minItems": 1,
+      "maxItems": 32
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/checkpoint"
+      },
+      "maxItems": 32
+    },
+    "proof": {
+      "$ref": "#/$defs/proof"
+    },
+    "fixture": {
+      "$ref": "#/$defs/fixture"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+    },
+    "capability": {
+      "enum": [
+        "network_read",
+        "browser",
+        "email_inbox",
+        "wallet_human"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "kind": {
+          "enum": [
+            "official_documentation",
+            "public_read_only_endpoint",
+            "official_app"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 2048,
+          "pattern": "^https://[^\\s/@?#]+(?::[0-9]+)?(?:[/?#][^\\s]*)?$"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "actor",
+        "depends_on",
+        "source_ids",
+        "check",
+        "checkpoint_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "title": {
+          "$ref": "#/$defs/reviewed_text"
+        },
+        "actor": {
+          "enum": [
+            "agent",
+            "human"
+          ]
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        },
+        "check": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "reviewed_activation",
+                        "fixture_eligibility",
+                        "fixture_receipt",
+                        "fixture_account_status"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "source_id",
+                    "pins"
+                  ],
+                  "properties": {
+                    "type": {
+                      "const": "http_json_pins"
+                    },
+                    "source_id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+                    },
+                    "pins": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "pattern": "^[\\x20-\\x7e]+$"
+                      },
+                      "required": [],
+                      "properties": {},
+                      "minProperties": 1,
+                      "maxProperties": 32,
+                      "propertyNames": {
+                        "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "checkpoint_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "action",
+        "resume_when"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "type": {
+          "enum": [
+            "await_activation",
+            "batch_inputs",
+            "login",
+            "email_verification",
+            "captcha",
+            "kyc",
+            "wallet_signature",
+            "form_submit"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
+        },
+        "resume_when": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
+        }
+      }
+    },
+    "proof": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "pins"
+          ],
+          "properties": {
+            "kind": {
+              "const": "onchain_receipt"
+            },
+            "pins": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chain",
+                "contract",
+                "event",
+                "recipient",
+                "voucher_id"
+              ],
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                },
+                "contract": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                },
+                "event": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                },
+                "recipient": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                },
+                "voucher_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "source_id",
+            "required_status"
+          ],
+          "properties": {
+            "kind": {
+              "const": "account_status"
+            },
+            "source_id": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+            },
+            "required_status": {
+              "const": "verified"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unknown_until_active"
+            }
+          }
+        }
+      ]
+    },
+    "fixture": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cases"
+          ],
+          "properties": {
+            "cases": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 64,
+              "propertyNames": {
+                "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/observation"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "eligible",
+            "receipt"
+          ],
+          "properties": {
+            "eligible": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/receipt"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "page_origin",
+            "account_status",
+            "inputs_ready"
+          ],
+          "properties": {
+            "page_origin": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 2048,
+              "pattern": "^https://[^/?#:@]+/?$"
+            },
+            "account_status": {
+              "enum": [
+                "verified",
+                "pending",
+                "unverified"
+              ]
+            },
+            "inputs_ready": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chain",
+        "contract",
+        "event",
+        "recipient",
+        "voucher_id",
+        "success",
+        "finalized"
+      ],
+      "properties": {
+        "chain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "contract": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "recipient": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "voucher_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "finalized": {
+          "type": "boolean"
+        }
+      }
+    },
+    "reviewed_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
+    }
+  }
+}

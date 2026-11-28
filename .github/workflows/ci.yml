@@ -38,6 +38,10 @@ jobs:
         run: bash scripts/check-no-cjk.sh
       - name: Check zero gambling/betting airdrops in snapshot
         run: bun run check:gambling
+      - name: Check task manifest, references, and golden report
+        run: bun run check:tasks
+      - name: Test the Python task runner
+        run: bun run test:py
       - name: Worker deploy dry-run
         working-directory: worker
         run: npx wrangler deploy --dry-run

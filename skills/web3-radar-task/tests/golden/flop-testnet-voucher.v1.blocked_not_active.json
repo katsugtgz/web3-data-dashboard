@@ -1,0 +1,42 @@
+{
+  "attempted_steps": [
+    {
+      "id": "verify_voucher_window",
+      "outcome": "blocked",
+      "source_ids": [
+        "official_registry",
+        "official_timeline"
+      ]
+    },
+    {
+      "id": "verify_network",
+      "outcome": "skipped",
+      "source_ids": [
+        "faucet_chain"
+      ]
+    }
+  ],
+  "checkpoint": {
+    "action": "Wait for official FLOP sources to publish the voucher activation block and supported eligibility path.",
+    "human_action_required_now": false,
+    "id": "await_official_activation",
+    "resume_when": "Official finalized activation block and supported eligibility path published.",
+    "type": "await_activation"
+  },
+  "error": null,
+  "evidence": {
+    "account_status": "not_checked",
+    "activation": "not_active",
+    "eligibility": "not_checked",
+    "network": "not_checked",
+    "receipt": "not_checked"
+  },
+  "kind": "run_report",
+  "missing_capabilities": [],
+  "mode": "live_read_only",
+  "ref_sha256": "5f059e3f5f47b25db4d94f8e50426e942b275f963bc2308615fd1263eca51a3c",
+  "revision": 1,
+  "schema_version": 1,
+  "status": "blocked_not_active",
+  "task_id": "flop-testnet-voucher"
+}
