@@ -1,17 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Web3 Radar task reference v1",
-  "description": "A reviewed, versioned task reference. Cross-field rules (adapter matches mode, fixture only for synthetic tasks, dependencies point to earlier steps, human steps carry a checkpoint, an inactive task declares an await_activation checkpoint) are enforced by scripts/contract.py validate_ref and its TypeScript twin, not by this schema.",
+  "description": "A reviewed, versioned task reference. Cross-field rules (adapter matches mode, fixture only for synthetic tasks, dependencies point to earlier steps, human steps carry a checkpoint, an inactive task declares an await_activation checkpoint) are enforced by scripts/contract.py validate_ref and its TypeScript twin shared/taskContract.ts, not by this schema. Title, summary, review and step title hold reviewed text.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "kind",
     "task_id",
     "revision",
+    "title",
+    "summary",
     "mode",
     "adapter",
-    "activation",
+    "review",
     "networks",
+    "activation",
     "required_capabilities",
     "official_sources",
     "steps",
@@ -23,6 +27,9 @@
     "schema_version": {
       "const": 1
     },
+    "kind": {
+      "const": "task_ref"
+    },
     "task_id": {
       "type": "string",
       "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
@@ -30,6 +37,12 @@
     "revision": {
       "type": "integer",
       "minimum": 1
+    },
+    "title": {
+      "$ref": "#/$defs/reviewed_text"
+    },
+    "summary": {
+      "$ref": "#/$defs/reviewed_text"
     },
     "mode": {
       "enum": [
@@ -43,6 +56,32 @@
         "fixture_browser_email",
         "http_read_only"
       ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_by",
+        "reviewed_at"
+      ],
+      "properties": {
+        "reviewed_by": {
+          "$ref": "#/$defs/reviewed_text"
+        },
+        "reviewed_at": {
+          "$ref": "#/$defs/reviewed_text"
+        }
+      }
+    },
+    "networks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9:._-]{0,127}$"
+      },
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true
     },
     "activation": {
       "type": "object",
@@ -67,16 +106,6 @@
           "uniqueItems": true
         }
       }
-    },
-    "networks": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9:._-]{0,127}$"
-      },
-      "minItems": 1,
-      "maxItems": 16,
-      "uniqueItems": true
     },
     "required_capabilities": {
       "type": "array",
@@ -159,6 +188,7 @@
       "additionalProperties": false,
       "required": [
         "id",
+        "title",
         "actor",
         "depends_on",
         "source_ids",
@@ -169,6 +199,9 @@
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "title": {
+          "$ref": "#/$defs/reviewed_text"
         },
         "actor": {
           "enum": [
@@ -208,28 +241,9 @@
                       "enum": [
                         "reviewed_activation",
                         "fixture_eligibility",
-                        "fixture_receipt"
-                      ]
-                    }
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "type",
-                    "source_id"
-                  ],
-                  "properties": {
-                    "type": {
-                      "enum": [
-                        "official_origin",
+                        "fixture_receipt",
                         "fixture_account_status"
                       ]
-                    },
-                    "source_id": {
-                      "type": "string",
-                      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
                     }
                   }
                 },
@@ -478,7 +492,7 @@
               "type": "string",
               "minLength": 8,
               "maxLength": 2048,
-              "pattern": "^https?://[^/?#]+/?$"
+              "pattern": "^https://[^/?#:@]+/?$"
             },
             "account_status": {
               "enum": [
@@ -544,6 +558,12 @@
           "type": "boolean"
         }
       }
+    },
+    "reviewed_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
     }
   }
 }

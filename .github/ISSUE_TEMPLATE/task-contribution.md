@@ -1,6 +1,6 @@
 ---
 name: Task run contribution
-about: Submit validated read-only task run evidence maintainer review
+about: Submit validated read-only task run evidence for maintainer review
 title: '[contribution] '
 labels: ['task-contribution', 'needs-review']
 assignees: ''

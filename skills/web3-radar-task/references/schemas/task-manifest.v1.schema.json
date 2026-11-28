@@ -1,16 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Web3 Radar task manifest v1",
-  "description": "Rows bind a task ID and revision to a reference file by its raw-byte SHA-256. A synthetic fixture row must keep feed_ids, card_ids and domains empty; contract.py validate_ref checks that rule.",
+  "description": "Rows bind a task ID and revision to a reference file by its raw-byte SHA-256, and to the cards, feeds and domains the task covers. A card, feed or domain belongs to one row. A synthetic fixture row keeps its bindings empty; scripts/check-task-refs.mts and contract.py validate_ref check that rule.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "kind",
     "tasks"
   ],
   "properties": {
     "schema_version": {
       "const": 1
+    },
+    "kind": {
+      "const": "task_manifest"
     },
     "tasks": {
       "type": "array",
@@ -22,6 +26,38 @@
     }
   },
   "$defs": {
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "card_ids",
+        "feed_ids",
+        "domains"
+      ],
+      "properties": {
+        "card_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          }
+        },
+        "feed_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?=.*\\.)[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+          }
+        }
+      }
+    },
     "entry": {
       "type": "object",
       "additionalProperties": false,
@@ -30,9 +66,7 @@
         "revision",
         "ref_path",
         "ref_sha256",
-        "feed_ids",
-        "card_ids",
-        "domains"
+        "bindings"
       ],
       "properties": {
         "task_id": {
@@ -45,32 +79,14 @@
         },
         "ref_path": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9.-]{0,120}\\.json$"
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?\\.v[1-9][0-9]*\\.json$"
         },
         "ref_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },
-        "feed_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{40}$"
-          }
-        },
-        "card_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
-          }
-        },
-        "domains": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
-          }
+        "bindings": {
+          "$ref": "#/$defs/bindings"
         }
       }
     }

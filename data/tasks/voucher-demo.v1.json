@@ -1,21 +1,29 @@
 {
   "schema_version": 1,
+  "kind": "task_ref",
   "task_id": "voucher-demo",
   "revision": 1,
+  "title": "Voucher demo (synthetic fixture)",
+  "summary": "Demo only. Check one synthetic eligibility and receipt case against the pinned fixture values. No live claim is verified.",
   "mode": "synthetic_fixture",
   "adapter": "fixture_voucher",
-  "activation": {
-    "state": "active",
-    "source_ids": []
+  "review": {
+    "reviewed_by": "@katsugtgz",
+    "reviewed_at": "2026-11-28"
   },
   "networks": [
     "fixture-chain"
   ],
+  "activation": {
+    "state": "active",
+    "source_ids": []
+  },
   "required_capabilities": [],
   "official_sources": [],
   "steps": [
     {
       "id": "check_fixture_eligibility",
+      "title": "Check the fixture eligibility",
       "actor": "agent",
       "depends_on": [],
       "source_ids": [],
@@ -26,6 +34,7 @@
     },
     {
       "id": "voucher_claim_handoff",
+      "title": "Hand off the simulated voucher claim",
       "actor": "human",
       "depends_on": [
         "check_fixture_eligibility"
@@ -36,6 +45,7 @@
     },
     {
       "id": "check_fixture_receipt",
+      "title": "Check the synthetic receipt",
       "actor": "agent",
       "depends_on": [
         "voucher_claim_handoff"

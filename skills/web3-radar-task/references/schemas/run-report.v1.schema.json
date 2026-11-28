@@ -1,25 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Web3 Radar run report v1",
-  "description": "Output of scripts/run.py on stdout. task_id, revision, mode and adapter are null when the run stopped before they were known and the requested task ID is not a safe identifier. A report never echoes observation, network, or command-line input.",
+  "description": "Output of scripts/run.py on stdout, with the key layout of RunReportV1 in shared/taskContract.ts. task_id, revision, ref_sha256 and mode are null only for invalid_input, when the run stopped before they were known. A needs_user status always carries a checkpoint that requires the human action now. A report never echoes observation, network, or command-line input.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "kind",
     "task_id",
     "revision",
+    "ref_sha256",
     "mode",
-    "adapter",
     "status",
-    "error",
-    "steps",
+    "attempted_steps",
     "evidence",
+    "missing_capabilities",
     "checkpoint",
-    "missing_capabilities"
+    "error"
   ],
   "properties": {
     "schema_version": {
       "const": 1
+    },
+    "kind": {
+      "const": "run_report"
     },
     "task_id": {
       "type": [
@@ -35,18 +39,17 @@
       ],
       "minimum": 1
     },
+    "ref_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "mode": {
       "enum": [
         "synthetic_fixture",
         "live_read_only",
-        null
-      ]
-    },
-    "adapter": {
-      "enum": [
-        "fixture_voucher",
-        "fixture_browser_email",
-        "http_read_only",
         null
       ]
     },
@@ -59,6 +62,33 @@
         "needs_user",
         "verified_fixture",
         "verified_live"
+      ]
+    },
+    "attempted_steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step_report"
+      },
+      "maxItems": 32
+    },
+    "evidence": {
+      "$ref": "#/$defs/evidence"
+    },
+    "missing_capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      },
+      "uniqueItems": true
+    },
+    "checkpoint": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/checkpoint_report"
+        }
       ]
     },
     "error": {
@@ -83,33 +113,6 @@
         "receipt_conflicts_with_ineligible",
         null
       ]
-    },
-    "steps": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/step_report"
-      },
-      "maxItems": 32
-    },
-    "evidence": {
-      "$ref": "#/$defs/evidence"
-    },
-    "checkpoint": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "$ref": "#/$defs/checkpoint_report"
-        }
-      ]
-    },
-    "missing_capabilities": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/capability"
-      },
-      "uniqueItems": true
     }
   },
   "$defs": {

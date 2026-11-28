@@ -16,7 +16,9 @@
     "snapshot": "bun scripts/snapshot.mts",
     "ingest:heavy": "bun scripts/ingest-heavy.mts",
     "check:cjk": "bash scripts/check-no-cjk.sh",
-    "check:gambling": "bun scripts/check-no-gambling.mts"
+    "check:gambling": "bun scripts/check-no-gambling.mts",
+    "check:tasks": "bun scripts/check-task-refs.mts",
+    "test:py": "bun scripts/run-python-tests.mts"
   },
   "type": "module",
   "dependencies": {

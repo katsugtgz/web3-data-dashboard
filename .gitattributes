@@ -1,3 +1,4 @@
 data/tasks/*.json -text
 skills/**/*.json -text
 skills/**/*.py text eol=lf
+skills/web3-radar-task/SKILL.md text eol=lf

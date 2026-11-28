@@ -1,35 +1,42 @@
 {
   "schema_version": 1,
+  "kind": "task_manifest",
   "tasks": [
     {
       "task_id": "voucher-demo",
       "revision": 1,
       "ref_path": "voucher-demo.v1.json",
-      "ref_sha256": "f4b9ae2cb67bb5a537a6c021701355177c025b54824478c341329636dfc89f7f",
-      "feed_ids": [],
-      "card_ids": [],
-      "domains": []
+      "ref_sha256": "0411014bfab9d13f0a1aa7772e36ad7ee01422514e2ea7fbe49e2e93611cdae0",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [],
+        "domains": []
+      }
     },
     {
       "task_id": "browser-email-demo",
       "revision": 1,
       "ref_path": "browser-email-demo.v1.json",
-      "ref_sha256": "d383c17707875cb9cf0a2adbbe630b1c5838a46a71d813de4d2f668ded9f79b8",
-      "feed_ids": [],
-      "card_ids": [],
-      "domains": []
+      "ref_sha256": "d2021ea311d6a3753bcdc5aa32cb88ba45505958121fd54be401d2849a603481",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [],
+        "domains": []
+      }
     },
     {
       "task_id": "flop-testnet-voucher",
       "revision": 1,
       "ref_path": "flop-testnet-voucher.v1.json",
-      "ref_sha256": "43ce641db17ba93340c4c0ccebe4b3c6548cdacfed5a0b6e4c9095debfcce5a1",
-      "feed_ids": [
-        "7331604250321743f7293ccd2a8740720b4df8b1",
-        "3d019ff90b3736d50cba052cbe3a4bc4a40cf77e"
-      ],
-      "card_ids": [],
-      "domains": []
+      "ref_sha256": "5f059e3f5f47b25db4d94f8e50426e942b275f963bc2308615fd1263eca51a3c",
+      "bindings": {
+        "card_ids": [],
+        "feed_ids": [
+          "7331604250321743f7293ccd2a8740720b4df8b1",
+          "3d019ff90b3736d50cba052cbe3a4bc4a40cf77e"
+        ],
+        "domains": []
+      }
     }
   ]
 }

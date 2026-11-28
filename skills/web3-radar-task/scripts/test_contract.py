@@ -151,6 +151,26 @@ class ContractVectorTests(unittest.TestCase):
             raise AssertionError("unknown context %r" % context)
         self.assertEqual(actual, vector["expect"])
 
+    def test_exemptions_match_whole_segments(self):
+        # A "*" segment matches any one segment: the same rule as isExempt in shared/taskContract.ts.
+        origin = ["$.fixture.cases.*.page_origin"]
+        for label, value, exempt_paths in (
+            ("any case name", {"fixture": {"cases": {"awaiting_verification": {"page_origin": "Code 1234"}}}}, origin),
+            ("array segment stays literal", {"tasks": [{"ref_sha256": "Code 1234"}]}, ["$.tasks[*].ref_sha256"]),
+            ("last segment", {"steps": [{"check": {"pins": {"genesisHash": "Code 1234"}}}]}, ["$.steps[*].check.pins.*"]),
+        ):
+            with self.subTest(label=label):
+                self.assertIsNone(contract.scan_secrets(value, exempt_paths))
+        for label, value in (
+            ("one segment deeper", {"fixture": {"cases": {"a": {"receipt": {"page_origin": "Code 1234"}}}}}),
+            ("one segment shorter", {"fixture": {"cases": {"page_origin": "Code 1234"}}}),
+            ("sibling field", {"fixture": {"cases": {"a": {"page_origin": "ok", "note": "Code 1234"}}}}),
+        ):
+            with self.subTest(label=label):
+                self.assertEqual(contract.scan_secrets(value, origin), "secret_detected")
+        self.assertFalse(contract.contains_url({"fixture": {"cases": {"a": {"page_origin": "https://app.fixture.invalid"}}}}, origin))
+        self.assertTrue(contract.contains_url({"fixture": {"cases": {"a": {"note": "www.example.invalid"}}}}, origin))
+
     def test_contract_vectors(self):
         vectors = VECTORS["vectors"]
         self.assertEqual(VECTORS["schema_version"], contract.TASK_SCHEMA_VERSION)
@@ -187,12 +207,19 @@ class BundledDataTests(unittest.TestCase):
                 ref = load_json(TASKS / entry["ref_path"])
                 contract.validate_ref(ref, entry)
                 assert_schema(ref, ref_schema)
-        self.assertEqual([entry["task_id"] for entry in manifest["tasks"]], [
+                self.assertEqual((ref["kind"], ref["review"]["reviewed_by"]), ("task_ref", "@katsugtgz"))
+                self.assertTrue(all(step["title"] for step in ref["steps"]))
+        self.assertEqual((manifest["kind"], [entry["task_id"] for entry in manifest["tasks"]]), ("task_manifest", [
             "voucher-demo", "browser-email-demo", "flop-testnet-voucher",
-        ])
-        self.assertEqual(manifest["tasks"][2]["feed_ids"], [
-            "7331604250321743f7293ccd2a8740720b4df8b1", "3d019ff90b3736d50cba052cbe3a4bc4a40cf77e",
-        ])
+        ]))
+        self.assertEqual(manifest["tasks"][2]["bindings"], {
+            "card_ids": [],
+            "feed_ids": ["7331604250321743f7293ccd2a8740720b4df8b1", "3d019ff90b3736d50cba052cbe3a4bc4a40cf77e"],
+            "domains": [],
+        })
+        self.assertEqual([entry["bindings"] for entry in manifest["tasks"][:2]], [
+            {"card_ids": [], "feed_ids": [], "domains": []},
+        ] * 2)
 
     def test_manifest_hashes_are_raw_byte_sha256(self):
         for entry in load_json(TASKS / "manifest.json")["tasks"]:
@@ -204,7 +231,12 @@ class BundledDataTests(unittest.TestCase):
         golden = SKILL / "tests" / "golden" / "flop-testnet-voucher.v1.blocked_not_active.json"
         report = load_json(golden)
         assert_schema(report, load_schema("run-report"))
+        flop = load_ref("flop-testnet-voucher")[0]
         self.assertEqual(report["status"], "blocked_not_active")
+        self.assertEqual((report["kind"], report["ref_sha256"]), ("run_report", flop["ref_sha256"]))
+        self.assertEqual([step["id"] for step in report["attempted_steps"]], [
+            step["id"] for step in load_ref("flop-testnet-voucher")[1]["steps"]
+        ])
 
     def test_bundled_files_are_ascii_with_lf_and_final_newline(self):
         files = [path for path in SKILL.rglob("*") if path.is_file()]
@@ -243,7 +275,10 @@ REF_CASES = [
     ("voucher-demo", ("steps", 1, "checkpoint_id"), None, "invalid_reference"),
     ("voucher-demo", ("steps", 0, "checkpoint_id"), "voucher_claim_handoff", "invalid_reference"),
     ("voucher-demo", ("steps", 1, "checkpoint_id"), "no_such_checkpoint", "invalid_reference"),
-    ("voucher-demo", ("steps", 1, "check"), {"type": "fixture_eligibility"}, "invalid_reference"),
+    ("voucher-demo", ("kind",), "task", "invalid_reference"),
+    ("voucher-demo", ("title",), "See https://example.invalid/docs", "invalid_reference"),
+    ("voucher-demo", ("steps", 0, "title"), "", "invalid_reference"),
+    ("voucher-demo", ("review", "reviewer"), "x", "invalid_reference"),
     ("voucher-demo", ("steps", 0, "check"), {"type": "fixture_eligibility", "url": "x"}, "invalid_reference"),
     ("voucher-demo", ("steps", 0, "check"), {"type": "http_json_pins", "source_id": "x", "pins": {"a": "b"}}, "mode_not_allowed"),
     ("voucher-demo", ("checkpoints", 0, "action"), "See https://example.invalid/docs", "invalid_reference"),
@@ -267,7 +302,9 @@ REF_CASES = [
     ("voucher-demo", ("proof",), None, "invalid_reference"),
     ("browser-email-demo", ("fixture", "cases", "verified", "account_status"), "origin_mismatch", "invalid_field_value"),
     ("browser-email-demo", ("fixture", "cases", "verified", "page_origin"), "app.fixture.invalid", "invalid_field_value"),
-    ("browser-email-demo", ("fixture", "cases", "verified", "page_origin"), "https://user@app.fixture.invalid/", "pii_detected"),
+    # The page origin is exempt from the scanner, as in scripts/check-task-refs.mts, so its shape rule rejects this.
+    ("browser-email-demo", ("fixture", "cases", "verified", "page_origin"), "https://user@app.fixture.invalid/", "invalid_field_value"),
+    ("browser-email-demo", ("fixture", "cases", "verified", "page_origin"), "http://app.fixture.invalid/", "invalid_reference"),
     ("browser-email-demo", ("official_sources", 0, "kind"), "official_documentation", "invalid_reference"),
     ("browser-email-demo", ("official_sources", 0, "url"), "https://user:pw@app.fixture.invalid/", "pii_detected"),
     ("browser-email-demo", ("official_sources", 0, "url"), "http://app.fixture.invalid/", "invalid_reference"),
@@ -275,6 +312,7 @@ REF_CASES = [
     ("browser-email-demo", ("steps", 1, "source_ids"), ["no_such_source"], "invalid_reference"),
     ("browser-email-demo", ("steps", 2, "check", "source_id"), "no_such_source", "invalid_reference"),
     ("flop-testnet-voucher", ("checkpoints",), [], "invalid_reference"),
+    ("flop-testnet-voucher", ("official_sources",), [], "invalid_reference"),
     ("flop-testnet-voucher", ("activation", "state"), "active", "invalid_reference"),
     ("flop-testnet-voucher", ("steps", 1, "check", "source_id"), "official_timeline", "mode_not_allowed"),
     ("flop-testnet-voucher", ("steps", 1, "check", "pins"), {}, "invalid_reference"),
@@ -305,6 +343,8 @@ class RefRuleTests(unittest.TestCase):
             ("voucher-demo", changed(("required_capabilities",), ["browser"])),
             ("voucher-demo", inactive_with_wait),
             ("flop-testnet-voucher", changed(("activation", "state"), "unknown")),
+            # An agent step may carry no check, as the origin precheck of the browser fixture does.
+            ("browser-email-demo", changed(("steps", 2, "check"), None)),
         ):
             with self.subTest(task=task_id):
                 entry, ref = load_ref(task_id)
@@ -312,9 +352,23 @@ class RefRuleTests(unittest.TestCase):
                 apply(ref)
                 contract.validate_ref(ref, entry)
 
+    def test_fixture_without_a_human_step_is_rejected(self):
+        # Every needs_user report names a checkpoint, so a fixture needs a human step to name one.
+        for task_id, index in (("voucher-demo", 1), ("browser-email-demo", 1)):
+            def drop_human(ref, index=index):
+                ref["steps"][index].update(actor="agent", checkpoint_id=None)
+
+            with self.subTest(task_id=task_id):
+                entry, ref = load_ref(task_id)
+                ref = copy.deepcopy(ref)
+                drop_human(ref)
+                with self.assertRaises(contract.Invalid):
+                    contract.validate_ref(ref, entry)
+
     def test_unknown_fields_are_rejected_at_every_level(self):
         for task_id, path in (
             ("voucher-demo", ("activation",)),
+            ("voucher-demo", ("review",)),
             ("voucher-demo", ("steps", 0)),
             ("voucher-demo", ("steps", 0, "check")),
             ("voucher-demo", ("checkpoints", 0)),
@@ -328,7 +382,9 @@ class RefRuleTests(unittest.TestCase):
                 contract.validate_ref(ref, entry)
 
     def test_missing_fields_are_rejected(self):
-        for path in (("proof", "pins", "chain"), ("steps", 0, "actor"), ("activation", "state")):
+        for path in (
+            ("proof", "pins", "chain"), ("steps", 0, "actor"), ("steps", 0, "title"), ("review", "reviewed_at"),
+        ):
             entry, ref = load_ref("voucher-demo")
             ref = copy.deepcopy(ref)
             deleted(path)(ref)
@@ -341,24 +397,33 @@ class RefRuleTests(unittest.TestCase):
             contract.validate_ref(voucher, dict(entry, revision=2))
         self.assertEqual(caught.exception.code, "invalid_reference")
         with self.assertRaises(contract.Invalid) as caught:
-            contract.validate_ref(voucher, dict(entry, feed_ids=["0" * 40]))
+            contract.validate_ref(voucher, dict(entry, bindings=dict(entry["bindings"], feed_ids=["0" * 40])))
         self.assertEqual(caught.exception.code, "invalid_manifest")
 
     def test_manifest_violations(self):
         original = load_json(TASKS / "manifest.json")
+        bound = lambda field: ("tasks", 0, "bindings", field)  # noqa: E731
         cases = [
             (("schema_version",), 2),
+            (("kind",), "task_list"),
             (("tasks", 0, "task_id"), "browser-email-demo"),
             (("tasks", 0, "revision"), 0),
             (("tasks", 0, "ref_path"), "../voucher-demo.v1.json"),
             (("tasks", 0, "ref_path"), "voucher-demo.json;j"),
             (("tasks", 0, "ref_path"), "voucher-demo.v1.json\n"),
-            (("tasks", 0, "feed_ids"), ["0" * 40 + "\n"]),
-            (("tasks", 0, "domains"), ["flop.finance\r\n"]),
+            (("tasks", 0, "ref_path"), "voucher-demo.v2.json"),
+            (("tasks", 0, "bindings"), []),
+            (("tasks", 0, "bindings", "slugs"), []),
+            (bound("feed_ids"), ["0" * 40 + "\n"]),
+            (bound("domains"), ["flop.finance\r\n"]),
+            (bound("domains"), ["localhost"]),
             (("tasks", 0, "ref_sha256"), "abc"),
-            (("tasks", 0, "feed_ids"), ["abc"]),
-            (("tasks", 0, "card_ids"), ["abc"]),
-            (("tasks", 0, "domains"), ["Example Domain"]),
+            (bound("feed_ids"), ["abc"]),
+            (bound("card_ids"), ["abc"]),
+            (bound("domains"), ["Example Domain"]),
+            # A card, feed or domain belongs to one task.
+            (bound("feed_ids"), ["7331604250321743f7293ccd2a8740720b4df8b1"]),
+            (bound("feed_ids"), ["b" * 40, "b" * 40]),
             (("tasks", 0, "unexpected"), 1),
             (("tasks",), []),
         ]
@@ -380,6 +445,8 @@ class SchemaParityTests(unittest.TestCase):
         props = load_schema("task-ref")["properties"]
         self.assertEqual(list(props), list(contract.REF_FIELDS))
         self.assertEqual(props["schema_version"]["const"], contract.TASK_SCHEMA_VERSION)
+        self.assertEqual(props["kind"]["const"], "task_ref")
+        self.assertEqual(list(props["review"]["properties"]), list(contract.REVIEW_FIELDS))
         self.assertEqual(props["mode"]["enum"], list(contract.TASK_MODES))
         self.assertEqual(props["adapter"]["enum"], list(contract.ADAPTERS))
         self.assertEqual(props["activation"]["properties"]["state"]["enum"], list(contract.ACTIVATION_STATES))
@@ -410,7 +477,9 @@ class SchemaParityTests(unittest.TestCase):
         self.assertEqual(props["status"]["enum"], list(contract.RUN_STATUSES))
         self.assertEqual(props["error"]["enum"], list(contract.ERROR_CODES) + [None])
         self.assertEqual(props["mode"]["enum"], list(contract.TASK_MODES) + [None])
-        self.assertEqual(props["adapter"]["enum"], list(contract.ADAPTERS) + [None])
+        self.assertEqual(props["kind"]["const"], "run_report")
+        self.assertEqual(props["attempted_steps"]["items"]["$ref"], "#/$defs/step_report")
+        self.assertNotIn("adapter", props)
         self.assertEqual(list(load_schema("run-report")["$defs"]["evidence"]["properties"]), list(contract.EVIDENCE_ENUMS))
         evidence = load_schema("run-report")["$defs"]["evidence"]["properties"]
         self.assertEqual({key: node["enum"] for key, node in evidence.items()}, {key: list(values) for key, values in contract.EVIDENCE_ENUMS.items()})
@@ -427,6 +496,10 @@ class SchemaParityTests(unittest.TestCase):
         self.assertEqual(list(schema["properties"]), list(contract.MANIFEST_FIELDS))
         entry = schema["$defs"]["entry"]
         self.assertEqual(list(entry["properties"]), list(contract.ENTRY_FIELDS))
+        self.assertEqual(schema["properties"]["kind"]["const"], "task_manifest")
+        bindings = schema["$defs"]["bindings"]
+        self.assertEqual(entry["properties"]["bindings"]["$ref"], "#/$defs/bindings")
+        self.assertEqual(list(bindings["properties"]), list(contract.BINDING_FIELDS))
 
     def test_every_object_limits_extra_properties(self):
         def walk(node, path):

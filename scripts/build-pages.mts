@@ -84,7 +84,19 @@ export async function copyAndValidateSnapshots(srcDir: string, destDir: string):
   return copied;
 }
 
+/** Copies the task manifest and its references byte for byte: the manifest pins each reference by hash. */
+export async function copyTaskRefs(srcDir: string, destDir: string): Promise<string[]> {
+  await mkdir(destDir, { recursive: true });
+  const files = (await readdir(srcDir)).filter((file) => file.endsWith('.json'));
+  for (const file of files) {
+    await copyFile(join(srcDir, file), join(destDir, file));
+    console.log(`${destDir}/${file} copied`);
+  }
+  return files;
+}
+
 if (import.meta.main) {
   await Bun.$`vite build`;
   await copyAndValidateSnapshots('data/snapshot', 'dist/data');
+  await copyTaskRefs('data/tasks', 'dist/data/tasks');
 }

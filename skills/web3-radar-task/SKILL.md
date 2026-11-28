@@ -44,11 +44,11 @@ The evaluation order is fixed. The runner checks the command line, then the mani
 | `blocked_not_active` | 0 | The reviewed reference says the task is not active. The runner made no network call. | Stop. Share `checkpoint.action` and `checkpoint.resume_when`. Run again when the official source changes. |
 | `blocked_missing_capability` | 0 | A name in `missing_capabilities` is not granted, or a pinned public endpoint could not be read over HTTPS. | Report the missing item. Ask the user for it only when the user can grant it. |
 | `ineligible` | 0 | The synthetic observation says the account is not eligible. | Stop and report. |
-| `needs_user` | 0 | A human must act before the task can proceed or complete. `checkpoint` names the action when the reference defines one. | Show `checkpoint.action` to the user. Wait for the evidence in `checkpoint.resume_when`, then run again. |
+| `needs_user` | 0 | A human must act before the task can proceed or complete. `checkpoint` always names the action. | Show `checkpoint.action` to the user. Wait for the evidence in `checkpoint.resume_when`, then run again. |
 | `verified_fixture` | 0 | Synthetic evidence matched the pins. | Report it as fixture evidence. It says nothing about a live claim. |
 | `verified_live` | 0 | Reserved. The runner never returns it in this phase. | Treat it as a defect and report it. |
 
-The `evidence` object always has five keys: `activation`, `network`, `eligibility`, `receipt`, and `account_status`. Each holds a value from a fixed list, and `not_checked` or `unknown` means the runner did not evaluate it. `steps` lists every step of the reference in order with its `outcome`: `pass`, `fail`, `blocked`, `needs_user`, or `skipped`. `references/schemas/run-report.v1.schema.json` describes the whole report.
+The `evidence` object always has five keys: `activation`, `network`, `eligibility`, `receipt`, and `account_status`. Each holds a value from a fixed list, and `not_checked` or `unknown` means the runner did not evaluate it. `attempted_steps` lists every step of the reference in order with its `outcome`: `pass`, `fail`, `blocked`, `needs_user`, or `skipped`. `references/schemas/run-report.v1.schema.json` describes the whole report.
 
 A `live_read_only` task whose pins all match still ends in `needs_user`. This phase has no live receipt verifier, so matching pins never verify a claim.
 

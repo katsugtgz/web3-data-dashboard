@@ -44,8 +44,8 @@ def _report(
     *,
     task_id=None,
     revision=None,
+    ref_sha256=None,
     mode=None,
-    adapter=None,
     error=None,
     steps=(),
     evidence=None,
@@ -62,16 +62,17 @@ def _report(
     merged.update(evidence or {})
     return {
         "schema_version": contract.TASK_SCHEMA_VERSION,
+        "kind": "run_report",
         "task_id": task_id,
         "revision": revision,
+        "ref_sha256": ref_sha256,
         "mode": mode,
-        "adapter": adapter,
         "status": status,
-        "error": error,
-        "steps": list(steps),
+        "attempted_steps": list(steps),
         "evidence": merged,
-        "checkpoint": checkpoint,
         "missing_capabilities": list(missing_capabilities),
+        "checkpoint": checkpoint,
+        "error": error,
     }
 
 
@@ -114,13 +115,13 @@ def _checkpoint_of_first_human_step(ref):
     return _checkpoint(ref, step["checkpoint_id"], True) if step else None
 
 
-def _binder(ref):
+def _binder(ref, ref_sha256):
     """Return ``report(status, outcomes, **fields)`` bound to one validated reference."""
     identity = {
         "task_id": ref["task_id"],
         "revision": ref["revision"],
+        "ref_sha256": ref_sha256,
         "mode": ref["mode"],
-        "adapter": ref["adapter"],
     }
 
     def report(status, outcomes=None, evidence=None, **fields):
@@ -189,8 +190,12 @@ def _read_bytes(path, missing_code, limit):
         raise contract.Invalid(missing_code) from None
 
 
-def _load_pinned_ref(tasks_dir, task, revision, expect_sha256):
-    """Run evaluation order steps 2 to 6: manifest, task, revision, hashes, reference."""
+def _load_pinned_ref(tasks_dir, task, revision, expect_sha256, known):
+    """Run evaluation order steps 2 to 6: manifest, task, revision, hashes, reference.
+
+    ``known`` is the report identity. It gains ``ref_sha256`` once the file hash
+    is verified, so a rejected reference still reports which file was read.
+    """
     raw = _read_bytes(tasks_dir / "manifest.json", "invalid_manifest", contract.MAX_MANIFEST_BYTES)
     manifest = contract.strict_json(raw, contract.MAX_MANIFEST_BYTES)
     contract.validate_manifest(manifest)
@@ -206,6 +211,7 @@ def _load_pinned_ref(tasks_dir, task, revision, expect_sha256):
         raise contract.Invalid("ref_sha256_mismatch")
     if expect_sha256 != entry["ref_sha256"]:
         raise contract.Invalid("expect_sha256_mismatch")
+    known["ref_sha256"] = entry["ref_sha256"]
     ref = contract.strict_json(raw, contract.MAX_REF_BYTES)
     contract.validate_ref(ref, entry)
     return ref
@@ -267,26 +273,28 @@ def _origin(url):
 
 
 def _run_fixture_browser_email(ref, args, opener, stdin, report):
+    """The adapter compares the page origin itself, against the source that proof.source_id names."""
     observation = _observation(ref, args, stdin)
-    sources = {source["id"]: source for source in ref["official_sources"]}
-    origin_checks = [
-        (step["id"], step["check"]) for step in ref["steps"] if step["check"] is not None and step["check"]["type"] == "official_origin"
-    ]
+    app_url = next(source["url"] for source in ref["official_sources"] if source["id"] == ref["proof"]["source_id"])
+    # An agent step without a check carries the built-in origin check.
+    origin_steps = [step["id"] for step in ref["steps"] if step["check"] is None and step["actor"] == "agent"]
     status_steps = _by_check(ref, "fixture_account_status")
     humans = _human_steps(ref)
 
     def stop(checkpoint, account_status, origin_outcome, human_outcome, status_outcome):
+        # Without a checkpoint of that type, the first human step names the action.
+        checkpoint = checkpoint or _checkpoint_of_first_human_step(ref)
         outcomes = dict.fromkeys(humans, human_outcome)
         outcomes.update(dict.fromkeys(status_steps, status_outcome))
-        outcomes.update(dict.fromkeys([step for step, _ in origin_checks], origin_outcome))
+        outcomes.update(dict.fromkeys(origin_steps, origin_outcome))
         return report("needs_user", outcomes, evidence={"account_status": account_status}, checkpoint=checkpoint)
 
-    if any(_origin(observation["page_origin"]) != _origin(sources[check["source_id"]]["url"]) for _, check in origin_checks):
+    if _origin(observation["page_origin"]) != _origin(app_url):
         return stop(_checkpoint_of_type(ref, "login"), "origin_mismatch", "fail", "needs_user", "blocked")
     if not observation["inputs_ready"]:
         return stop(_checkpoint_of_type(ref, "batch_inputs"), "unverified", "needs_user", "skipped", "blocked")
     if observation["account_status"] == ref["proof"]["required_status"]:
-        outcomes = dict.fromkeys([step for step, _ in origin_checks] + status_steps + humans, "pass")
+        outcomes = dict.fromkeys(origin_steps + status_steps + humans, "pass")
         return report("verified_fixture", outcomes, evidence={"account_status": observation["account_status"]})
     return stop(_checkpoint_of_first_human_step(ref), observation["account_status"], "pass", "needs_user", "fail")
 
@@ -311,6 +319,25 @@ def _fetch(opener, url):
     return contract.strict_json(body, contract.MAX_HTTP_BODY_BYTES)
 
 
+# A needs_user report always names its checkpoint. A live read that stops on a
+# mismatch uses the first. One whose pins all match uses the first human step of
+# the reference, or the second when the reference defines no human step.
+_LIVE_MISMATCH_CHECKPOINT = {
+    "id": "pinned_endpoint_mismatch",
+    "type": "await_activation",
+    "human_action_required_now": True,
+    "action": "Stop. A pinned public endpoint did not match the reviewed reference. Do not claim. Check the official sources yourself.",
+    "resume_when": "A reviewer publishes a corrected reference with a new revision and SHA-256, or you decide not to claim.",
+}
+_LIVE_UNVERIFIED_CHECKPOINT = {
+    "id": "live_claim_unverified",
+    "type": "wallet_signature",
+    "human_action_required_now": True,
+    "action": "Stop. The runner cannot verify a live claim, so nothing here is proven. If you choose to proceed, do it yourself in the official app.",
+    "resume_when": "You decided not to proceed, or you completed the step yourself and the official app shows the result.",
+}
+
+
 def _run_http_read_only(ref, args, opener, stdin, report):
     sources = {source["id"]: source for source in ref["official_sources"]}
     unreadable = (_TransportBlocked, OSError, http.client.HTTPException, contract.Invalid)
@@ -331,10 +358,11 @@ def _run_http_read_only(ref, args, opener, stdin, report):
             )
         if type(document) is not dict or any(document.get(key) != value for key, value in check["pins"].items()):
             outcomes[step["id"]] = "fail"
-            return report("needs_user", outcomes, evidence={"network": "mismatched"})
+            return report("needs_user", outcomes, evidence={"network": "mismatched"}, checkpoint=dict(_LIVE_MISMATCH_CHECKPOINT))
         outcomes[step["id"]] = "pass"
     # Phase 1 has no live receipt or eligibility verifier, so matching pins never verify a claim.
-    return report("needs_user", outcomes, evidence={"network": "matched"})
+    checkpoint = _checkpoint_of_first_human_step(ref) or dict(_LIVE_UNVERIFIED_CHECKPOINT)
+    return report("needs_user", outcomes, evidence={"network": "matched"}, checkpoint=checkpoint)
 
 
 _ADAPTERS = {
@@ -386,15 +414,15 @@ def run_task(argv, opener=None, stdin=None):
     ``opener`` replaces the HTTPS opener and ``stdin`` the standard input, so a
     test can run an active live task without a network connection.
     """
-    known = {"task_id": None, "revision": None, "mode": None, "adapter": None}
+    known = {"task_id": None, "revision": None, "ref_sha256": None, "mode": None}
     try:
         args = _parse_args(list(argv))
         known["task_id"] = args.task if contract.ID_RE.fullmatch(args.task) else None
         known["revision"] = args.revision
         granted = _granted_capabilities(args.capabilities, args.offline, opener)
-        ref = _load_pinned_ref(args.tasks_dir, args.task, args.revision, args.expect_sha256)
-        known.update(task_id=ref["task_id"], revision=ref["revision"], mode=ref["mode"], adapter=ref["adapter"])
-        report = _binder(ref)
+        ref = _load_pinned_ref(args.tasks_dir, args.task, args.revision, args.expect_sha256, known)
+        known.update(task_id=ref["task_id"], revision=ref["revision"], mode=ref["mode"])
+        report = _binder(ref, known["ref_sha256"])
         if ref["mode"] == "live_read_only" and (args.case is not None or args.observation):
             raise contract.Invalid("mode_not_allowed")
         # The activation gate comes before any network call or user prompt.

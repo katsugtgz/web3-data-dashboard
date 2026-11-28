@@ -106,7 +106,19 @@ class RunnerTests(unittest.TestCase):
             stdin = json.dumps(stdin).encode("utf-8")
         report, code = runner.run_task(list(argv), opener=opener, stdin=stdin)
         test_contract.assert_schema(report, test_contract.load_schema("run-report"))
+        self.assertCheckpointFollowsStatus(report)
         return report, code
+
+    def assertCheckpointFollowsStatus(self, report):
+        """The status rules of parseRunReport in shared/taskContract.ts."""
+        checkpoint, status = report["checkpoint"], report["status"]
+        if status == "needs_user":
+            self.assertIsNotNone(checkpoint, "needs_user without a checkpoint")
+            self.assertTrue(checkpoint["human_action_required_now"])
+        elif status == "blocked_not_active":
+            self.assertTrue(checkpoint is None or (checkpoint["type"] == "await_activation" and not checkpoint["human_action_required_now"]))
+        else:
+            self.assertIsNone(checkpoint, "%s carries a checkpoint" % status)
 
     def argv(self, *extra, task="voucher-demo", tasks_dir=TASKS, revision="1", expect_sha256=None):
         """A valid command line for ``task``. The pin comes from that dir's manifest unless given."""
@@ -181,7 +193,9 @@ class RunnerTests(unittest.TestCase):
                 self.assertNotIn("other", json.dumps(report))
 
     def test_unsupported_revision_task_and_case(self):
-        newer = self.tasks_dir(mutate=lambda ref: ref.update(revision=2), row=lambda item: item.update(revision=2))
+        newer = self.tasks_dir(
+            tasks=[0], mutate=lambda ref: ref.update(revision=2), row=lambda item: item.update(revision=2, ref_path="voucher-demo.v2.json")
+        )
         for label, argv, expected in (
             ("stale", self.argv("--case", "eligible", tasks_dir=newer), "stale_revision"),
             ("unknown", self.argv("--case", "eligible", revision="2"), "unknown_revision"),
@@ -195,6 +209,19 @@ class RunnerTests(unittest.TestCase):
         for task, expected in (("other-task", "other-task"), ("BAD TASK", None)):
             report = self.run_task(*self.argv("--case", "eligible", task=task, expect_sha256="0" * 64))[0]
             self.assertEqual(report["task_id"], expected)
+
+    def test_report_names_only_a_verified_reference_hash(self):
+        tampered = self.tasks_dir(mutate=lambda ref: ref.update(title="Other"), rehash=False)
+        for label, argv, expected in (
+            ("verified", self.argv("--case", "matched"), self.argv()[5]),
+            ("unsupported task", self.argv("--case", "matched", task="other-task", expect_sha256="0" * 64), None),
+            ("wrong expected hash", self.argv("--case", "matched", expect_sha256="0" * 64), None),
+            ("tampered file", self.argv("--case", "matched", tasks_dir=tampered), None),
+            ("unreadable command line", [], None),
+        ):
+            with self.subTest(label=label):
+                report, code = self.run_task(*argv)
+                self.assertEqual((report["kind"], report["ref_sha256"]), ("run_report", expected))
 
     def test_malformed_and_unexpected_input(self):
         for payload in (
@@ -297,7 +324,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(report["status"], "blocked_not_active")
         self.assertEqual(report["evidence"]["activation"], "not_active")
         self.assertEqual(report["checkpoint"]["human_action_required_now"], False)
-        self.assertEqual([(step["id"], step["outcome"]) for step in report["steps"]], [
+        self.assertEqual([(step["id"], step["outcome"]) for step in report["attempted_steps"]], [
             ("verify_voucher_window", "blocked"), ("verify_network", "skipped"),
         ])
 
@@ -321,7 +348,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual((code, report["status"]), (0, "blocked_missing_capability"))
                 self.assertEqual(report["missing_capabilities"], missing)
                 self.assertIsNone(report["checkpoint"])
-                self.assertEqual({step["outcome"] for step in report["steps"]}, {"skipped"})
+                self.assertEqual({step["outcome"] for step in report["attempted_steps"]}, {"skipped"})
         # Enough capabilities granted: the fixture is evaluated.
         for value in (None, "browser,email_inbox", " email_inbox , browser "):
             with self.subTest(granted=value):
@@ -360,7 +387,7 @@ class RunnerTests(unittest.TestCase):
                 if report["checkpoint"]:
                     self.assertTrue(report["checkpoint"]["human_action_required_now"])
         outcomes = {
-            case: [(step["id"], step["outcome"]) for step in self.run_task(*self.argv("--case", case, task="browser-email-demo"))[0]["steps"]]
+            case: [(step["id"], step["outcome"]) for step in self.run_task(*self.argv("--case", case, task="browser-email-demo"))[0]["attempted_steps"]]
             for case in expected
         }
         self.assertEqual(outcomes["verified"], [
@@ -444,8 +471,9 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(case=label):
                 report, code = self.run_task(*argv, opener=FakeOpener(outcome))
                 self.assertEqual((code, report["status"]), (0, expected[0]))
-                self.assertEqual((report["evidence"]["network"], report["steps"][1]["outcome"]), expected[1:])
+                self.assertEqual((report["evidence"]["network"], report["attempted_steps"][1]["outcome"]), expected[1:])
                 self.assertEqual(report["missing_capabilities"], [] if expected[0] == "needs_user" else ["network_read"])
+                self.assertEqual((report["checkpoint"] or {}).get("id"), "pinned_endpoint_mismatch" if label == "mismatch" else None)
                 self.assertNotIn("Service Unavailable", json.dumps(report))
 
     @no_network
@@ -458,10 +486,14 @@ class RunnerTests(unittest.TestCase):
             "activation": "active", "network": "matched", "eligibility": "not_checked",
             "receipt": "not_checked", "account_status": "not_checked",
         })
-        self.assertEqual([(step["id"], step["outcome"]) for step in report["steps"]], [
+        self.assertEqual([(step["id"], step["outcome"]) for step in report["attempted_steps"]], [
             ("verify_voucher_window", "skipped"), ("verify_network", "pass"),
         ])
-        self.assertIsNone(report["checkpoint"])
+        # The reference defines no human step, so the runner names the action itself.
+        self.assertEqual(
+            (report["checkpoint"]["id"], report["checkpoint"]["human_action_required_now"]),
+            ("live_claim_unverified", True),
+        )
         request, timeout = opener.requests[0]
         self.assertEqual((request.get_method(), request.full_url), ("GET", CHAIN_URL))
         self.assertEqual(timeout, 10)

@@ -71,31 +71,36 @@ ERROR_CODES = (
     "receipt_conflicts_with_ineligible",
 )
 
-# Agent step checks and the checks each adapter can evaluate.
+# Agent step checks and the checks each adapter can evaluate. The browser and
+# email adapter compares the page origin itself, against proof.source_id.
 CHECK_TYPES = (
     "reviewed_activation",
     "http_json_pins",
     "fixture_eligibility",
     "fixture_receipt",
-    "official_origin",
     "fixture_account_status",
 )
 ADAPTER_CHECKS = {
     "fixture_voucher": ("fixture_eligibility", "fixture_receipt"),
-    "fixture_browser_email": ("official_origin", "fixture_account_status"),
+    "fixture_browser_email": ("fixture_account_status",),
     "http_read_only": ("reviewed_activation", "http_json_pins"),
 }
 RECEIPT_PINS = ("chain", "contract", "event", "recipient", "voucher_id")
 PROOF_KINDS = ("onchain_receipt", "account_status", "unknown_until_active")
 
+# Field order matches TaskRefV1, TaskManifestV1 and RunReportV1 in shared/taskContract.ts.
 REF_FIELDS = (
     "schema_version",
+    "kind",
     "task_id",
     "revision",
+    "title",
+    "summary",
     "mode",
     "adapter",
-    "activation",
+    "review",
     "networks",
+    "activation",
     "required_capabilities",
     "official_sources",
     "steps",
@@ -103,35 +108,40 @@ REF_FIELDS = (
     "proof",
     "fixture",
 )
-MANIFEST_FIELDS = ("schema_version", "tasks")
-ENTRY_FIELDS = ("task_id", "revision", "ref_path", "ref_sha256", "feed_ids", "card_ids", "domains")
-ENTRY_BINDING_FIELDS = ("feed_ids", "card_ids", "domains")
+REVIEW_FIELDS = ("reviewed_by", "reviewed_at")
+MANIFEST_FIELDS = ("schema_version", "kind", "tasks")
+ENTRY_FIELDS = ("task_id", "revision", "ref_path", "ref_sha256", "bindings")
+BINDING_FIELDS = ("card_ids", "feed_ids", "domains")
 ACTORS = ("agent", "human")
-STEP_FIELDS = ("id", "actor", "depends_on", "source_ids", "check", "checkpoint_id")
+STEP_FIELDS = ("id", "title", "actor", "depends_on", "source_ids", "check", "checkpoint_id")
 CHECKPOINT_FIELDS = ("id", "type", "action", "resume_when")
 REPORT_FIELDS = (
     "schema_version",
+    "kind",
     "task_id",
     "revision",
+    "ref_sha256",
     "mode",
-    "adapter",
     "status",
-    "error",
-    "steps",
+    "attempted_steps",
     "evidence",
-    "checkpoint",
     "missing_capabilities",
+    "checkpoint",
+    "error",
 )
 STEP_REPORT_FIELDS = ("id", "outcome", "source_ids")
 CHECKPOINT_REPORT_FIELDS = ("id", "type", "human_action_required_now", "action", "resume_when")
 
-# Strings a reviewed reference may hold without tripping the scanner: pinned
-# hashes, and human text that can cite a block height.
+# String values a reviewed reference may hold without tripping the scanner:
+# pinned hashes, a reviewed date, human text that can cite a block height, and
+# page origins.
 REF_EXEMPT_PATHS = (
+    "$.review.reviewed_at",
     "$.steps[*].check.pins.*",
     "$.proof.pins.*",
     "$.checkpoints[*].action",
     "$.checkpoints[*].resume_when",
+    "$.fixture.cases.*.page_origin",
 )
 MANIFEST_EXEMPT_PATHS = ("$.tasks[*].ref_sha256",)
 
@@ -144,8 +154,7 @@ ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FEED_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 CARD_ID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
-DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
-REF_PATH_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,120}\.json$")
+DOMAIN_RE = re.compile(r"^(?=.*\.)[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 NETWORK_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,127}$")
 RECEIPT_VALUE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 PIN_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -240,8 +249,11 @@ def _norm(text: str) -> str:
 
 
 def _is_exempt(path: str, exempt_paths: Optional[Iterable[str]]) -> bool:
+    """Segment for segment equality. A ``*`` segment matches any one path segment."""
+    parts = path.split(".")
     for pattern in exempt_paths or ():
-        if path == pattern or (pattern.endswith(".*") and path.startswith(pattern[:-1])):
+        wanted = pattern.split(".")
+        if len(wanted) == len(parts) and all(part == "*" or part == piece for part, piece in zip(wanted, parts)):
             return True
     return False
 
@@ -389,8 +401,8 @@ def scan_secrets(value: Any, exempt_paths: Optional[Iterable[str]] = None) -> Op
     """Return ``secret_detected`` or ``pii_detected`` for the first hit, else ``None``.
 
     Keys are always checked. Strings and 4-to-8-digit integers are checked unless
-    their path (``$``, ``.prop``, ``[*]``) equals an exempt path or sits under an
-    exempt ``.*`` prefix.
+    their path (``$``, ``.prop``, ``[*]``) matches an exempt path segment for
+    segment, where ``*`` in an exempt path matches any one segment.
     """
     return _scan(value, "$", tuple(exempt_paths) if exempt_paths else None)
 
@@ -496,30 +508,44 @@ def validate_observation(observation: Any, adapter: str) -> None:
 
 
 def validate_manifest(manifest: Any) -> None:
-    """Validate the task manifest: identity, revision, ref hash and card bindings per task."""
+    """Validate the task manifest: identity, revision, ref hash and bindings per task.
+
+    A card, feed or domain may be bound by one task only.
+    """
     code = "invalid_manifest"
     _shape(manifest, MANIFEST_FIELDS, code)
-    _require(type(manifest["schema_version"]) is int and manifest["schema_version"] == TASK_SCHEMA_VERSION, code)
+    _require(
+        type(manifest["schema_version"]) is int
+        and manifest["schema_version"] == TASK_SCHEMA_VERSION
+        and manifest["kind"] == "task_manifest",
+        code,
+    )
     tasks = manifest["tasks"]
     _require(type(tasks) is list and 1 <= len(tasks) <= 256, code)
     task_ids = set()
+    claimed = {field: set() for field in BINDING_FIELDS}
     for entry in tasks:
         _shape(entry, ENTRY_FIELDS, code)
+        _require(type(entry["bindings"]) is dict, code)
+        _shape(entry["bindings"], BINDING_FIELDS, code)
+        bindings = entry["bindings"]
         _require(
             _is_id(entry["task_id"])
             and entry["task_id"] not in task_ids
             and type(entry["revision"]) is int
             and entry["revision"] >= 1
-            and type(entry["ref_path"]) is str
-            and REF_PATH_RE.fullmatch(entry["ref_path"]) is not None
+            and entry["ref_path"] == "%s.v%s.json" % (entry["task_id"], entry["revision"])
             and type(entry["ref_sha256"]) is str
             and SHA256_RE.fullmatch(entry["ref_sha256"]) is not None
-            and _is_string_list(entry["feed_ids"], FEED_ID_RE)
-            and _is_string_list(entry["card_ids"], CARD_ID_RE)
-            and _is_string_list(entry["domains"], DOMAIN_RE),
+            and _is_string_list(bindings["card_ids"], CARD_ID_RE)
+            and _is_string_list(bindings["feed_ids"], FEED_ID_RE)
+            and _is_string_list(bindings["domains"], DOMAIN_RE),
             code,
         )
         task_ids.add(entry["task_id"])
+        for field in BINDING_FIELDS:
+            _require(not claimed[field] & set(bindings[field]), code)
+            claimed[field].update(bindings[field])
     violation = scan_secrets(manifest, MANIFEST_EXEMPT_PATHS)
     if violation:
         _fail(violation)
@@ -530,21 +556,18 @@ def _validate_check(check: Any, adapter: str, source_kinds: dict, code: str) -> 
         _fail(code)
     kind = check["type"]
     _require(kind in ADAPTER_CHECKS[adapter], "mode_not_allowed")
-    if kind == "http_json_pins":
-        _shape(check, ("type", "source_id", "pins"), code)
-        _require(source_kinds.get(check["source_id"]) == "public_read_only_endpoint", "mode_not_allowed")
-        pins = check["pins"]
-        _require(type(pins) is dict and 1 <= len(pins) <= 32, code)
-        for key, value in pins.items():
-            _require(
-                type(key) is str and PIN_KEY_RE.fullmatch(key) is not None and _is_printable(value, 1, 256),
-                code,
-            )
-    elif kind in ("official_origin", "fixture_account_status"):
-        _shape(check, ("type", "source_id"), code)
-        _require(check["source_id"] in source_kinds, code)
-    else:
+    if kind != "http_json_pins":
         _shape(check, ("type",), code)
+        return
+    _shape(check, ("type", "source_id", "pins"), code)
+    _require(source_kinds.get(check["source_id"]) == "public_read_only_endpoint", "mode_not_allowed")
+    pins = check["pins"]
+    _require(type(pins) is dict and 1 <= len(pins) <= 32, code)
+    for key, value in pins.items():
+        _require(
+            type(key) is str and PIN_KEY_RE.fullmatch(key) is not None and _is_printable(value, 1, 256),
+            code,
+        )
 
 
 def validate_ref(ref: Any, entry: Optional[dict] = None) -> None:
@@ -555,10 +578,17 @@ def validate_ref(ref: Any, entry: Optional[dict] = None) -> None:
     """
     code = "invalid_reference"
     _shape(ref, REF_FIELDS, code)
-    _require(type(ref["schema_version"]) is int and ref["schema_version"] == TASK_SCHEMA_VERSION, code)
+    _require(
+        type(ref["schema_version"]) is int and ref["schema_version"] == TASK_SCHEMA_VERSION and ref["kind"] == "task_ref",
+        code,
+    )
     _require(_is_id(ref["task_id"]), code)
     _require(type(ref["revision"]) is int and ref["revision"] >= 1, code)
+    _require(_is_reviewed_text(ref["title"]) and _is_reviewed_text(ref["summary"]), code)
     _require(_is_enum(ref["mode"], TASK_MODES) and type(ref["adapter"]) is str, code)
+    _shape(ref["review"], REVIEW_FIELDS, code)
+    review = ref["review"]
+    _require(_is_reviewed_text(review["reviewed_by"]) and _is_reviewed_text(review["reviewed_at"]), code)
     violation = scan_secrets(ref, REF_EXEMPT_PATHS)
     if violation:
         _fail(violation)
@@ -598,18 +628,19 @@ def validate_ref(ref: Any, entry: Optional[dict] = None) -> None:
     earlier = set()
     for step in steps:
         _shape(step, STEP_FIELDS, code)
-        _require(_is_id(step["id"]) and step["id"] not in earlier, code)
+        _require(_is_id(step["id"]) and step["id"] not in earlier and _is_reviewed_text(step["title"]), code)
         _require(_is_id_list(step["depends_on"]) and _is_id_list(step["source_ids"]), code)
         _require(set(step["depends_on"]) <= earlier and set(step["source_ids"]) <= set(source_kinds), code)
         human = step["actor"] == "human"
         _require(_is_enum(step["actor"], ACTORS) and human == (step["checkpoint_id"] is not None), code)
         _require(step["checkpoint_id"] is None or step["checkpoint_id"] in checkpoint_ids, code)
-        _require((step["check"] is None) == human, code)
         earlier.add(step["id"])
 
     adapter = ref["adapter"]
     _require(adapter in ADAPTERS, "adapter_not_allowed")
     _require(ADAPTERS[adapter] == ref["mode"], "mode_not_allowed")
+    if ref["mode"] == "live_read_only":
+        _require(len(sources) >= 1, code)
     for step in steps:
         if step["check"] is not None:
             _validate_check(step["check"], adapter, source_kinds, code)
@@ -644,10 +675,14 @@ def validate_ref(ref: Any, entry: Optional[dict] = None) -> None:
         _require(type(cases) is dict and 1 <= len(cases) <= 64 and all(_is_id(name) for name in cases), code)
         for observation in cases.values():
             validate_observation(observation, adapter)
+            if adapter == "fixture_browser_email":
+                _require(observation["page_origin"].startswith("https://"), code)
+        # A fixture stops at a human checkpoint, so it needs a human step to name it.
+        _require(any(step["actor"] == "human" for step in steps), code)
     else:
         _require(fixture is None, code)
 
     if entry is not None:
         _require(entry["task_id"] == ref["task_id"] and entry["revision"] == ref["revision"], code)
         if ref["mode"] == "synthetic_fixture":
-            _require(not any(entry[field] for field in ENTRY_BINDING_FIELDS), "invalid_manifest")
+            _require(not any(entry["bindings"][field] for field in BINDING_FIELDS), "invalid_manifest")

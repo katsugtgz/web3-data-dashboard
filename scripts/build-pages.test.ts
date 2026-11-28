@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { copyAndValidateSnapshots, validatePagesDataDir } from './build-pages.mts';
+import { copyAndValidateSnapshots, copyTaskRefs, validatePagesDataDir } from './build-pages.mts';
 
 const tempDirs: string[] = [];
 
@@ -34,6 +34,22 @@ describe('build-pages snapshot validation', () => {
 
     const copied = await copyAndValidateSnapshots(src, dest);
     expect(copied.sort()).toEqual(['airdrops.json', 'feed.json', 'markets.json', 'sources.json']);
+  });
+
+  test('copies task refs byte for byte, JSON files only', async () => {
+    const src = await makeTempDir();
+    const dest = await makeTempDir();
+    const manifest = '{\n  "kind": "task_manifest"\n}\n';
+    await writeFile(join(src, 'manifest.json'), manifest);
+    await writeFile(join(src, 'voucher-demo.v1.json'), '{\n  "kind": "task_ref"\n}\n');
+    await writeFile(join(src, 'notes.txt'), 'skip me');
+
+    const copied = await copyTaskRefs(src, join(dest, 'tasks'));
+
+    expect(copied.sort()).toEqual(['manifest.json', 'voucher-demo.v1.json']);
+    // The manifest pins each reference by the hash of its bytes, so nothing may be rewritten.
+    expect(await readFile(join(dest, 'tasks', 'manifest.json'), 'utf8')).toBe(manifest);
+    expect(await Bun.file(join(dest, 'tasks', 'notes.txt')).exists()).toBe(false);
   });
 
   test('rejects when a required snapshot file is missing', async () => {

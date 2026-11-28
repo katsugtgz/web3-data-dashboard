@@ -32,6 +32,9 @@ export const ADAPTERS = {
 
 export type TaskAdapter = keyof typeof ADAPTERS;
 
+/** Alias of TaskAdapter: the type of the `adapter` field in a task ref. */
+export type AdapterId = TaskAdapter;
+
 export const CAPABILITIES = ['network_read', 'browser', 'email_inbox', 'wallet_human'] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -486,13 +489,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const SAFE_SEGMENT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 /**
  * Depth-first walk in key order. The visitor sees every node with its path
  * (`$`, then `.key` or `[*]`) and its key name, or null for the root and array items.
- * Returning true stops the walk.
- *
- * ponytail: a key that contains a dot is ambiguous in this path syntax. Move to
- * segment arrays if pin or case keys ever need dots.
+ * A key that is not a plain identifier spells its segment `!`, so it can never
+ * write out an exempt path. Returning true stops the walk.
  */
 function walk(
   value: unknown,
@@ -508,19 +511,22 @@ function walk(
     }
   } else if (isRecord(value)) {
     for (const childKey of Object.keys(value)) {
-      if (walk(value[childKey], `${path}.${childKey}`, childKey, visit)) return true;
+      const segment = SAFE_SEGMENT_RE.test(childKey) ? childKey : '!';
+      if (walk(value[childKey], `${path}.${segment}`, childKey, visit)) return true;
     }
   }
   return false;
 }
 
-/** Exact match, or a `.*` pattern covering the direct children of that object. */
+/**
+ * Exact match segment by segment. A `*` segment in a pattern matches any one
+ * path segment (`$.fixture.cases.*.page_origin`); `[*]` matches literally.
+ */
 function isExempt(path: string, patterns: ReadonlySet<string>): boolean {
+  const segments = path.split('.');
   for (const pattern of patterns) {
-    if (pattern === path) return true;
-    if (pattern.endsWith('.*') && path.startsWith(pattern.slice(0, -1)) && !path.includes('.', pattern.length - 1)) {
-      return true;
-    }
+    const wanted = pattern.split('.');
+    if (wanted.length === segments.length && wanted.every((part, i) => part === '*' || part === segments[i])) return true;
   }
   return false;
 }
@@ -545,12 +551,16 @@ const SECRET_KEY_TOKENS = new Set([
 const SECRET_KEY_RE = /(?:api_?key|private_?key|auth_?token|set_?cookie|session_?id)/;
 const PII_KEY_TOKENS = new Set(['email', 'phone', 'phonenumber']);
 const PII_KEY_RE = /(?:phone_?number|e_?mail)/;
+// \s plus the separators Python's \s adds, so both languages fold the same keys.
+const SEPARATOR_RUN_RE = /[-\s\u001c-\u001f\u0085]+/g;
 
 function keyFinding(key: string): Finding | null {
   const kl = normalizeText(key).toLowerCase();
   const tokens = kl.split(/[^a-z0-9]+/);
-  if (tokens.some((token) => SECRET_KEY_TOKENS.has(token)) || SECRET_KEY_RE.test(kl)) return 'secret_detected';
-  if (tokens.some((token) => PII_KEY_TOKENS.has(token)) || PII_KEY_RE.test(kl)) return 'pii_detected';
+  // "x-api-key" and "api key" name the same field as "api_key".
+  const folded = kl.replace(SEPARATOR_RUN_RE, '_');
+  if (tokens.some((token) => SECRET_KEY_TOKENS.has(token)) || SECRET_KEY_RE.test(folded)) return 'secret_detected';
+  if (tokens.some((token) => PII_KEY_TOKENS.has(token)) || PII_KEY_RE.test(folded)) return 'pii_detected';
   return null;
 }
 

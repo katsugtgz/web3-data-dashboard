@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   ACTIVATION_STATES,
   ADAPTERS,
+  AdapterId,
   CAPABILITIES,
   CHECKPOINT_TYPES,
   EVIDENCE_ENUMS,
@@ -16,6 +20,7 @@ import {
   TASK_SCHEMA_VERSION,
   RunReportV1,
   RunStatus,
+  TaskAdapter,
   TaskManifestV1,
   TaskRefV1,
   canonicalJson,
@@ -115,6 +120,12 @@ describe('contract constants', () => {
     expect(SHA256_RE.test('a'.repeat(63))).toBe(false);
     expect(SHA256_RE.test('a'.repeat(65))).toBe(false);
     expect(SHA256_RE.test(`0x${'a'.repeat(64)}`)).toBe(false);
+  });
+
+  test('AdapterId names the same type as TaskAdapter', () => {
+    const adapterId: AdapterId = 'http_read_only';
+    const taskAdapter: TaskAdapter = adapterId;
+    expect(ADAPTERS[taskAdapter]).toBe('live_read_only');
   });
 });
 
@@ -361,16 +372,23 @@ describe('scanSecrets', () => {
       'privateKey',
       'cookies',
       'Set-Cookie',
+      // Hyphens and spaces fold to "_" before the pattern check.
+      'x-api-key',
+      'api key',
+      'api-key',
+      'API KEY',
+      'x api key',
+      'api\u00a0key',
     ];
     for (const key of keys) {
-      expect(scanSecrets({ [key]: 'x' })).toBe('secret_detected');
+      expect(scanSecrets({ [key]: 'x' }), key).toBe('secret_detected');
     }
     expect(scanSecrets({ nested: { password: null } })).toBe('secret_detected');
   });
 
   test('flags PII key names', () => {
-    for (const key of ['email', 'phone', 'phoneNumber', 'contact_email', 'phone_number', 'E_MAIL']) {
-      expect(scanSecrets({ [key]: 1 })).toBe('pii_detected');
+    for (const key of ['email', 'phone', 'phoneNumber', 'contact_email', 'phone_number', 'E_MAIL', 'e-mail', 'e mail', 'E-Mail']) {
+      expect(scanSecrets({ [key]: 1 }), key).toBe('pii_detected');
     }
   });
 
@@ -415,11 +433,22 @@ describe('scanSecrets', () => {
     expect(scanSecrets({ checkpoint: { action: 'Enter code 123456' } }, new Set(['$.checkpoint.action']))).toBeNull();
   });
 
+  test('a `*` segment matches any one segment in the middle of a path', () => {
+    const origins = new Set(['$.fixture.cases.*.page_origin']);
+    expect(scanSecrets({ fixture: { cases: { pending: { page_origin: 'https://app.demo.test:1234/' } } } }, origins)).toBeNull();
+    expect(containsUrl({ fixture: { cases: { pending: { page_origin: 'https://app.demo.test' } } } }, origins)).toBe(false);
+    expect(scanSecrets({ fixture: { cases: { pending: { note: 'Enter code 1234' } } } }, origins)).toBe('secret_detected');
+    expect(scanSecrets({ fixture: { cases: { pending: { page_origin: { deep: 'Enter code 1234' } } } } }, origins)).toBe('secret_detected');
+    expect(scanSecrets({ fixture: { cases: { page_origin: 'Enter code 1234' } } }, origins)).toBe('secret_detected');
+  });
+
   test('does not extend a wildcard exemption to grandchildren, siblings, or key names', () => {
     const pins = new Set(['$.steps[*].check.pins.*']);
     expect(scanSecrets({ steps: [{ check: { pins: { deep: { chain: HEX64 } } } }] }, pins)).toBe('secret_detected');
     expect(scanSecrets({ steps: [{ title: HEX64, check: { pins: { chain: HEX64 } } }] }, pins)).toBe('secret_detected');
     expect(scanSecrets({ steps: [{ check: { pins: { token: 'abc' } } }] }, pins)).toBe('secret_detected');
+    // A key that spells out an exempt path cannot reach it: its segment is written as "!".
+    expect(scanSecrets({ 'steps[*].check.pins.x': HEX64 }, pins)).toBe('secret_detected');
   });
 });
 
@@ -827,12 +856,8 @@ describe('parseTaskRef', () => {
   });
 
   test('valid refs scrub clean once URLs are confined to their allowed paths', () => {
-    // Fixture case names must be spelled out: the matcher only knows `[*]` and a trailing `.*`.
-    const urlPaths = new Set([
-      '$.official_sources[*].url',
-      '$.fixture.cases.verified.page_origin',
-      '$.fixture.cases.pending.page_origin',
-    ]);
+    // A `*` segment covers every fixture case, whatever the case is named.
+    const urlPaths = new Set(['$.official_sources[*].url', '$.fixture.cases.*.page_origin']);
     for (const build of [liveRef, voucherRef, browserRef]) {
       expect(scanSecrets(build())).toBeNull();
       expect(containsUrl(build())).toBe(true);
@@ -1074,5 +1099,98 @@ describe('parseRunReport', () => {
       ['checkpoint type outside the enum', (r) => { needsUser(r, { ...CHECKPOINT, type: 'wait' }); }, 'invalid_field_value', '$.checkpoint.type'],
       ['checkpoint with a URL in action', (r) => { needsUser(r, { ...CHECKPOINT, action: 'Open www.demo.test.' }); }, 'invalid_field_value', '$.checkpoint.action'],
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bundled task files and the vectors shared with scripts/contract.py
+// ---------------------------------------------------------------------------
+
+const REPO = join(import.meta.dir, '..');
+const TASK_FILES = 'data/tasks';
+const GOLDEN_REPORT = 'skills/web3-radar-task/tests/golden/flop-testnet-voucher.v1.blocked_not_active.json';
+const VECTORS = 'skills/web3-radar-task/tests/contract-vectors.json';
+// The largest limit contract.py applies to a task file.
+const MAX_TASK_FILE_BYTES = 262144;
+
+describe('bundled task files', () => {
+  test('the manifest, every reference, and the golden report satisfy the contract', () => {
+    const parsedManifest = parseManifest(parseOk(readFileSync(join(REPO, TASK_FILES, 'manifest.json'), 'utf8'), MAX_TASK_FILE_BYTES));
+    if (!parsedManifest.ok) throw new Error(`manifest: ${parsedManifest.error} at ${parsedManifest.path}`);
+    const { manifest } = parsedManifest;
+    expect(Object.keys(manifest)).toEqual(['schema_version', 'kind', 'tasks']);
+    for (const entry of manifest.tasks) {
+      const bytes = readFileSync(join(REPO, TASK_FILES, entry.ref_path));
+      // The pin covers the file bytes, so the file must hold no CR and end with a newline.
+      expect(bytes.includes(0x0d), entry.ref_path).toBe(false);
+      expect(bytes.at(-1), entry.ref_path).toBe(0x0a);
+      expect(createHash('sha256').update(bytes).digest('hex'), entry.ref_path).toBe(entry.ref_sha256);
+      const parsedRef = parseTaskRef(parseOk(new TextDecoder('utf-8', { fatal: true }).decode(bytes), MAX_TASK_FILE_BYTES));
+      if (!parsedRef.ok) throw new Error(`${entry.ref_path}: ${parsedRef.error} at ${parsedRef.path}`);
+      expect(Object.keys(parsedRef.ref)).toEqual(TASK_REF_KEYS);
+    }
+    const flop = manifest.tasks.find((entry) => entry.task_id === 'flop-testnet-voucher');
+    if (!flop) throw new Error('manifest has no flop-testnet-voucher entry');
+    const parsedGolden = parseRunReport(parseOk(readFileSync(join(REPO, GOLDEN_REPORT), 'utf8'), MAX_TASK_FILE_BYTES));
+    if (!parsedGolden.ok) throw new Error(`golden report: ${parsedGolden.error} at ${parsedGolden.path}`);
+    // The runner prints keys in sorted order; only the key set is part of the contract.
+    expect(Object.keys(parsedGolden.report).sort()).toEqual([...RUN_REPORT_KEYS].sort());
+    expect(parsedGolden.report.ref_sha256).toBe(flop.ref_sha256);
+  });
+});
+
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+type Finding = 'secret_detected' | 'pii_detected';
+type Vector = {
+  name: string;
+  context: 'scrub' | 'contribution_url' | 'strict_json';
+  input: Json;
+  expect: Finding | ErrorCode | boolean | null;
+  exempt_paths?: string[];
+  max_bytes?: number;
+  equals?: Json;
+};
+
+type Expanded = string | number | boolean | null | Uint8Array | Expanded[] | { [key: string]: Expanded };
+
+/** Rebuilds a vector input: `$join` strings a secret together and `$utf8` names raw bytes. */
+function expand(part: Json): Expanded {
+  if (Array.isArray(part)) return part.map(expand);
+  if (part === null || typeof part !== 'object') return part;
+  const keys = Object.keys(part);
+  if (keys.length === 1 && keys[0] === '$join') return (part.$join as Json[]).map(expand).join('');
+  if (keys.length === 1 && keys[0] === '$utf8') {
+    return Uint8Array.from((part.$utf8 as string).match(/../g) ?? [], (pair) => parseInt(pair, 16));
+  }
+  return Object.fromEntries(Object.entries(part).map(([key, value]) => [key, expand(value)]));
+}
+
+function runVector(vector: Vector): Finding | ErrorCode | boolean | null {
+  const input = expand(vector.input);
+  const exemptPaths = new Set(vector.exempt_paths ?? []);
+  if (vector.context === 'scrub') return scanSecrets(input, exemptPaths);
+  if (vector.context === 'contribution_url') return containsUrl(input, exemptPaths);
+  let text: string;
+  try {
+    // contract.py rejects bytes that are not UTF-8 before it parses.
+    text = input instanceof Uint8Array ? new TextDecoder('utf-8', { fatal: true }).decode(input) : String(input);
+  } catch {
+    return 'malformed_json';
+  }
+  const result = parseStrictJson(text, vector.max_bytes ?? 8192);
+  if (!result.ok) return result.error;
+  if ('equals' in vector) expect(result.value).toEqual(vector.equals);
+  return null;
+}
+
+describe('contract vectors', () => {
+  const vectors = (parseOk(readFileSync(join(REPO, VECTORS), 'utf8'), 1048576) as { vectors: Vector[] }).vectors;
+
+  test('TypeScript gives the Python result on every vector in contract-vectors.json', () => {
+    expect(vectors).toHaveLength(135);
+    expect(new Set(vectors.map((vector) => vector.name)).size).toBe(135);
+    for (const vector of vectors) {
+      expect({ name: vector.name, actual: runVector(vector) }).toEqual({ name: vector.name, actual: vector.expect });
+    }
   });
 });
