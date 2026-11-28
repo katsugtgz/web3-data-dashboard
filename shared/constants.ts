@@ -87,3 +87,5 @@ export const MARKET_SECTIONS_ORDER: MarketSectionId[] = [
   'trending',
   'github',
 ];
+
+export const CONTRIBUTION_REPO = 'katsugtgz/web3-data-dashboard';

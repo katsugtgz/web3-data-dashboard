@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { FIT, TYPE_MAP } from '../shared/constants';
 import type { Card, FeedItem, Tge } from '../shared/types';
 import { AgentProfileDialog } from './components/AgentProfileDialog';
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary';
+import { ContributionDialogLazy } from './components/ContributionDialogLazy';
 import { DashboardFooter } from './components/DashboardFooter';
 import { DashboardHeader } from './components/DashboardHeader';
 import { AppSidebarNav, MainPanels } from './components/DashboardPanels';
@@ -113,9 +114,13 @@ export default function App() {
   const airdropSearchRef = useRef<HTMLInputElement>(null);
   const marketSearchRef = useRef<HTMLInputElement>(null);
 
+  const [contributionOpen, setContributionOpen] = useState(false);
+  const handleOpenContribution = useCallback(() => setContributionOpen(true), []);
+  const handleCloseContribution = useCallback(() => setContributionOpen(false), []);
+
   const { tab, visitedTabs, tabRefs, tabbarRef, selectTab, onTabKey } = useDashboardTabs({
     searchRefs: { drops: dropsSearchRef, airdrops: airdropSearchRef, markets: marketSearchRef },
-    isModalOpen: () => Boolean(detail) || dropsDetail !== null || copyFlow.profileOpen,
+    isModalOpen: () => Boolean(detail) || dropsDetail !== null || copyFlow.profileOpen || contributionOpen,
   });
 
   const airdropFilters = useAirdropFilters(cards, saved, TYPE_MAP);
@@ -208,6 +213,7 @@ export default function App() {
             isMarketTab={isMarketTab}
             resolvedTheme={theme.resolved}
             onRefresh={handleRefresh}
+            onOpenContribution={handleOpenContribution}
             onOpenProfile={copyFlow.openProfile}
             onToggleTheme={theme.toggle}
           />
@@ -313,6 +319,8 @@ export default function App() {
           </Suspense>
         </ChunkErrorBoundary>
       )}
+
+      <ContributionDialogLazy open={contributionOpen} onClose={handleCloseContribution} />
 
       <Toast toast={toast} onDismiss={dismissToast} />
     </>
