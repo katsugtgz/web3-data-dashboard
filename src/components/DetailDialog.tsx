@@ -14,6 +14,7 @@ import {
   isTaskKeyDone,
   type TaskKeyPair,
 } from '../hooks/useWatchlist';
+import { getRefBaseUrl } from '../hooks/useCopyBriefController';
 import { BriefActions } from './BriefActions';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { DomainPill } from './DomainPill';
@@ -422,7 +423,7 @@ function DetailDialogBody({
   const taskList = getCardTasks(card);
   const taskPairs = getCardTaskKeyPairs(card, taskList);
   const rows = buildDetailRows(card, chains, resolvedTicker, fit);
-  const renderedBrief = showBrief ? buildBrief(card, profile) : null;
+  const renderedBrief = showBrief ? buildBrief(card, profile, { refBaseUrl: getRefBaseUrl() }) : null;
   const slug = card.n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'airdrop';
 
   return (

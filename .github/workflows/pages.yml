@@ -53,6 +53,7 @@ jobs:
           jq -e 'type == "object" and (.sections | type == "array" and length >= 6)' dist/data/markets.json > /dev/null
           jq -e 'type == "object" and (.items | type == "array" and length > 0)' dist/data/feed.json > /dev/null
           jq -e 'type == "array" and length > 0' dist/data/sources.json > /dev/null
+          jq -e 'type == "object" and .kind == "task_manifest" and .schema_version == 1' dist/data/tasks/manifest.json > /dev/null
           bun scripts/check-no-gambling.mts dist/data
       - uses: actions/upload-pages-artifact@v4
         with:

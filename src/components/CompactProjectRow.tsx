@@ -8,6 +8,7 @@ import {
   isTaskKeyDone,
 } from '../hooks/useWatchlist';
 import { buildCardMeta } from '../lib/feedDisplay';
+import { describeBrief } from '../lib/agentBrief';
 import { hostnameLabel, normalizeExternalUrl } from '../lib/format';
 import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
 import { DomainPill } from './DomainPill';
@@ -28,6 +29,7 @@ function CompactProjectRow({ card: c, saved, doneTasks, logoIndex, onToggleSaved
   const chains = c.chains?.length ? c.chains : c.chain ? [c.chain] : [];
   const resolvedTicker = extractTickerFallback(c.n, c.t);
   const isRisk = c.b.includes('risk');
+  const briefLabel = describeBrief(c).label;
   const tasks = getCardTasks(c);
   const doneCount = getCardTaskKeyPairs(c, tasks).filter(pair => isTaskKeyDone(doneTasks, pair)).length;
   const meta = new Map(buildCardMeta(c).map(pill => [pill.id, pill.value]));
@@ -86,8 +88,8 @@ function CompactProjectRow({ card: c, saved, doneTasks, logoIndex, onToggleSaved
           <button
             type="button"
             className="iconbtn"
-            title="Copy agent brief"
-            aria-label={`Copy agent brief for ${c.n}`}
+            title={`Copy agent brief (${briefLabel})`}
+            aria-label={`Copy agent brief for ${c.n} (${briefLabel})`}
             onClick={() => onCopyBrief(c)}
           >
             <CopyIcon size={14} />

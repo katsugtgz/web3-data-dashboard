@@ -10,6 +10,8 @@ RUN bun install --frozen-lockfile
 COPY . .
 ENV VITE_API_BASE=same-origin \
     VITE_BASE=/
+# The task registry bundles data/tasks into the frontend, so the integrity gate runs first.
+RUN bun scripts/check-task-refs.mts
 RUN bun run build && bun run check:gambling
 
 # Stage 2: runtime. Nothing under server/, worker/ or shared/ imports an npm
@@ -24,6 +26,8 @@ ENV NODE_ENV=production \
 COPY --from=build /app/dist ./dist
 # Bundled offline snapshots: the frontend falls back to these while the API warms up.
 COPY --from=build /app/data/snapshot ./dist/data
+# Reviewed task references, served read-only at /data/tasks/ next to the snapshots.
+COPY --from=build /app/data/tasks ./dist/data/tasks
 COPY worker ./worker
 COPY shared ./shared
 COPY server ./server

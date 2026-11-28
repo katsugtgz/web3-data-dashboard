@@ -14,7 +14,7 @@ import {
   prepareFeedLinks,
 } from '../lib/feedDisplay';
 import { resolveEntityVisual, type ProjectLogoIndex } from '../lib/visualAssets';
-import type { CopyStatus as CopyOutcome } from '../hooks/useCopyBriefController';
+import { getRefBaseUrl, type CopyStatus as CopyOutcome } from '../hooks/useCopyBriefController';
 import { BriefActions } from './BriefActions';
 import { CopyStatusBanner, type CopyStatus } from './CopyStatusBanner';
 import { DropsDetailHeader } from './DropsDetailHeader';
@@ -86,7 +86,7 @@ function DropsDetailBody({
     sectionId: 'drops',
     logoIndex,
   });
-  const renderedBrief = showBrief ? buildBrief(item, profile) : null;
+  const renderedBrief = showBrief ? buildBrief(item, profile, { refBaseUrl: getRefBaseUrl() }) : null;
   const slug = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'drop'}-drop`;
   const isRisk = item.risk.level === 'risk';
 

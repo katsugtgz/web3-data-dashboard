@@ -26,6 +26,7 @@ import { FeedStepsPreview } from './FeedStepsPreview';
 import { DomainPill } from './DomainPill';
 import { OgPreview } from './OgPreview';
 import { RiskBadge } from './RiskBadge';
+import { BriefBadge } from './BriefActions';
 import {
   AlertTriangleIcon,
   ChevronDownIcon,
@@ -349,11 +350,14 @@ export function FeedCard({
               <span>Risk blocked</span>
             </span>
           ) : (
-            <button type="button" className="chip feed-copy-btn" onClick={() => onCopyBrief(item)}>
-              <CopyIcon size={13} />
-              <span>Copy agent brief</span>
-              <span className="sr"> for {title}</span>
-            </button>
+            <>
+              <BriefBadge item={item} />
+              <button type="button" className="chip feed-copy-btn" onClick={() => onCopyBrief(item)}>
+                <CopyIcon size={13} />
+                <span>Copy agent brief</span>
+                <span className="sr"> for {title}</span>
+              </button>
+            </>
           )}
           <button
             type="button"

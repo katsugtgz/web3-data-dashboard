@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
-import { buildBrief, isFeedItem } from '../lib/agentBrief';
+import { buildBrief, describeBrief, isFeedItem } from '../lib/agentBrief';
 import { copyText } from '../lib/clipboard';
 import { formatProjectTitle } from '../lib/feedDisplay';
+import type { TaskRegistry } from '../lib/taskRegistry';
 
 export type CopyRegion = 'page' | 'detail' | 'profile';
 
@@ -75,6 +76,28 @@ export function formatCopyBlockedMessage(target: FeedItem | Card, region: CopyRe
   return 'Clipboard blocked — open Preview in details to copy.';
 }
 
+/** Base URL the bundled reference files are served from, or undefined where there is no page. */
+export function getRefBaseUrl(): string | undefined {
+  if (typeof window === 'undefined' || !window.location?.href) return undefined;
+  try {
+    // Vite replaces BASE_URL at build time; outside a Vite build it is undefined.
+    return new URL(`${import.meta.env.BASE_URL ?? '/'}data/tasks/`, window.location.href).href;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What to tell the user after a brief reaches the clipboard: the reviewed playbook, or a brief built from item data. */
+export function briefCopiedMessage(target: FeedItem | Card, label: string, isWarn: boolean, registry?: TaskRegistry): string {
+  const { verified, revision } = describeBrief(target, registry);
+  if (!verified) {
+    return isWarn ? `Copied ${label} brief (WARN item: verify links before running).` : `Copied ${label} agent brief to clipboard.`;
+  }
+  return isWarn
+    ? `Copied ${label} verified playbook v${revision} (WARN item: brief holds the reviewed playbook only).`
+    : `Copied ${label} verified playbook v${revision} to clipboard.`;
+}
+
 /**
  * Owns the entire copy-agent-brief flow: clipboard execution, region-scoped
  * outcome reporting (page toast vs. visible banner inside the active modal),
@@ -130,7 +153,7 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
   const executeCopyBrief = useCallback(
     (target: FeedItem | Card, activeProfile: AgentProfile, region: CopyRegion, notice = '') => {
       const seq = ++copySeqRef.current;
-      const md = buildBrief(target, activeProfile);
+      const md = buildBrief(target, activeProfile, { refBaseUrl: getRefBaseUrl() });
       if (!md) {
         reportOutcome(region, `Brief unavailable for RISK items.${notice}`, 'warn');
         return;
@@ -138,12 +161,7 @@ export function useCopyBriefController(input: CopyControllerInput): CopyControll
       void copyText(md).then(ok => {
         if (copySeqRef.current !== seq) return;
         const isWarn = isFeedItem(target) && target.risk.level === 'warn';
-        const label = nameOf(target);
-        const message = !ok
-          ? formatCopyBlockedMessage(target, region)
-          : isWarn
-            ? `Copied ${label} brief (WARN item: verify links before running).`
-            : `Copied ${label} agent brief to clipboard.`;
+        const message = !ok ? formatCopyBlockedMessage(target, region) : briefCopiedMessage(target, nameOf(target), isWarn);
         reportOutcome(region, `${message}${notice}`, !ok || isWarn || notice ? 'warn' : 'ok');
       });
     },
