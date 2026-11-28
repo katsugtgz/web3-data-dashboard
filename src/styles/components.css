@@ -2199,6 +2199,47 @@ dialog#agent-profile-dialog::backdrop {
   word-break: break-word;
 }
 
+/* Brief status: which brief Copy produces for an item that is not RISK */
+.brief-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.brief-badge.is-verified {
+  background: var(--color-status-success-bg);
+  color: var(--color-status-success);
+}
+
+.brief-badge.is-unverified {
+  background: var(--color-background-muted);
+  color: var(--color-text-secondary);
+}
+
+.dlg-brief-bar .brief-badge {
+  margin-left: auto;
+  align-self: center;
+}
+
+/* Project card footer: the brief badge stays with the copy button when the row wraps */
+.project-brief-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.project-card .project-foot {
+  flex-wrap: wrap;
+}
+
 .profile-form {
   display: flex;
   flex-direction: column;

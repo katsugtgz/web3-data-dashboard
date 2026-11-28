@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Card, FeedItem } from '../../shared/types';
-import { formatCopyBlockedMessage, resolveLiveBriefTarget } from './useCopyBriefController';
+import { briefCopiedMessage, formatCopyBlockedMessage, getRefBaseUrl, resolveLiveBriefTarget } from './useCopyBriefController';
 
 function makeCard(over: Partial<Card> = {}): Card {
   return {
@@ -84,5 +84,43 @@ describe('formatCopyBlockedMessage', () => {
     expect(formatCopyBlockedMessage(card, 'detail')).toBe(
       'Clipboard blocked — open Preview in details to copy.',
     );
+  });
+});
+
+describe('briefCopiedMessage', () => {
+  // The bundled manifest binds this feed id to the live FLOP reference.
+  const boundItem = makeFeedItem({ id: '7331604250321743f7293ccd2a8740720b4df8b1', project: 'FLOP' });
+
+  test('keeps the wording for a brief built from item data', () => {
+    expect(briefCopiedMessage(makeFeedItem(), 'Beta', false)).toBe('Copied Beta agent brief to clipboard.');
+    expect(briefCopiedMessage(makeFeedItem(), 'Beta', true)).toBe('Copied Beta brief (WARN item: verify links before running).');
+    expect(briefCopiedMessage(makeCard(), 'Alpha', false)).toBe('Copied Alpha agent brief to clipboard.');
+  });
+
+  test('names the verified playbook and its revision for an item bound to a reviewed task', () => {
+    expect(briefCopiedMessage(boundItem, 'FLOP', false)).toBe('Copied FLOP verified playbook v1 to clipboard.');
+    expect(briefCopiedMessage(boundItem, 'FLOP', true)).toBe(
+      'Copied FLOP verified playbook v1 (WARN item: brief holds the reviewed playbook only).',
+    );
+  });
+});
+
+describe('getRefBaseUrl', () => {
+  test('is undefined where there is no window', () => {
+    expect(getRefBaseUrl()).toBeUndefined();
+  });
+
+  test('resolves data/tasks/ on the page origin once a window exists', () => {
+    const scope = globalThis as { window?: { location: { href: string } } };
+    const previous = scope.window;
+    scope.window = { location: { href: 'https://example.github.io/web3-data-dashboard/?tab=drops' } };
+    try {
+      const base = new URL(getRefBaseUrl()!);
+      expect(base.origin).toBe('https://example.github.io');
+      expect(base.pathname.endsWith('data/tasks/')).toBe(true);
+      expect(new URL('flop-testnet-voucher.v1.json', base).pathname.endsWith('/data/tasks/flop-testnet-voucher.v1.json')).toBe(true);
+    } finally {
+      scope.window = previous;
+    }
   });
 });
