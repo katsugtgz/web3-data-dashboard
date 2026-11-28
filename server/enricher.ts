@@ -1,6 +1,7 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import tls from 'node:tls';
 import type { AirdropFeed, DomainMeta } from '../shared/types';
+import { filterGamblingAirdropFeed, isGamblingCategory, isGamblingText } from '../shared/gamblingFilter';
 import { readSnapshot, sha1Hex, upsertSnapshot } from '../worker/src/lib/db';
 import { normalizeProjectKey } from '../worker/src/normalize/cluster';
 import { getRegistrableDomain, isPlatformDomain } from '../worker/src/normalize/domains';
@@ -948,38 +949,59 @@ export async function enrichAirdropsSnapshot(
   for (const meta of fetchedMetas) metaByDomain.set(meta.domain, meta);
 
   let enriched = 0;
+  let removedByMeta = false;
+  const keptCards = [];
   for (let i = 0; i < feed.cards.length; i++) {
-    const dom = cardDomains[i];
-    if (!dom) continue;
-    const meta = metaByDomain.get(dom);
-    if (!meta) continue;
     const card = feed.cards[i]!;
-    let changed = false;
-    if (!card.img && meta.logoUrl) {
-      card.img = meta.logoUrl;
-      changed = true;
+    const dom = cardDomains[i];
+    const meta = dom ? metaByDomain.get(dom) : undefined;
+    if (meta && (isGamblingCategory(meta.category) || isGamblingText(meta.ogTitle) || isGamblingText(meta.ogDescription))) {
+      removedByMeta = true;
+      continue;
     }
-    if (!card.ogImage && meta.ogImage) {
-      card.ogImage = meta.ogImage;
-      changed = true;
+    if (meta) {
+      let changed = false;
+      if (!card.img && meta.logoUrl) {
+        card.img = meta.logoUrl;
+        changed = true;
+      }
+      if (!card.ogImage && meta.ogImage) {
+        card.ogImage = meta.ogImage;
+        changed = true;
+      }
+      if ((card.tvlUsd == null || card.tvlUsd <= 0) && meta.tvlUsd != null && meta.tvlUsd > 0) {
+        card.tvlUsd = meta.tvlUsd;
+        changed = true;
+      }
+      if (!card.description && meta.ogDescription) {
+        card.description = meta.ogDescription;
+        changed = true;
+      }
+      if (changed) enriched++;
     }
-    if ((card.tvlUsd == null || card.tvlUsd <= 0) && meta.tvlUsd != null && meta.tvlUsd > 0) {
-      card.tvlUsd = meta.tvlUsd;
-      changed = true;
-    }
-    if (!card.description && meta.ogDescription) {
-      card.description = meta.ogDescription;
-      changed = true;
-    }
-    if (changed) enriched++;
+    keptCards.push(card);
   }
 
-  if (enriched > 0) {
+  const nextFeed = filterGamblingAirdropFeed(
+    removedByMeta
+      ? {
+          ...feed,
+          cards: keptCards.map((c, idx) => (c.r === idx + 1 ? c : { ...c, r: idx + 1 })),
+          counts: {
+            active: keptCards.length,
+            preToken: keptCards.filter(c => !c.b?.includes('token')).length,
+          },
+        }
+      : feed,
+  );
+  const pruned = removedByMeta || nextFeed !== feed;
+
+  if (enriched > 0 || pruned) {
     if (opts.signal?.aborted) throw abortReason(opts.signal);
     if (row.ok === 1) {
-      await upsertSnapshot(db, 'airdrops', feed, row.fetched_at);
+      await upsertSnapshot(db, 'airdrops', nextFeed, row.fetched_at);
     } else {
-      const body = JSON.stringify(feed);
+      const body = JSON.stringify(nextFeed);
       const etag = `"${await sha1Hex(body)}"`;
       await db
         .prepare('UPDATE snapshots SET body = ?2, etag = ?3 WHERE key = ?1 AND fetched_at = ?4')

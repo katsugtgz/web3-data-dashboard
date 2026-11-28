@@ -64,10 +64,10 @@ describe('ASSO7878 Google Sheet parser', () => {
     // Standard active row 1 (explicit Col 0, bare domain, whitespace in raise, CJK prose in Col 12/16/22)
     makeAssoRow({
       0: '交易类',
-      2: 'Myriad',
+      2: 'HyperFlow',
       3: '1000 万',
       5: '红杉中国, Paradigm',
-      7: '预测',
+      7: '永续',
       8: '明确发币',
       9: '8.28',
       10: '⭐️⭐️⭐️⭐️⭐️',
@@ -80,9 +80,43 @@ describe('ASSO7878 Google Sheet parser', () => {
       18: '早期',
       19: '可多号',
       20: '无消耗',
-      21: 'myriad.markets/?ref=ASSO7878',
+      21: 'hyperflow.xyz/?ref=ASSO7878',
       22: '邀请码中文说明 ABC',
       23: '2026Q3',
+    }),
+    // Gambling / Betting / Prediction market rows (must be hard-filtered out)
+    makeAssoRow({
+      0: '预测市场',
+      2: 'Myriad',
+      3: '1000 万',
+      7: '预测',
+      8: '明确发币',
+      13: '重点参与',
+      14: '交易',
+      18: '早期',
+      21: 'myriad.markets/?ref=ASSO7878',
+    }),
+    makeAssoRow({
+      0: '博彩',
+      2: 'LuckyDice',
+      3: '500 万',
+      7: '赌博',
+      8: '潜力中',
+      13: '在参与',
+      14: '博彩',
+      18: '持续',
+      20: '赌博',
+      21: 'https://luckydice.casino/',
+    }),
+    makeAssoRow({
+      0: '交易类',
+      2: 'Yeet',
+      3: '775 万',
+      8: '潜力中',
+      13: '在参与',
+      14: '任务',
+      18: '持续',
+      21: 'https://comingsoon.yeet.com/',
     }),
     // Standard active row 2 (blank Col 0 carries forward 交易类, CJK project name)
     makeAssoRow({
@@ -200,12 +234,15 @@ describe('ASSO7878 Google Sheet parser', () => {
     const serialized = JSON.stringify(feed);
     expect(FORBIDDEN_CJK_RE.test(serialized)).toBe(false);
 
-    // Active cards: Myriad, Bitget Wallet, Monad Eco, Ultrade (4 active; no CEX, no Post-TGE, no Bankrupt, no Abandoned)
+    // Active cards: HyperFlow, Bitget Wallet, Monad Eco, Ultrade (4 active; no CEX, no Gambling/Betting, no Post-TGE, no Bankrupt, no Abandoned)
     const cardNames = feed.cards.map(c => c.n);
-    expect(cardNames).toContain('Myriad');
+    expect(cardNames).toContain('HyperFlow');
     expect(cardNames).toContain('Bitget Wallet');
     expect(cardNames).toContain('Monad Eco');
     expect(cardNames).toContain('Ultrade');
+    expect(cardNames).not.toContain('Myriad');
+    expect(cardNames).not.toContain('LuckyDice');
+    expect(cardNames).not.toContain('Yeet');
     expect(cardNames).not.toContain('PostHeaderCex');
     expect(cardNames).not.toContain('HyperLaunch');
     expect(cardNames).not.toContain('RugProtocol');
@@ -214,15 +251,15 @@ describe('ASSO7878 Google Sheet parser', () => {
     expect(feed.tge.map(t => t.n)).not.toContain('PostHeaderCex');
 
     // Standard row checks
-    const myriad = feed.cards.find(c => c.n === 'Myriad')!;
-    expect(myriad.source).toBe('ASSO7878');
-    expect(myriad.raiseNum).toBe(10_000_000);
-    expect(myriad.url).toBe('https://myriad.markets/');
-    expect(myriad.b).toContain('live');
-    expect(myriad.b).toContain('early');
-    expect(myriad.b).toContain('zero');
-    expect(myriad.fit).toContain('zero');
-    expect(myriad.fit).toContain('multi');
+    const hf = feed.cards.find(c => c.n === 'HyperFlow')!;
+    expect(hf.source).toBe('ASSO7878');
+    expect(hf.raiseNum).toBe(10_000_000);
+    expect(hf.url).toBe('https://hyperflow.xyz/');
+    expect(hf.b).toContain('live');
+    expect(hf.b).toContain('early');
+    expect(hf.b).toContain('zero');
+    expect(hf.fit).toContain('zero');
+    expect(hf.fit).toContain('multi');
 
     // Ref param stripped while keeping functional query param
     const bg = feed.cards.find(c => c.n === 'Bitget Wallet')!;

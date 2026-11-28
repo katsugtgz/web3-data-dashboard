@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { findGamblingAirdropViolations } from '../../shared/gamblingFilter';
 import { stripOrTranslateCjk, translateRiskItem, translateTagLabel, translateTgeStatus } from '../src/normalize/i18n';
 import { fetchSurfAirdrops, normalizeExternalUrl, normalizeSurf } from '../src/sources/surf';
 import { FORBIDDEN_CJK_RE } from './helpers';
@@ -35,11 +36,17 @@ describe('surf normalizer + i18n', () => {
     expect(feed.cards[0].taskTypes).toContain('other');
   });
 
-  test('normalizes full surf fixture with zero CJK output', () => {
+  test('normalizes full surf fixture with zero CJK and zero gambling/betting output', () => {
     const feed = normalizeSurf(fixture, 1_700_000_000_000);
-    expect(feed.cards.length).toBe(fixture.active.length);
-    expect(feed.tge.length).toBe(fixture.tge.length);
-    expect(feed.counts.active).toBe(fixture.counts.active_total);
+    expect(feed.cards.length).toBeGreaterThan(300);
+    expect(feed.cards.length).toBeLessThan(fixture.active.length);
+    expect(feed.counts.active).toBe(feed.cards.length);
+    expect(feed.tge.length).toBeLessThan(fixture.tge.length);
+    expect(findGamblingAirdropViolations(feed)).toEqual([]);
+    expect(feed.cards.some(c => /polymarket|kalshi|yeet|myriad/i.test(c.n))).toBe(false);
+    expect(feed.tge.some(t => /predict\.fun/i.test(t.n))).toBe(false);
+    expect(feed.cards.some(c => c.n === 'Base')).toBe(true);
+    expect(feed.cards.some(c => c.n === 'Jupiter')).toBe(true);
 
     const serialized = JSON.stringify(feed);
     // Full CI gate (scripts/check-no-cjk.sh), not just Han: Kana, Hangul,

@@ -10,7 +10,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 ENV VITE_API_BASE=same-origin \
     VITE_BASE=/
-RUN bun run build
+RUN bun run build && bun run check:gambling
 
 # Stage 2: runtime. Nothing under server/, worker/ or shared/ imports an npm
 # package at runtime, so no node_modules and no install step here.

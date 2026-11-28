@@ -1,4 +1,5 @@
 import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../../../shared/types';
+import { filterGamblingAirdropFeed } from '../../../shared/gamblingFilter';
 import { FETCH_TIMEOUT_MS, USER_AGENT, fmtUsd } from '../lib/format';
 import { cleanUrl, isPlatformDomain } from '../normalize/domains';
 import {
@@ -8,6 +9,7 @@ import {
   classifyAssoCategory,
   isAssoDroppedOrRug,
   isAssoEcosystemStatusCell,
+  isAssoGamblingRow,
   isAssoHeaderRow,
   isAssoMetaBannerRow,
   parseAssoAttention,
@@ -603,7 +605,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
 
     if (col0) currentCatInfo = classifyAssoCategory(col0);
     const catInfo = currentCatInfo;
-    if (catInfo?.skip === 'cex' || catInfo?.skip === 'abandoned') continue;
+    if (catInfo?.skip === 'cex' || catInfo?.skip === 'abandoned' || catInfo?.skip === 'gambling') continue;
 
     if (!col2) continue;
     const translatedName = translateAssoProjectName(col2);
@@ -614,6 +616,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
     if (participation.isBankrupt) continue;
 
     const isEcosystemLayout = catInfo?.layout === 'ecosystem' || isAssoEcosystemStatusCell(row[21]);
+    if (isAssoGamblingRow(row[7], row[14], isEcosystemLayout ? row[23] : row[20])) continue;
     const isPostTge = section === 'tge';
     const potential = translateAssoPotential(row[8]);
     const isTgeRow = isPostTge || potential.isTokenLive || participation.isTge;
@@ -779,7 +782,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
 
   assignDeterministicSheetCardIds('asso7878', cards);
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge,
     counts: {
@@ -787,7 +790,7 @@ export function parseAsso7878Sheet(csv: string, nowMs = Date.now()): AirdropFeed
       preToken: cards.filter(c => !c.b.includes('token')).length,
     },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 const ARNDXT_TESTNET_RE = /\b(?:testnet|faucet|sepolia|devnet)\b/i;
@@ -1035,7 +1038,7 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
 
   assignDeterministicSheetCardIds('arndxt', cards);
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge,
     counts: {
@@ -1043,7 +1046,7 @@ export function parseArndxtSheet(csv: string, nowMs = Date.now()): AirdropFeed {
       preToken: cards.filter(c => !c.b.includes('token')).length,
     },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 async function fetchCsvText(url: string): Promise<string> {

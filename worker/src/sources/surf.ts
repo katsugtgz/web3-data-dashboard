@@ -1,4 +1,5 @@
 import type { AirdropFeed, Badge, Card, CardTask, FitKey, Grade, Tge } from '../../../shared/types';
+import { filterGamblingAirdropFeed } from '../../../shared/gamblingFilter';
 import { fmtUsd, USER_AGENT } from '../lib/format';
 import { safeHttpUrl, safeHttpsUrl } from '../lib/url';
 import {
@@ -272,7 +273,7 @@ export function normalizeSurf(raw: unknown, nowMs = Date.now()): AirdropFeed {
   const cards = body.active.map((p, i) => mapProject(p, i + 1, nowMs));
   const tge = Array.isArray(body.tge) ? body.tge.map(mapTge) : [];
   const preToken = body.counts?.active_unlaunched ?? cards.filter(c => !c.b.includes('token')).length;
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge,
     counts: {
@@ -280,7 +281,7 @@ export function normalizeSurf(raw: unknown, nowMs = Date.now()): AirdropFeed {
       preToken,
     },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 /**

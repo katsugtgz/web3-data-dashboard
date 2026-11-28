@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { filterGamblingFeedItems } from '../../shared/gamblingFilter';
 import type { FeedItem, FeedResponse } from '../../shared/types';
 import { API_BASE } from '../lib/api';
 import { createFeedSession, reconcileFeedUpdate } from '../lib/feedFetch';
@@ -22,7 +23,9 @@ export interface FeedState {
 function getInitialFeed(): FeedResponse | null {
   if (API_BASE || typeof window === 'undefined') return null;
   const cached = window.__RADAR_PREFETCH_RESOLVED__?.feed as FeedResponse | undefined;
-  return cached ?? null;
+  if (!cached) return null;
+  const items = filterGamblingFeedItems(cached.items);
+  return items === cached.items ? cached : { ...cached, items };
 }
 
 function countUnseenPending(items: FeedItem[], pendingItems: FeedItem[]): number {
@@ -80,7 +83,9 @@ export function useFeed(onItemsChange?: (nextItems: readonly FeedItem[]) => void
           hasLiveRef.current = res.source === 'api';
           setIsLiveApi(hasLiveRef.current);
           const known = knownIdsRef.current ?? new Set<string>();
-          const update = reconcileFeedUpdate(itemsRef.current, known, res.body, mode);
+          const cleanItems = filterGamblingFeedItems(res.body.items);
+          const cleanBody = cleanItems === res.body.items ? res.body : { ...res.body, items: cleanItems };
+          const update = reconcileFeedUpdate(itemsRef.current, known, cleanBody, mode);
           if (!update.preserved) {
             if (update.generatedAt !== null) {
               setGeneratedAt(update.generatedAt);

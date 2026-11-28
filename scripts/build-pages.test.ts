@@ -55,4 +55,96 @@ describe('build-pages snapshot validation', () => {
     await writeFile(join(dir, 'sources.json'), '{not-json');
     await expect(validatePagesDataDir(dir)).rejects.toThrow(/sources\.json/i);
   });
+
+  test('rejects Pages snapshots containing gambling, casino, or betting airdrops or drops', async () => {
+    const dir = await makeTempDir();
+    await seedValidSnapshots(dir);
+    await writeFile(
+      join(dir, 'airdrops.json'),
+      JSON.stringify({
+        cards: [
+          {
+            r: 1,
+            n: 'Yeet',
+            t: null,
+            g: 'B',
+            b: ['live'],
+            f: '$7.75M',
+            tk: '1/1',
+            h: 100,
+            u: 'today',
+            fit: ['zero'],
+            best: { n: 'Waitlist', ty: 'form', c: 'Free', m: '1 min' },
+            taskTypes: ['form'],
+            sc: 50,
+            sub: [5, 5, null],
+            url: 'https://comingsoon.yeet.com/',
+          },
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: 1,
+      }),
+    );
+    await expect(validatePagesDataDir(dir)).rejects.toThrow(/gambling\/betting/i);
+
+    await seedValidSnapshots(dir);
+    await writeFile(
+      join(dir, 'airdrops.json'),
+      JSON.stringify({
+        cards: [
+          {
+            r: 1,
+            n: 'Base',
+            t: null,
+            g: 'A',
+            b: ['live'],
+            f: '—',
+            tk: '1/1',
+            h: 100,
+            u: 'today',
+            fit: ['zero'],
+            best: { n: 'Basenames', ty: 'mainnet', c: 'Free', m: '3 min' },
+            taskTypes: ['mainnet', 'predictions'],
+            tasks: [
+              { title: 'Coinbase Predict', type: 'predictions', status: 'OPEN', cost: 0, timeMinutes: 5, url: 'https://coinbase.com/predictions' },
+            ],
+            sc: 70,
+            sub: [7, 7, null],
+            url: 'https://base.org/',
+          },
+        ],
+        tge: [],
+        counts: { active: 1, preToken: 1 },
+        fetchedAt: 1,
+      }),
+    );
+    await expect(validatePagesDataDir(dir)).rejects.toThrow(/gambling\/betting/i);
+
+    await seedValidSnapshots(dir);
+    await writeFile(
+      join(dir, 'feed.json'),
+      JSON.stringify({
+        generatedAt: 1,
+        items: [
+          {
+            id: 'bet-1',
+            project: 'Rollbit',
+            domain: 'rollbit.com',
+            chains: [],
+            taskTypes: ['quest'],
+            summary: 'Rollbit crypto casino airdrop live',
+            links: [{ url: 'https://rollbit.com/airdrop', known: false }],
+            sources: [],
+            sourceCount: 1,
+            score: 80,
+            risk: { level: 'ok', reasons: [] },
+            firstSeen: 1,
+            lastSeen: 1,
+          },
+        ],
+      }),
+    );
+    await expect(validatePagesDataDir(dir)).rejects.toThrow(/gambling\/betting/i);
+  });
 });

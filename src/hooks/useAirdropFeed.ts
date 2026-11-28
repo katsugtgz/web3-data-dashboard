@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { filterGamblingAirdropFeed } from '../../shared/gamblingFilter';
 import type { AirdropFeed, Card } from '../../shared/types';
 import { getJson } from '../lib/api';
 import { createPollLifecycle, type PollMode } from '../lib/polling';
@@ -49,10 +50,11 @@ export function useAirdropFeed(onCardsChange?: (cards: readonly Card[]) => void)
           }
           hasLiveRef.current = res.source === 'api';
           etagRef.current = res.etag;
-          cardsRef.current = res.body.cards;
-          setFeed(res.body);
+          const sanitized = filterGamblingAirdropFeed(res.body);
+          cardsRef.current = sanitized.cards;
+          setFeed(sanitized);
           setIsLiveApi(res.source === 'api');
-          onCardsChangeRef.current?.(res.body.cards);
+          onCardsChangeRef.current?.(sanitized.cards);
         }
         poll.settle(true);
         setFailed(false);

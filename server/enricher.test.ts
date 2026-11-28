@@ -868,4 +868,98 @@ describe('enrichAirdropsSnapshot', () => {
     expect(updated.cards[0]?.description).toBe('Earn points on Zap.');
     db.close();
   });
+
+  test('prunes cards revealed as gambling/casino/betting by DefiLlama category or HTML head metadata', async () => {
+    const db = openDb(':memory:');
+    await seedDefiLlamaDomains(
+      db.d1,
+      [
+        ...PROTOCOLS,
+        { name: 'HiddenGamble', slug: 'hiddengamble', url: 'https://hiddengamble.example', tvl: 15_000_000, category: 'Gambling' },
+      ],
+      NOW,
+    );
+    const feed: AirdropFeed = {
+      cards: [
+        {
+          r: 1,
+          n: 'Zap',
+          id: 'asso:zap',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          img: '',
+          f: '$10M',
+          tk: '1/1',
+          h: 1,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Use Zap', ty: 'liquidity', c: '$0', m: '—' },
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://app.zap.example/farm',
+          source: 'ASSO7878',
+        },
+        {
+          r: 2,
+          n: 'OpaqueApp',
+          id: 'asso:opaque',
+          t: null,
+          g: 'B',
+          b: ['live'],
+          img: '',
+          f: '$5M',
+          tk: '1/1',
+          h: 1,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Waitlist', ty: 'form', c: 'Free', m: '1 min' },
+          sc: 60,
+          sub: [6, 6, null],
+          url: 'https://opaqueapp.example/',
+          source: 'ASSO7878',
+        },
+        {
+          r: 3,
+          n: 'MysteryProto',
+          id: 'asso:mystery',
+          t: null,
+          g: 'B',
+          b: ['live'],
+          img: '',
+          f: '$5M',
+          tk: '1/1',
+          h: 1,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Use app', ty: 'mainnet', c: 'Free', m: '5 min' },
+          sc: 55,
+          sub: [5, 5, null],
+          url: 'https://hiddengamble.example/',
+          source: 'ASSO7878',
+        },
+      ],
+      tge: [],
+      counts: { active: 3, preToken: 3 },
+      fetchedAt: NOW - 1000,
+    };
+    await upsertSnapshot(db.d1, 'airdrops', feed, NOW - 1000);
+
+    const CASINO_HTML = `<!doctype html><html><head>
+      <meta property="og:title" content="OpaqueApp — Crypto Casino & Sportsbook">
+      <meta property="og:description" content="Play slots, roulette and wager crypto to farm points.">
+    </head><body></body></html>`;
+    const net = fakeNet({
+      'https://zap.example/': { html: ZAP_HTML },
+      'https://opaqueapp.example/': { html: CASINO_HTML },
+      'https://hiddengamble.example/': { html: '<!doctype html><html><head><title>App</title></head></html>' },
+    });
+    await enrichAirdropsSnapshot(db.d1, NOW, 10, { ...net });
+
+    const stored = await readSnapshot(db.d1, 'airdrops');
+    const updated = JSON.parse(stored!.body) as AirdropFeed;
+    expect(updated.cards.map(c => c.n)).toEqual(['Zap']);
+    expect(updated.counts).toEqual({ active: 1, preToken: 1 });
+    db.close();
+  });
 });

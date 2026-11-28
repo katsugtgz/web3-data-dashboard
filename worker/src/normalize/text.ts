@@ -1,4 +1,5 @@
 import type { TaskType } from '../../../shared/types';
+import { isGamblingPost } from '../../../shared/gamblingFilter';
 import { getRegistrableDomain, isNewsDomain, isPlatformDomain, isQuestDomain } from './domains';
 import { hasCjkDropSignal } from './i18n';
 
@@ -549,6 +550,9 @@ export function classifyDropRelevance(input: DropRelevanceInput): DropRelevanceR
   }
   if (PROMO_SPAM_RE.test(text)) {
     return { isDrop: false, reason: 'promo-or-survey-ad' };
+  }
+  if (isGamblingPost({ domain: input.projectDomain, text, urls })) {
+    return { isDrop: false, reason: 'gambling-or-betting' };
   }
 
   const hasNewsUrl = urls.some(u => {

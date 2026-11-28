@@ -36,6 +36,8 @@ jobs:
         run: bun test
       - name: Check zero CJK in code
         run: bash scripts/check-no-cjk.sh
+      - name: Check zero gambling/betting airdrops in snapshot
+        run: bun run check:gambling
       - name: Worker deploy dry-run
         working-directory: worker
         run: npx wrangler deploy --dry-run
@@ -54,6 +56,7 @@ jobs:
           jq -e 'type == "object" and (.sections | type == "array" and length >= 6)' dist/data/markets.json > /dev/null
           jq -e 'type == "object" and (.items | type == "array" and length > 0)' dist/data/feed.json > /dev/null
           jq -e 'type == "array" and length > 0' dist/data/sources.json > /dev/null
+          bun scripts/check-no-gambling.mts dist/data
       - name: Check zero CJK in dist
         run: |
           # Full CJK coverage (Han+Hiragana+Katakana+Hangul), and `if rg …`

@@ -44,6 +44,8 @@ jobs:
         run: bun test
       - name: Check zero CJK in code
         run: bash scripts/check-no-cjk.sh
+      - name: Check zero gambling/betting airdrops in snapshot
+        run: bun run check:gambling
       - name: Deploy Worker & apply D1 migrations
         working-directory: worker
         env:

@@ -1,5 +1,7 @@
 import { copyFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { findGamblingAirdropViolations, findGamblingFeedViolations } from '../shared/gamblingFilter';
+import type { AirdropFeed, FeedResponse } from '../shared/types';
 
 const REQUIRED_SNAPSHOT_VALIDATORS: readonly [string, (data: unknown) => boolean][] = [
   [
@@ -49,6 +51,21 @@ export async function validatePagesDataDir(dataDir: string): Promise<void> {
     }
     if (!isValid(parsed)) {
       throw new Error(`Empty or malformed Pages snapshot ${file}`);
+    }
+    if (file === 'airdrops.json') {
+      const violations = findGamblingAirdropViolations(parsed as AirdropFeed);
+      if (violations.length > 0) {
+        throw new Error(
+          `Forbidden gambling/betting entries in Pages snapshot ${file}: ${violations.slice(0, 5).join('; ')}`,
+        );
+      }
+    } else if (file === 'feed.json') {
+      const violations = findGamblingFeedViolations(parsed as FeedResponse);
+      if (violations.length > 0) {
+        throw new Error(
+          `Forbidden gambling/betting entries in Pages snapshot ${file}: ${violations.slice(0, 5).join('; ')}`,
+        );
+      }
     }
   }
 }

@@ -504,6 +504,136 @@ describe('snapshot hardening (M-34)', () => {
         sources,
       }),
     ).toThrow(/CJK/i);
+    expect(() =>
+      validateSnapshotBundle({
+        airdrops: {
+          ...airdrops,
+          cards: [
+            {
+              r: 1,
+              n: 'Polymarket',
+              t: null,
+              g: 'A',
+              b: ['live'],
+              f: '$3.88B',
+              tk: '1/1',
+              h: 100,
+              u: 'today',
+              fit: [],
+              best: { n: 'Interaction', ty: 'predictions', c: '$200', m: '10 min' },
+              taskTypes: ['predictions'],
+              sc: 70,
+              sub: [10, 4, null],
+              url: 'https://polymarket.com/',
+            },
+          ],
+        } as unknown as AirdropFeed,
+        markets,
+        feed,
+        sources,
+      }),
+    ).toThrow(/gambling\/betting/i);
+  });
+
+  test('buildAirdrops and selectFeedOutput strip gambling/casino/betting entries across worker, live, prior, and fixture paths', async () => {
+    const dirtyFeed = {
+      cards: [
+        {
+          r: 1,
+          n: 'Polymarket',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          f: '$3.88B',
+          tk: '1/1',
+          h: 100,
+          u: 'today',
+          fit: [],
+          best: { n: 'Bet', ty: 'predictions', c: '$200', m: '10 min' },
+          taskTypes: ['predictions'],
+          sc: 70,
+          sub: [10, 4, null],
+          url: 'https://polymarket.com/',
+        },
+        {
+          r: 2,
+          n: 'CleanProto',
+          t: null,
+          g: 'A',
+          b: ['live'],
+          f: '$10M',
+          tk: '1/1',
+          h: 100,
+          u: 'today',
+          fit: ['zero'],
+          best: { n: 'Testnet', ty: 'testnet', c: 'Free', m: '5 min' },
+          taskTypes: ['testnet'],
+          sc: 80,
+          sub: [8, 8, null],
+          url: 'https://cleanproto.xyz/',
+        },
+      ],
+      tge: [{ n: 'predict.fun', t: 'PREDICT', s: 'Claimable', d: 'TBA', url: 'https://predict.fun/' }],
+      counts: { active: 2, preToken: 2 },
+      fetchedAt: 1_710_000_000_000,
+    } as unknown as AirdropFeed;
+
+    const fromWorker = await buildAirdrops({
+      workerBase: 'https://worker.example',
+      fetchWorker: async () => new Response(JSON.stringify(dirtyFeed), { status: 200 }),
+    });
+    expect(fromWorker.cards.map(c => c.n)).toEqual(['CleanProto']);
+    expect(fromWorker.tge).toEqual([]);
+
+    const fromPrior = await buildAirdrops({
+      workerBase: '',
+      fetchLive: async () => {
+        throw new Error('offline');
+      },
+      readPrior: async () => dirtyFeed,
+    });
+    expect(fromPrior.cards.map(c => c.n)).toEqual(['CleanProto']);
+
+    const cleanedFeed = selectFeedOutput(
+      {
+        generatedAt: 200,
+        items: [
+          {
+            id: 'clean-1',
+            project: 'CleanProto',
+            domain: 'cleanproto.xyz',
+            chains: [],
+            taskTypes: ['testnet'],
+            summary: 'Clean testnet drop',
+            links: [{ url: 'https://cleanproto.xyz/testnet', known: true }],
+            sources: [],
+            sourceCount: 1,
+            score: 80,
+            risk: { level: 'ok', reasons: [] },
+            firstSeen: 100,
+            lastSeen: 200,
+          },
+          {
+            id: 'casino-1',
+            project: 'StakeCasino',
+            domain: 'stake.com',
+            chains: [],
+            taskTypes: ['quest'],
+            summary: 'Wager on casino slots for airdrop',
+            links: [{ url: 'https://stake.com/casino', known: false }],
+            sources: [],
+            sourceCount: 1,
+            score: 90,
+            risk: { level: 'ok', reasons: [] },
+            firstSeen: 100,
+            lastSeen: 200,
+          },
+        ],
+      },
+      1,
+      null,
+    );
+    expect(cleanedFeed.items.map(i => i.id)).toEqual(['clean-1']);
   });
 
   test('writeFileAtomic writes final content cleanly without leaving .tmp artifacts', async () => {
