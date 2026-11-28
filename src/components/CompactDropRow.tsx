@@ -14,6 +14,7 @@ import { resolveEntityVisual, type ProjectLogoIndex } from '../lib/visualAssets'
 import { ChainBadge, EntityAvatar } from './EntityVisual';
 import { DomainPill } from './DomainPill';
 import { RiskBadge } from './RiskBadge';
+import { describeBrief } from '../lib/agentBrief';
 import {
   ChevronRightIcon,
   CopyIcon,
@@ -44,6 +45,7 @@ function CompactDropRow({ item, logoIndex, radarIndex, onDetails, onCopyBrief, o
   const deadlinePill = meta.get('deadline');
   const stepCount = cleanFeedSteps(item.steps).length;
   const isRisk = item.risk.level === 'risk';
+  const briefLabel = describeBrief(item).label;
   const radarCard = matchRadarCard(item, radarIndex);
   const visual = resolveEntityVisual({
     name: title,
@@ -141,8 +143,8 @@ function CompactDropRow({ item, logoIndex, radarIndex, onDetails, onCopyBrief, o
           <button
             type="button"
             className="iconbtn"
-            title="Copy agent brief"
-            aria-label={`Copy agent brief for ${title}`}
+            title={`Copy agent brief (${briefLabel})`}
+            aria-label={`Copy agent brief for ${title} (${briefLabel})`}
             onClick={() => onCopyBrief(item)}
           >
             <CopyIcon size={14} />

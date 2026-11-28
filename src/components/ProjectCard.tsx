@@ -11,6 +11,7 @@ import { normalizeExternalUrl } from '../lib/format';
 import { BADGE_LABEL } from '../lib/labels';
 import { extractTickerFallback, type ProjectLogoIndex } from '../lib/visualAssets';
 import { ChainBadge, CryptoTickerPill, EntityAvatar, PlatformBadge } from './EntityVisual';
+import { BriefBadge } from './BriefActions';
 import { ProjectRichMeta } from './ProjectRichMeta';
 import {
   CheckCircle2Icon,
@@ -431,11 +432,14 @@ export function ProjectCard({
               <span>Risk blocked</span>
             </span>
           ) : (
-            <button type="button" className="chip project-copy-btn" onClick={() => onCopyBrief(c)}>
-              <CopyIcon size={13} />
-              <span>Copy agent brief</span>
-              <span className="sr"> for {c.n}</span>
-            </button>
+            <span className="project-brief-actions">
+              <BriefBadge item={c} />
+              <button type="button" className="chip project-copy-btn" onClick={() => onCopyBrief(c)}>
+                <CopyIcon size={13} />
+                <span>Copy agent brief</span>
+                <span className="sr"> for {c.n}</span>
+              </button>
+            </span>
           )}
         </div>
       </div>

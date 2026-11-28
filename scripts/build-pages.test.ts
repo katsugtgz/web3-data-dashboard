@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { copyAndValidateSnapshots, copyTaskRefs, validatePagesDataDir } from './build-pages.mts';
+import { assertTaskRefsIntact, copyAndValidateSnapshots, copyTaskRefs, validatePagesDataDir } from './build-pages.mts';
+
+const REPO = join(import.meta.dir, '..');
+const TASKS = 'data/tasks';
 
 const tempDirs: string[] = [];
 
@@ -50,6 +53,20 @@ describe('build-pages snapshot validation', () => {
     // The manifest pins each reference by the hash of its bytes, so nothing may be rewritten.
     expect(await readFile(join(dest, 'tasks', 'manifest.json'), 'utf8')).toBe(manifest);
     expect(await Bun.file(join(dest, 'tasks', 'notes.txt')).exists()).toBe(false);
+  });
+
+  test('copies the bundled task manifest and every reference it pins byte for byte', async () => {
+    const dest = await makeTempDir();
+
+    const copied = await copyTaskRefs(join(REPO, TASKS), join(dest, 'tasks'));
+
+    const manifest = JSON.parse(await readFile(join(REPO, TASKS, 'manifest.json'), 'utf8'));
+    expect(copied.sort()).toEqual(['manifest.json', ...manifest.tasks.map((task: { ref_path: string }) => task.ref_path)].sort());
+    for (const name of copied) {
+      const source = await readFile(join(REPO, TASKS, name));
+      expect((await readFile(join(dest, 'tasks', name))).equals(source), name).toBe(true);
+    }
+    expect(await readdir(join(dest, 'tasks'))).toHaveLength(copied.length);
   });
 
   test('rejects when a required snapshot file is missing', async () => {
@@ -162,5 +179,19 @@ describe('build-pages snapshot validation', () => {
       }),
     );
     await expect(validatePagesDataDir(dir)).rejects.toThrow(/gambling\/betting/i);
+  });
+});
+
+describe('build-pages task reference gate', () => {
+  test('passes on the repository', async () => {
+    await expect(assertTaskRefsIntact(REPO)).resolves.toBeUndefined();
+  });
+
+  test('refuses a task directory whose manifest fails the contract', async () => {
+    const root = await makeTempDir();
+    await mkdir(join(root, TASKS), { recursive: true });
+    await writeFile(join(root, TASKS, 'manifest.json'), '{\n  "kind": "task_manifest"\n}\n');
+
+    await expect(assertTaskRefsIntact(root)).rejects.toThrow('data/tasks/manifest.json');
   });
 });

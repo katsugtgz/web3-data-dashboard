@@ -2,6 +2,7 @@ import { copyFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findGamblingAirdropViolations, findGamblingFeedViolations } from '../shared/gamblingFilter';
 import type { AirdropFeed, FeedResponse } from '../shared/types';
+import { checkTaskRefs } from './check-task-refs.mts';
 
 const REQUIRED_SNAPSHOT_VALIDATORS: readonly [string, (data: unknown) => boolean][] = [
   [
@@ -95,8 +96,17 @@ export async function copyTaskRefs(srcDir: string, destDir: string): Promise<str
   return files;
 }
 
+/** Throws unless the task manifest and every reference it pins pass the integrity gate under `rootDir`. */
+export async function assertTaskRefsIntact(rootDir = '.'): Promise<void> {
+  const result = await checkTaskRefs({ rootDir });
+  if (!result.ok) {
+    throw new Error(`Task reference check failed:\n${result.problems.map(problem => ` - ${problem}`).join('\n')}`);
+  }
+}
+
 if (import.meta.main) {
   await Bun.$`vite build`;
   await copyAndValidateSnapshots('data/snapshot', 'dist/data');
+  await assertTaskRefsIntact();
   await copyTaskRefs('data/tasks', 'dist/data/tasks');
 }

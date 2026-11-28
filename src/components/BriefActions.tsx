@@ -1,7 +1,8 @@
 import type { AgentProfile, Card, FeedItem } from '../../shared/types';
-import { buildBrief } from '../lib/agentBrief';
+import { buildBrief, describeBrief } from '../lib/agentBrief';
 import { downloadMarkdown } from '../lib/clipboard';
-import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, ShieldAlertIcon } from './Icons';
+import { getRefBaseUrl } from '../hooks/useCopyBriefController';
+import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, InfoIcon, ShieldAlertIcon, ShieldCheckIcon } from './Icons';
 
 interface Props<T extends FeedItem | Card> {
   target: T;
@@ -12,6 +13,22 @@ interface Props<T extends FeedItem | Card> {
   showBrief: boolean;
   onToggleBrief: () => void;
   onCopyBrief: (target: T) => void;
+}
+
+/**
+ * Which brief Copy produces for an item that is not RISK: a reviewed playbook,
+ * or a brief built from item data. Show it only next to a working Copy action.
+ */
+export function BriefBadge({ item, className }: { item: FeedItem | Card; className?: string }) {
+  const { verified, badge, label } = describeBrief(item);
+  const Icon = verified ? ShieldCheckIcon : InfoIcon;
+  const classes = `brief-badge ${verified ? 'is-verified' : 'is-unverified'}${className ? ` ${className}` : ''}`;
+  return (
+    <span className={classes} title={label}>
+      <Icon size={12} />
+      <span>{badge}</span>
+    </span>
+  );
 }
 
 /** Copy, preview, and download controls for an agent brief, or the RISK guardrail notice. */
@@ -47,13 +64,15 @@ export function BriefActions<T extends FeedItem | Card>({
         type="button"
         className="chip"
         onClick={() => {
-          const md = buildBrief(target, profile);
+          // Same context as Copy and Preview, so all three produce the same bytes.
+          const md = buildBrief(target, profile, { refBaseUrl: getRefBaseUrl() });
           if (md) downloadMarkdown(`${slug}-agent-brief.md`, md);
         }}
       >
         <DownloadIcon size={14} />
         <span>Download .md</span>
       </button>
+      <BriefBadge item={target} />
     </div>
   );
 }
