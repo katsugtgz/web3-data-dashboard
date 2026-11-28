@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { NavGroup } from '../hooks/useDashboardTabs';
 import { formatClock, formatRelativeTime } from '../lib/format';
-import { BotIcon, MoonIcon, RefreshCwIcon, SunIcon } from './Icons';
+import { BotIcon, MoonIcon, RefreshCwIcon, ShieldCheckIcon, SunIcon } from './Icons';
 
 interface Props {
   activeTabLabel: string;
@@ -15,6 +15,7 @@ interface Props {
   isMarketTab?: boolean;
   resolvedTheme: 'light' | 'dark';
   onRefresh: () => void;
+  onOpenContribution: () => void;
   onOpenProfile: () => void;
   onToggleTheme: () => void;
 }
@@ -87,6 +88,7 @@ export function DashboardHeader({
   isMarketTab = false,
   resolvedTheme,
   onRefresh,
+  onOpenContribution,
   onOpenProfile,
   onToggleTheme,
 }: Props) {
@@ -179,6 +181,17 @@ export function DashboardHeader({
             >
               <BotIcon size={15} />
               <span className="ctrl-label">Agent profile</span>
+            </button>
+
+            <button
+              type="button"
+              className="ctrl-btn"
+              onClick={onOpenContribution}
+              aria-label="Validate task contribution"
+              title="Validate task run JSON contribution"
+            >
+              <ShieldCheckIcon size={15} />
+              <span className="ctrl-label">Validate</span>
             </button>
 
             <button

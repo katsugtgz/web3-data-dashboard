@@ -684,8 +684,9 @@ function isCleanHttpsUrl(value: unknown): boolean {
 /** Rejects the first unknown key, then the first missing key. */
 function checkKeys(record: Record<string, unknown>, allowed: readonly string[], path: string): Fail | null {
   const present = new Set(Object.keys(record));
+  const known = new Set(allowed);
   for (const key of present) {
-    if (!allowed.includes(key)) return fail('unknown_field', `${path}.${key}`);
+    if (!known.has(key)) return fail('unknown_field', `${path}.${key}`);
   }
   for (const key of allowed) {
     if (!present.has(key)) return fail('invalid_field_value', `${path}.${key}`);

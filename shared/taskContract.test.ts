@@ -667,8 +667,9 @@ function browserRef(): TaskRefV1 {
 }
 
 function mutate(base: () => unknown, change: (doc: Mutable) => void): Mutable {
-  // A JSON round trip mimics a document that arrived from disk or the network.
-  const doc = JSON.parse(JSON.stringify(base())) as Mutable;
+  // The text and the parse mimic a document that arrived from disk or the network.
+  const text = JSON.stringify(base());
+  const doc = JSON.parse(text) as Mutable;
   change(doc);
   return doc;
 }

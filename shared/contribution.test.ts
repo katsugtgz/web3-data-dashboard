@@ -78,7 +78,8 @@ const flopEntry = (manifest: Mutable): Mutable => manifest.tasks.find((entry: Mu
 
 /** A JSON round trip hands `change` a plain copy, as if the document came from the clipboard. */
 function mutate<T>(base: T, change: (copy: Mutable) => void): T {
-  const copy = JSON.parse(JSON.stringify(base)) as Mutable;
+  const text = JSON.stringify(base);
+  const copy = JSON.parse(text) as Mutable;
   change(copy);
   return copy as T;
 }

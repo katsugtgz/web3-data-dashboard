@@ -164,7 +164,8 @@ export function validateContribution(
     const index = ref.steps.indexOf(refStep);
     if (index <= lastIndex || !refStep.depends_on.every(id => attempted.has(id))) return fail('step_order_violation');
     // Every ref step source is a ref official source, so this one check covers both rules.
-    if (!step.source_ids.every(id => refStep.source_ids.includes(id))) return fail('unknown_source');
+    const refSources = new Set(refStep.source_ids);
+    if (!step.source_ids.every(id => refSources.has(id))) return fail('unknown_source');
     lastIndex = index;
     attempted.add(refStep.id);
     previewSteps.push({ id: step.id, title: refStep.title, outcome: step.outcome, source_ids: [...step.source_ids] });
