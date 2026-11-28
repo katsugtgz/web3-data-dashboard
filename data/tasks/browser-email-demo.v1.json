@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "task_id": "browser-email-demo",
+  "revision": 1,
+  "mode": "synthetic_fixture",
+  "adapter": "fixture_browser_email",
+  "activation": {
+    "state": "active",
+    "source_ids": []
+  },
+  "networks": [
+    "fixture-app"
+  ],
+  "required_capabilities": [
+    "browser",
+    "email_inbox"
+  ],
+  "official_sources": [
+    {
+      "id": "official_app",
+      "kind": "official_app",
+      "url": "https://app.fixture.invalid/"
+    }
+  ],
+  "steps": [
+    {
+      "id": "precheck_official_app",
+      "actor": "agent",
+      "depends_on": [],
+      "source_ids": [
+        "official_app"
+      ],
+      "check": {
+        "type": "official_origin",
+        "source_id": "official_app"
+      },
+      "checkpoint_id": null
+    },
+    {
+      "id": "human_browser_auth",
+      "actor": "human",
+      "depends_on": [
+        "precheck_official_app"
+      ],
+      "source_ids": [
+        "official_app"
+      ],
+      "check": null,
+      "checkpoint_id": "email_verification"
+    },
+    {
+      "id": "verify_account_status",
+      "actor": "agent",
+      "depends_on": [
+        "human_browser_auth"
+      ],
+      "source_ids": [
+        "official_app"
+      ],
+      "check": {
+        "type": "fixture_account_status",
+        "source_id": "official_app"
+      },
+      "checkpoint_id": null
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "login",
+      "type": "login",
+      "action": "Open only the official app in your own browser and log in yourself. Never paste a password or a one-time code into chat.",
+      "resume_when": "You are signed in on the official app page and its address bar shows the official domain."
+    },
+    {
+      "id": "batch_inputs",
+      "type": "batch_inputs",
+      "action": "Gather the non-sensitive details this task asks for and supply them together. Leave out passwords, codes, and recovery phrases.",
+      "resume_when": "Every required non-sensitive input is ready and nothing sensitive was shared in chat."
+    },
+    {
+      "id": "email_verification",
+      "type": "email_verification",
+      "action": "Complete the email verification step in your own mailbox. Read the code there and type it only into the official app. Never share a one-time code in chat.",
+      "resume_when": "The official app shows the account as verified."
+    }
+  ],
+  "proof": {
+    "kind": "account_status",
+    "source_id": "official_app",
+    "required_status": "verified"
+  },
+  "fixture": {
+    "cases": {
+      "inputs_missing": {
+        "page_origin": "https://app.fixture.invalid/",
+        "account_status": "unverified",
+        "inputs_ready": false
+      },
+      "awaiting_verification": {
+        "page_origin": "https://app.fixture.invalid/",
+        "account_status": "pending",
+        "inputs_ready": true
+      },
+      "wrong_origin": {
+        "page_origin": "https://evil.example.invalid/",
+        "account_status": "verified",
+        "inputs_ready": true
+      },
+      "verified": {
+        "page_origin": "https://app.fixture.invalid/",
+        "account_status": "verified",
+        "inputs_ready": true
+      }
+    }
+  }
+}
