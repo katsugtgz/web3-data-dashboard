@@ -30,7 +30,6 @@ export const TYPES: string[] = [
   'Staking',
   'DePIN / Node',
   'Stock tokens',
-  'Betting',
 ];
 
 export const CATEGORIES: string[] = [
@@ -67,7 +66,6 @@ export const TYPE_MAP: Record<string, string[]> = {
   Staking: ['staking'],
   'DePIN / Node': ['depin'],
   'Stock tokens': [],
-  Betting: ['predictions'],
 };
 
 export const TABS: Tab[] = [

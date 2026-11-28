@@ -1,4 +1,5 @@
 import { MARKET_SECTIONS_ORDER } from '../../shared/constants';
+import { filterGamblingAirdropFeed } from '../../shared/gamblingFilter';
 import type {
   AirdropFeed,
   HealthResponse,
@@ -195,7 +196,7 @@ function parseSnapshotJson<T>(row: SnapshotRow | null): T | null {
 async function loadCachedSurf(db: D1Database): Promise<AirdropFeed | null> {
   try {
     const feed = parseSnapshotJson<AirdropFeed>(await readSnapshot(db, 'airdrops'));
-    return feed ? backfillLegacyAirdropSources(feed) : null;
+    return feed ? filterGamblingAirdropFeed(backfillLegacyAirdropSources(feed)) : null;
   } catch (err) {
     console.error('cron-error:loadCachedSurf', err);
     return null;
@@ -212,7 +213,7 @@ async function loadCachedAirdrops(
     console.error('cron-error:loadCachedAirdrops', err);
   }
   const parsed = parseSnapshotJson<AirdropFeed>(row);
-  const feed = parsed ? backfillLegacyAirdropSources(parsed) : null;
+  const feed = parsed ? filterGamblingAirdropFeed(backfillLegacyAirdropSources(parsed)) : null;
   return {
     feed,
     fetchedAt: feed && row ? row.fetched_at : 0,
@@ -906,6 +907,16 @@ export default {
         await handleCachedJson(request, ctx, cacheControl, async () => {
           const row = await readSnapshot(env.DB, 'airdrops');
           if (!row || !row.body || row.body === '{}') return null;
+          try {
+            const parsed = JSON.parse(row.body) as AirdropFeed;
+            const filtered = filterGamblingAirdropFeed(parsed);
+            if (filtered !== parsed) {
+              const body = JSON.stringify(filtered);
+              return { body, etag: await bodyEtag(body) };
+            }
+          } catch {
+            // Preserve existing malformed-body handling
+          }
           return { body: row.body, etag: row.etag };
         }),
       );

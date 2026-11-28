@@ -1,4 +1,5 @@
 import type { AirdropFeed, Badge, Card, CardTask, Grade, Tge } from '../../../shared/types';
+import { filterGamblingAirdropFeed } from '../../../shared/gamblingFilter';
 import { FETCH_TIMEOUT_MS, USER_AGENT, fmtIsoDate, fmtPct, fmtUsd } from '../lib/format';
 import { safeHttpsUrl } from '../lib/url';
 import {
@@ -614,12 +615,12 @@ export function parseWpCalendarToAirdropFeed(
     });
   }
 
-  return {
+  return filterGamblingAirdropFeed({
     cards: [],
     tge,
     counts: { active: 0, preToken: 0 },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 /** One row of AirdropAlert's `aa-cal/v1/events` payload (field names as served live). */
@@ -813,12 +814,12 @@ function collectAirdropAlertActiveListings(
 /** Active AirdropAlert listings (one card per listing) from a `aa-cal/v1/events` payload. */
 export function parseAirdropAlertEvents(raw: unknown, nowMs = Date.now()): AirdropFeed {
   const { cards } = collectAirdropAlertActiveListings(raw, nowMs);
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge: [],
     counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 interface SubstackPost {
@@ -1094,12 +1095,12 @@ export function parseGalxeCampaignsToAirdropFeed(raw: unknown, nowMs = Date.now(
     });
   }
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge: [],
     counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 interface PendleMarket {
@@ -1271,12 +1272,12 @@ export function parsePendlePoints(raw: unknown, nowMs = Date.now()): AirdropFeed
       };
     });
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge: [],
     counts: { active: cards.length, preToken: cards.length },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 interface MerklToken {
@@ -1518,12 +1519,12 @@ export function parseMerklOpportunities(raw: unknown, nowMs = Date.now()): Airdr
       };
     });
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge: [],
     counts: { active: cards.length, preToken: cards.length },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 async function fetchJsonWithTimeout(url: string, init?: RequestInit): Promise<unknown> {
@@ -1651,12 +1652,12 @@ export async function fetchAirdropAlertAirdropsParts(
   }
 
   return {
-    feed: {
+    feed: filterGamblingAirdropFeed({
       cards,
       tge,
       counts: { active: cards.length, preToken: cards.filter(c => !c.b.includes('token')).length },
       fetchedAt: nowMs,
-    },
+    }),
     calendarFailed,
     eventsFailed,
   };

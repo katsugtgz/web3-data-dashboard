@@ -1,4 +1,5 @@
 import type { AirdropFeed, Badge, Card, FitKey, Grade, Tge } from '../../../shared/types';
+import { filterGamblingAirdropFeed, isGamblingCategory } from '../../../shared/gamblingFilter';
 import { fmtUsd } from '../lib/format';
 import { safeHttpsUrl } from '../lib/url';
 import { normalizeProjectKey } from '../normalize/cluster';
@@ -46,7 +47,10 @@ function isValidLlamaProtocolItem(entry: unknown): entry is ValidLlamaProtocolIt
   if (typeof p.name !== 'string' || p.name.trim().length === 0) return false;
   if (p.symbol !== '-') return false;
   if (p.category != null && typeof p.category !== 'string') return false;
-  if (typeof p.category === 'string' && DEFILLAMA_EXCLUDED_CATEGORIES.has(p.category.trim().toLowerCase())) {
+  if (
+    typeof p.category === 'string' &&
+    (DEFILLAMA_EXCLUDED_CATEGORIES.has(p.category.trim().toLowerCase()) || isGamblingCategory(p.category))
+  ) {
     return false;
   }
   if (typeof p.tvl !== 'number' || !Number.isFinite(p.tvl) || p.tvl < DEFILLAMA_MIN_TVL_USD) return false;
@@ -65,6 +69,14 @@ const DEFILLAMA_EXCLUDED_CATEGORIES = new Set([
   'custody',
   'treasury manager',
   'rwa',
+  'gambling',
+  'prediction market',
+  'prediction markets',
+  'betting',
+  'casino',
+  'lottery',
+  'sportsbook',
+  'gamblefi',
 ]);
 
 function mapLlamaCategoryType(category?: string): string {
@@ -184,12 +196,12 @@ export function extractDefiLlamaTokenlessAirdrops(raw: unknown, nowMs = Date.now
     });
   }
 
-  return {
+  return filterGamblingAirdropFeed({
     cards,
     tge: [],
     counts: { active: cards.length, preToken: cards.length },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 const UNTRUSTED_SHEET_SOURCES = new Set(['asso7878', 'arndxt']);
@@ -487,7 +499,7 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
     }
   }
 
-  return {
+  return filterGamblingAirdropFeed({
     cards: rankedCards,
     tge: mergedTge,
     counts: {
@@ -495,7 +507,7 @@ export function mergeCuratedAirdropFeeds(feeds: AirdropFeed[], nowMs = Date.now(
       preToken: rankedCards.filter(c => !c.b.includes('token')).length,
     },
     fetchedAt: nowMs,
-  };
+  });
 }
 
 export interface CuratedAirdropOptions {

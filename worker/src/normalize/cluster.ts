@@ -9,6 +9,7 @@ import type {
   SourceHealth,
   TaskType,
 } from '../../../shared/types';
+import { isGamblingFeedItem, isGamblingPost } from '../../../shared/gamblingFilter';
 import { sha1Hex } from '../lib/hash';
 import { safeHttpsUrl } from '../lib/url';
 import {
@@ -1693,6 +1694,9 @@ export async function queryFeed(
       if (domLower && (isNewsDomain(domLower) || LEGACY_BLOCKED_DOMAINS.has(domLower))) {
         continue;
       }
+      if (isGamblingPost({ project, domain: domLower, text: c.summary, urls: rawUrls })) {
+        continue;
+      }
 
       // Trust persisted ingest verdict (`is_drop === 1`) so CJK fallback summaries
       // ("Nexus: other") and >195-char drops are never hidden at read time.
@@ -1812,6 +1816,8 @@ export async function queryFeed(
           cardRank: c.surf_rank ?? undefined,
         };
       }
+
+      if (isGamblingFeedItem(item)) continue;
 
       items.push(item);
       if (items.length >= limit) break;

@@ -195,7 +195,7 @@ export function parseAssoUpdatedTimestamp(cols: readonly string[]): number | nul
 export interface AssoCategoryInfo {
   label: string;
   layout: 'standard' | 'ecosystem' | 'waitlist';
-  skip?: 'cex' | 'abandoned';
+  skip?: 'cex' | 'abandoned' | 'gambling';
 }
 
 const ASSO_CATEGORY_MAP: Record<string, AssoCategoryInfo> = {
@@ -206,19 +206,30 @@ const ASSO_CATEGORY_MAP: Record<string, AssoCategoryInfo> = {
   候补: { label: 'Waitlist', layout: 'waitlist' },
   钱包: { label: 'Wallet', layout: 'standard' },
   交易类: { label: 'Trading', layout: 'standard' },
-  预测市场: { label: 'Prediction Market', layout: 'standard' },
+  预测市场: { label: 'Prediction Market', layout: 'standard', skip: 'gambling' },
   'AI 机器人': { label: 'AI & Robotics', layout: 'standard' },
   AI机器人: { label: 'AI & Robotics', layout: 'standard' },
   挂机: { label: 'DePIN / Idle', layout: 'standard' },
   另类测试网: { label: 'Alt Testnet', layout: 'standard' },
   跨链桥: { label: 'Bridge', layout: 'standard' },
   嘴撸: { label: 'Social / InfoFi', layout: 'standard' },
-  博彩: { label: 'Gaming / Betting', layout: 'standard' },
+  博彩: { label: 'Gaming / Betting', layout: 'standard', skip: 'gambling' },
   存款: { label: 'Yield / Deposit', layout: 'standard' },
   模板项目: { label: 'Quest Template', layout: 'standard' },
   高频任务类: { label: 'Daily Tasks', layout: 'standard' },
   未分类: { label: 'Uncategorized', layout: 'standard' },
 };
+
+const ASSO_GAMBLING_CELL_RE = /博彩|赌博|赌场|菠菜|彩票|预测市场|竞猜|押注|下注/;
+
+export function isAssoGamblingRow(ecosystem?: string, interaction?: string, cost?: string): boolean {
+  for (const raw of [ecosystem, interaction, cost]) {
+    const trimmed = (raw ?? '').trim();
+    if (!trimmed) continue;
+    if (trimmed === '预测' || ASSO_GAMBLING_CELL_RE.test(trimmed)) return true;
+  }
+  return false;
+}
 
 export function classifyAssoCategory(raw?: string): AssoCategoryInfo | null {
   const trimmed = (raw ?? '').trim();

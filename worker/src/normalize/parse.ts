@@ -1,4 +1,5 @@
 import type { TaskType } from '../../../shared/types';
+import { isGamblingPost } from '../../../shared/gamblingFilter';
 import { DOUBLING_SCAM_RE, DRAINER_RE } from '../safety';
 import { URL_SHORTENERS } from '../safety/shorteners';
 import {
@@ -469,13 +470,16 @@ export function parseDropPost(text: string, htmlUrls: string[] = [], ctx: ParseC
 
   const { summary, isNonLatin } = buildRuleSummary(text, project, taskTypes, chains, ctx.sourceLang);
 
-  const relevance = classifyDropRelevance({
-    text,
-    urls,
-    projectDomain,
-    taskTypes,
-    hasSurfMatch: Boolean(surfMatch),
-  });
+  const isGambling = isGamblingPost({ project, domain: projectDomain, text, urls });
+  const relevance = isGambling
+    ? { isDrop: false, reason: 'gambling-or-betting' }
+    : classifyDropRelevance({
+        text,
+        urls,
+        projectDomain,
+        taskTypes,
+        hasSurfMatch: Boolean(surfMatch),
+      });
 
   return {
     urls,

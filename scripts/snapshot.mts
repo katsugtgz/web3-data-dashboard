@@ -12,6 +12,12 @@ import type {
   SourceHealth,
   TaskType,
 } from '../shared/types';
+import {
+  filterGamblingAirdropFeed,
+  filterGamblingFeedItems,
+  findGamblingAirdropViolations,
+  findGamblingFeedViolations,
+} from '../shared/gamblingFilter';
 import { FETCH_TIMEOUT_MS, USER_AGENT } from '../worker/src/lib/format';
 import {
   buildFeedLogoIndex,
@@ -143,10 +149,16 @@ export function selectFeedOutput(
   existingFeed: FeedResponse | null,
 ): FeedResponse {
   if (liveChannelsSucceeded > 0 && Array.isArray(liveFeed.items) && liveFeed.items.length > 0) {
-    return liveFeed;
+    const cleanLiveItems = filterGamblingFeedItems(liveFeed.items);
+    if (cleanLiveItems.length > 0) {
+      return cleanLiveItems === liveFeed.items ? liveFeed : { ...liveFeed, items: cleanLiveItems };
+    }
   }
   if (existingFeed && Array.isArray(existingFeed.items) && existingFeed.items.length > 0) {
-    return existingFeed;
+    const cleanPriorItems = filterGamblingFeedItems(existingFeed.items);
+    if (cleanPriorItems.length > 0) {
+      return cleanPriorItems === existingFeed.items ? existingFeed : { ...existingFeed, items: cleanPriorItems };
+    }
   }
   throw new Error(
     'All Telegram fetches failed or yielded zero live items and no committed data/snapshot/feed.json exists — refusing to publish empty/fixture feed',
@@ -332,7 +344,10 @@ export async function buildAirdrops(deps: BuildAirdropsDeps = {}): Promise<Airdr
       const res = await fetchWorker(`${base}/airdrops.json`);
       if (res.ok) {
         const parsed: unknown = await res.json();
-        if (isValidAirdropsPayload(parsed)) return parsed;
+        if (isValidAirdropsPayload(parsed)) {
+          const clean = filterGamblingAirdropFeed(parsed);
+          if (clean.cards.length > 0) return clean;
+        }
         console.warn('Worker airdrops payload invalid, using local fallback');
       }
     } catch (err) {
@@ -340,14 +355,17 @@ export async function buildAirdrops(deps: BuildAirdropsDeps = {}): Promise<Airdr
     }
   }
   try {
-    return await fetchLive(runNowMs);
+    return filterGamblingAirdropFeed(await fetchLive(runNowMs));
   } catch (err) {
     console.warn('All curated airdrop fetches failed, falling back to prior/fixture:', err);
     const prior = await readPrior();
-    if (prior) return prior;
+    if (prior) {
+      const cleanPrior = filterGamblingAirdropFeed(prior);
+      if (cleanPrior.cards.length > 0) return cleanPrior;
+    }
     const raw = await readFixture();
     const fixtureFetchedAt = resolveFixtureFetchedAt(raw);
-    return normalizeSurf(raw, fixtureFetchedAt);
+    return filterGamblingAirdropFeed(normalizeSurf(raw, fixtureFetchedAt));
   }
 }
 
@@ -624,11 +642,14 @@ async function buildDropsAndSources(
           Array.isArray(sources) &&
           sources.length > 0
         ) {
-          return {
-            feed,
-            sources,
-            liveChannelsSucceeded: sources.filter(s => s.status === 'ok').length || 1,
-          };
+          const cleanItems = filterGamblingFeedItems(feed.items);
+          if (cleanItems.length > 0) {
+            return {
+              feed: cleanItems === feed.items ? feed : { ...feed, items: cleanItems },
+              sources,
+              liveChannelsSucceeded: sources.filter(s => s.status === 'ok').length || 1,
+            };
+          }
         }
         console.warn('Worker feed/sources payload empty or invalid, using local fallback');
       } catch (err) {
@@ -874,6 +895,16 @@ export function validateSnapshotBundle(bundle: SnapshotBundle): SerializedSnapsh
     if (FORBIDDEN_CJK_RE.test(json)) {
       throw new Error(`Snapshot validation failed: forbidden CJK character found in ${name}`);
     }
+  }
+
+  const gamblingViolations = [
+    ...findGamblingAirdropViolations(bundle.airdrops),
+    ...findGamblingFeedViolations(bundle.feed),
+  ];
+  if (gamblingViolations.length > 0) {
+    throw new Error(
+      `Snapshot validation failed: gambling/betting entries found (${gamblingViolations.slice(0, 5).join('; ')})`,
+    );
   }
 
   return serialized;
