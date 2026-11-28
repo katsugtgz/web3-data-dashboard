@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Web3 Radar run report v1",
+  "description": "Output of scripts/run.py on stdout. task_id, revision, mode and adapter are null when the run stopped before they were known and the requested task ID is not a safe identifier. A report never echoes observation, network, or command-line input.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "revision",
+    "mode",
+    "adapter",
+    "status",
+    "error",
+    "steps",
+    "evidence",
+    "checkpoint",
+    "missing_capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+    },
+    "revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "synthetic_fixture",
+        "live_read_only",
+        null
+      ]
+    },
+    "adapter": {
+      "enum": [
+        "fixture_voucher",
+        "fixture_browser_email",
+        "http_read_only",
+        null
+      ]
+    },
+    "status": {
+      "enum": [
+        "invalid_input",
+        "blocked_not_active",
+        "blocked_missing_capability",
+        "ineligible",
+        "needs_user",
+        "verified_fixture",
+        "verified_live"
+      ]
+    },
+    "error": {
+      "enum": [
+        "invalid_cli_arguments",
+        "malformed_json",
+        "duplicate_json_field",
+        "input_too_large",
+        "unknown_field",
+        "invalid_field_value",
+        "unsupported_task",
+        "stale_revision",
+        "unknown_revision",
+        "invalid_manifest",
+        "invalid_reference",
+        "ref_sha256_mismatch",
+        "expect_sha256_mismatch",
+        "adapter_not_allowed",
+        "mode_not_allowed",
+        "secret_detected",
+        "pii_detected",
+        "receipt_conflicts_with_ineligible",
+        null
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step_report"
+      },
+      "maxItems": 32
+    },
+    "evidence": {
+      "$ref": "#/$defs/evidence"
+    },
+    "checkpoint": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/checkpoint_report"
+        }
+      ]
+    },
+    "missing_capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+    },
+    "capability": {
+      "enum": [
+        "network_read",
+        "browser",
+        "email_inbox",
+        "wallet_human"
+      ]
+    },
+    "step_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "outcome",
+        "source_ids"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked",
+            "needs_user",
+            "skipped"
+          ]
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation",
+        "network",
+        "eligibility",
+        "receipt",
+        "account_status"
+      ],
+      "properties": {
+        "activation": {
+          "enum": [
+            "active",
+            "not_active",
+            "unknown"
+          ]
+        },
+        "network": {
+          "enum": [
+            "matched",
+            "mismatched",
+            "not_checked"
+          ]
+        },
+        "eligibility": {
+          "enum": [
+            "eligible",
+            "ineligible",
+            "not_checked"
+          ]
+        },
+        "receipt": {
+          "enum": [
+            "matched",
+            "missing",
+            "mismatched",
+            "failed",
+            "not_finalized",
+            "not_checked"
+          ]
+        },
+        "account_status": {
+          "enum": [
+            "verified",
+            "pending",
+            "unverified",
+            "origin_mismatch",
+            "not_checked"
+          ]
+        }
+      }
+    },
+    "checkpoint_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "human_action_required_now",
+        "action",
+        "resume_when"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+        },
+        "type": {
+          "enum": [
+            "await_activation",
+            "batch_inputs",
+            "login",
+            "email_verification",
+            "captcha",
+            "kyc",
+            "wallet_signature",
+            "form_submit"
+          ]
+        },
+        "human_action_required_now": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
+        },
+        "resume_when": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400,
+          "pattern": "^(?![\\s\\S]*[<>\\u00ab\\u00bb`])[\\x20-\\x7e]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "task_id": "flop-testnet-voucher",
+  "revision": 1,
+  "mode": "live_read_only",
+  "adapter": "http_read_only",
+  "activation": {
+    "state": "not_active",
+    "source_ids": [
+      "official_registry",
+      "official_timeline"
+    ]
+  },
+  "networks": [
+    "polkadot:918abd58fb16306b30ef3886514cfaeb"
+  ],
+  "required_capabilities": [
+    "network_read"
+  ],
+  "official_sources": [
+    {
+      "id": "official_registry",
+      "kind": "official_documentation",
+      "url": "https://ask.flop.finance/docs/official-links"
+    },
+    {
+      "id": "official_timeline",
+      "kind": "official_documentation",
+      "url": "https://ask.flop.finance/docs/testnet-and-timeline"
+    },
+    {
+      "id": "faucet_chain",
+      "kind": "public_read_only_endpoint",
+      "url": "https://faucet.flop.network/chain"
+    }
+  ],
+  "steps": [
+    {
+      "id": "verify_voucher_window",
+      "actor": "agent",
+      "depends_on": [],
+      "source_ids": [
+        "official_registry",
+        "official_timeline"
+      ],
+      "check": {
+        "type": "reviewed_activation"
+      },
+      "checkpoint_id": null
+    },
+    {
+      "id": "verify_network",
+      "actor": "agent",
+      "depends_on": [
+        "verify_voucher_window"
+      ],
+      "source_ids": [
+        "faucet_chain"
+      ],
+      "check": {
+        "type": "http_json_pins",
+        "source_id": "faucet_chain",
+        "pins": {
+          "caip2": "polkadot:918abd58fb16306b30ef3886514cfaeb",
+          "genesisHash": "0x918abd58fb16306b30ef3886514cfaebffecb4de43e82b6f8ec4795c43cfd800"
+        }
+      },
+      "checkpoint_id": null
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "await_official_activation",
+      "type": "await_activation",
+      "action": "Wait for official FLOP sources to publish the voucher activation block and supported eligibility path.",
+      "resume_when": "Official finalized activation block and supported eligibility path published."
+    }
+  ],
+  "proof": {
+    "kind": "unknown_until_active"
+  },
+  "fixture": null
+}

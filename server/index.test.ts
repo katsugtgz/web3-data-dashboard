@@ -9,14 +9,17 @@ import { JOB, createScheduler, type JobStatus } from './scheduler';
 
 const T0 = 1_800_000_000_000;
 const SHELL = '<!doctype html><html><body>radar</body></html>';
+// Contents are arbitrary: the tests only need a JSON file under data/tasks/.
+const TASK_MANIFEST = { revision: 'demo', tasks: [] };
 
 function makeDist(): string {
   const dir = mkdtempSync(join(tmpdir(), 'radar-dist-'));
   mkdirSync(join(dir, 'assets'));
-  mkdirSync(join(dir, 'data'));
+  mkdirSync(join(dir, 'data', 'tasks'), { recursive: true });
   writeFileSync(join(dir, 'index.html'), SHELL);
   writeFileSync(join(dir, 'assets', 'app.abc123.js'), 'console.log(1)');
   writeFileSync(join(dir, 'data', 'feed.json'), '{"items":[]}');
+  writeFileSync(join(dir, 'data', 'tasks', 'manifest.json'), JSON.stringify(TASK_MANIFEST));
   writeFileSync(join(dir, 'icon.svg'), '<svg/>');
   return dir;
 }
@@ -126,6 +129,38 @@ describe('static site', () => {
     const res = await handle(new Request(`http://radar.test${path}`));
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain('radar');
+  });
+});
+
+describe('static task refs', () => {
+  test('serves /data/tasks/manifest.json as the file on disk, with nosniff', async () => {
+    const { handle } = makeApp();
+    const res = await handle(new Request('http://radar.test/data/tasks/manifest.json'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await res.json()).toEqual(TASK_MANIFEST);
+  });
+
+  test.each([
+    '/data/tasks/../../package.json',
+    '/data/tasks/nonexistent.v1.json',
+  ])('%s is a 404, never the SPA shell', async path => {
+    const { handle } = makeApp();
+    const res = await handle(new Request(`http://radar.test${path}`));
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain('radar');
+  });
+
+  test('encoded parent directories under /data/tasks cannot reach a file outside dist', async () => {
+    // package.json sits one level above the dist root the app serves from.
+    const outside = join(distDir, 'outside');
+    mkdirSync(join(outside, 'dist'), { recursive: true });
+    writeFileSync(join(outside, 'package.json'), 'outside dist');
+    const { handle } = makeApp({ distDir: join(outside, 'dist') });
+    const res = await handle(new Request('http://radar.test/data/tasks/..%2f..%2f..%2fpackage.json'));
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain('outside dist');
   });
 });
 

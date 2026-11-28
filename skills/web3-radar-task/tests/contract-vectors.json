@@ -1,0 +1,1299 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {
+      "context": "scrub",
+      "name": "scrub.jwt",
+      "input": {
+        "$join": [
+          "ey",
+          "JhbGciOiJIUzI1NiJ9.ey",
+          "JzdWIiOiJmeGl0dXJlIn0.c2ln",
+          "bmF0dXJl",
+          "OF9GSVhUVVJF"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bearer_token",
+      "input": {
+        "$join": [
+          "b",
+          "earer c2lnbmF0dXJlLWZpeHR1cmUtMTIzNDU2",
+          "Nzg5"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bearer_short_is_not_a_token",
+      "input": "Bearer abc",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.set_cookie_header",
+      "input": {
+        "$join": [
+          "set-",
+          "cookie: session=f",
+          "ixture1234567890; Path=/; HttpOnly"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.secure_cookie_prefix",
+      "input": {
+        "$join": [
+          "__Sec",
+          "ure-nextauth.session-token=c",
+          "fixture1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.host_cookie_prefix",
+      "input": {
+        "$join": [
+          "__Ho",
+          "st-csrf=c",
+          "fixture1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.sessionid_cookie",
+      "input": {
+        "$join": [
+          "session",
+          "id=fixture",
+          "1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.connect_sid_cookie",
+      "input": {
+        "$join": [
+          "connect.s",
+          "id=fixture1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.php_session_cookie",
+      "input": {
+        "$join": [
+          "PHPSESS",
+          "ID=fixture1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hex64",
+      "input": {
+        "$join": [
+          "0123456789abcdef0123456789abcdef",
+          "0123456789abcdef0123456789abcdef"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hex64_with_0x_prefix",
+      "input": {
+        "$join": [
+          "0x",
+          "0123456789abcdef0123456789abcdef",
+          "0123456789abcdef0123456789abcdef"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hex64_embedded_in_text",
+      "input": {
+        "$join": [
+          "tx ",
+          "0123456789abcdef0123456789abcdef",
+          "0123456789abcdef0123456789abcdef",
+          " done"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hex63_is_not_a_key",
+      "input": {
+        "$join": [
+          "0123456789abcdef0123456789abcdef",
+          "0123456789abcdef0123456789abcde"
+        ]
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hex32_caip2_is_not_a_key",
+      "input": "polkadot:918abd58fb16306b30ef3886514cfaeb",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.feed_id_is_not_a_key",
+      "input": "7331604250321743f7293ccd2a8740720b4df8b1",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bip39_public_test_mnemonic_12",
+      "input": {
+        "$join": [
+          "aba",
+          "ndon abi",
+          "lity ab",
+          "le abo",
+          "ut ab",
+          "ove abs",
+          "ent ab",
+          "sorb abs",
+          "tract abs",
+          "urd ab",
+          "use ac",
+          "cess ac",
+          "cident"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bip39_public_test_mnemonic_24",
+      "input": {
+        "$join": [
+          "abo",
+          "ndon abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n abando",
+          "n ar",
+          "t"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bip39_mnemonic_nested_in_list",
+      "input": [
+        "wallet note",
+        {
+          "$join": [
+            "aba",
+            "ndon abi",
+            "lity ab",
+            "le abo",
+            "ut ab",
+            "ove abs",
+            "ent ab",
+            "sorb abs",
+            "tract abs",
+            "urd ab",
+            "use ac",
+            "cess ac",
+            "cident"
+          ]
+        }
+      ],
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.eleven_seed_words_is_not_a_phrase",
+      "input": {
+        "$join": [
+          "aba",
+          "ndon abi",
+          "lity ab",
+          "le abo",
+          "ut ab",
+          "ove abs",
+          "ent ab",
+          "sorb abs",
+          "tract abs",
+          "urd ab",
+          "use ac",
+          "cess"
+        ]
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.stopword_breaks_seed_phrase",
+      "input": {
+        "$join": [
+          "aba",
+          "ndon abi",
+          "lity ab",
+          "le the ",
+          "abo",
+          "ut ab",
+          "ove abs",
+          "ent ab",
+          "sorb abs",
+          "tract abs",
+          "urd ab",
+          "use ac",
+          "cess ac",
+          "cident"
+        ]
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.prose_with_stopwords",
+      "input": "Read the official documentation before you start and check that every step is recorded in the run report.",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.otp_standalone",
+      "input": {
+        "$join": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.otp_in_sentence",
+      "input": {
+        "$join": [
+          "Your code is 4",
+          "8",
+          "2",
+          "9",
+          "1",
+          "3 and expires soon."
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.digits_glued_to_letters_are_not_otp",
+      "input": "ab123456cd",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.hyphen_bounded_date_is_not_otp",
+      "input": "2026-11-28",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.eight_digit_otp",
+      "input": {
+        "$join": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.nine_digit_number_is_not_otp",
+      "input": {
+        "$join": [
+          "12",
+          "3456789"
+        ]
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.email_address",
+      "input": {
+        "$join": [
+          "someone@exam",
+          "ple.com"
+        ]
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.email_in_nested_object",
+      "input": {
+        "note": {
+          "contact": {
+            "$join": [
+              "first.last@sub.exam",
+              "ple.invalid"
+            ]
+          }
+        }
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.zero_width_space_in_hex64",
+      "input": {
+        "$join": [
+          "0123456789abcdef0123456789abcdef",
+          "0123456789abcde\u200bf",
+          "0123456789abcdef"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.right_to_left_mark_in_bearer",
+      "input": {
+        "$join": [
+          "b\u200fearer c2ln",
+          "bmF0dXJlLWZpeHR1cmUtMTIzNDU2",
+          "Nzg5"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.word_joiner_in_otp",
+      "input": {
+        "$join": [
+          "1",
+          "2\u20603",
+          "456"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.byte_order_mark_in_jwt",
+      "input": {
+        "$join": [
+          "ey\ufeff",
+          "JhbGciOiJIUzI1NiJ9.ey",
+          "JzdWIiOiJmeGl0dXJlIn0.c2ln",
+          "bmF0dXJl",
+          "OF9GSVhUVVJF"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.soft_hyphen_in_cookie",
+      "input": {
+        "$join": [
+          "session\u00ad",
+          "id=fixture1234567890"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.zero_width_non_joiner_in_set_cookie",
+      "input": {
+        "$join": [
+          "set\u200c",
+          "-cookie: a=b"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.soft_hyphen_in_key",
+      "input": {
+        "pass\u00adword": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.left_to_right_mark_in_key",
+      "input": {
+        "to\u200eken": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.fullwidth_digits_normalize_to_otp",
+      "input": {
+        "$join": [
+          "\uff11",
+          "\uff12",
+          "\uff13",
+          "\uff14",
+          "\uff15",
+          "\uff16"
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.fullwidth_key_normalizes_to_password",
+      "input": {
+        "\uff50\uff41\uff53\uff53\uff57\uff4f\uff52\uff44": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_password",
+      "input": {
+        "password": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_passwd",
+      "input": {
+        "passwd": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_apikey",
+      "input": {
+        "apiKey": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_privatekey",
+      "input": {
+        "privateKey": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_authtoken",
+      "input": {
+        "authToken": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_setcookie",
+      "input": {
+        "setCookie": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_sessionid",
+      "input": {
+        "sessionId": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_user_session",
+      "input": {
+        "user_session": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_login_otp",
+      "input": {
+        "login_otp": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_x_api_key",
+      "input": {
+        "x-api-key": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_api_key",
+      "input": {
+        "api key": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_mnemonic",
+      "input": {
+        "mnemonic": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_seed_phrase",
+      "input": {
+        "seed_phrase": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_private",
+      "input": {
+        "private": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_authorization",
+      "input": {
+        "Authorization": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_bearer",
+      "input": {
+        "bearer": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_cookie",
+      "input": {
+        "cookie": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_cookies",
+      "input": {
+        "cookies": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_token",
+      "input": {
+        "token": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_secret",
+      "input": {
+        "secret": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_session",
+      "input": {
+        "SESSION": "x"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_email",
+      "input": {
+        "email": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_user_email",
+      "input": {
+        "user_email": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_phonenumber",
+      "input": {
+        "phoneNumber": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_phone",
+      "input": {
+        "phone": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_contact_phone_number",
+      "input": {
+        "contact_phone_number": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_awaiting_email",
+      "input": {
+        "awaiting_email": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_contact_email",
+      "input": {
+        "Contact.Email": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_e_mail",
+      "input": {
+        "e-mail": "x"
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_wins_over_value",
+      "input": {
+        "email": {
+          "$join": [
+            "someone@exam",
+            "ple.com"
+          ]
+        }
+      },
+      "expect": "pii_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.secret_key_wins_over_pii_key",
+      "input": {
+        "password": "x",
+        "email": "y"
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_in_otp_range",
+      "input": 123456,
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_below_otp_range",
+      "input": 999,
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_above_otp_range",
+      "input": 123456789,
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.bool_is_not_an_int",
+      "input": true,
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_in_schema_version_path",
+      "input": {
+        "schema_version": 123456
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_in_revision_path",
+      "input": {
+        "revision": 123456
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.int_in_nested_list",
+      "input": {
+        "items": [
+          1,
+          2,
+          123456
+        ]
+      },
+      "expect": "secret_detected"
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_prefix_covers_pin",
+      "input": {
+        "steps": [
+          {
+            "check": {
+              "pins": {
+                "genesisHash": {
+                  "$join": [
+                    "0123456789abcdef0123456789abcdef",
+                    "0123456789abcdef0123456789abcdef"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expect": null,
+      "exempt_paths": [
+        "$.steps[*].check.pins.*"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_exact_path",
+      "input": {
+        "ref_sha256": {
+          "$join": [
+            "0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef"
+          ]
+        }
+      },
+      "expect": null,
+      "exempt_paths": [
+        "$.ref_sha256"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_prefix_does_not_cover_sibling",
+      "input": {
+        "proof": {
+          "pins": {
+            "a": "1"
+          },
+          "other": {
+            "$join": [
+              "0123456789abcdef0123456789abcdef",
+              "0123456789abcdef0123456789abcdef"
+            ]
+          }
+        }
+      },
+      "expect": "secret_detected",
+      "exempt_paths": [
+        "$.proof.pins.*"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_prefix_does_not_cover_parent",
+      "input": {
+        "proof": {
+          "pins": {
+            "a": {
+              "$join": [
+                "0123456789abcdef0123456789abcdef",
+                "0123456789abcdef0123456789abcdef"
+              ]
+            }
+          }
+        }
+      },
+      "expect": "secret_detected",
+      "exempt_paths": [
+        "$.proof.pins"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_string_keeps_key_check",
+      "input": {
+        "password": {
+          "$join": [
+            "0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef"
+          ]
+        }
+      },
+      "expect": "secret_detected",
+      "exempt_paths": [
+        "$.password"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_int_still_checked_outside_otp_range",
+      "input": {
+        "at": 123456
+      },
+      "expect": "secret_detected",
+      "exempt_paths": [
+        "$.other.*"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.key_cannot_forge_exempt_path",
+      "input": {
+        "steps[*].check.pins.x": {
+          "$join": [
+            "0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef"
+          ]
+        }
+      },
+      "expect": "secret_detected",
+      "exempt_paths": [
+        "$.steps[*].check.pins.*"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.exempt_at_reviewed_text",
+      "input": {
+        "checkpoint": {
+          "resume_when": {
+            "$join": [
+              "Block ",
+              "123456",
+              " is final."
+            ]
+          }
+        }
+      },
+      "expect": null,
+      "exempt_paths": [
+        "$.checkpoint.resume_when"
+      ]
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_handle",
+      "input": "@katsugtgz",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_voucher_id",
+      "input": "fixture-voucher-001",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_capability",
+      "input": "email_inbox",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_source_url",
+      "input": "https://app.fixture.invalid/",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_event",
+      "input": "VoucherRedeemed",
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_empty_object",
+      "input": {},
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_scalars_only",
+      "input": {
+        "a": [
+          1,
+          true,
+          null,
+          2.5
+        ]
+      },
+      "expect": null
+    },
+    {
+      "context": "scrub",
+      "name": "scrub.safe_empty_string",
+      "input": "",
+      "expect": null
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.duplicate_key",
+      "input": "{\"a\":1,\"a\":2}",
+      "expect": "duplicate_json_field"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.duplicate_nested_key",
+      "input": "{\"a\":{\"b\":1,\"b\":2}}",
+      "expect": "duplicate_json_field"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.case_distinct_keys",
+      "input": "{\"a\":1,\"A\":2}",
+      "expect": null
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.nan",
+      "input": "{\"a\":NaN}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.infinity",
+      "input": "{\"a\":Infinity}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.negative_infinity",
+      "input": "{\"a\":-Infinity}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.overflow_float",
+      "input": "{\"a\":1e400}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.trailing_garbage",
+      "input": "{\"a\":1} {\"b\":2}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.trailing_comma",
+      "input": "{\"a\":1,}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.single_quotes",
+      "input": "{'a':1}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.unescaped_tab",
+      "input": "{\"a\":\"x\ty\"}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.unescaped_newline",
+      "input": "{\"a\":\"x\ny\"}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.escaped_newline",
+      "input": "{\"a\":\"x\\ny\"}",
+      "expect": null
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.depth_32",
+      "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "expect": null
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.depth_33",
+      "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.empty_text",
+      "input": "",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.whitespace_only",
+      "input": "  \n ",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.byte_order_mark",
+      "input": "\ufeff{}",
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.invalid_utf8",
+      "input": {
+        "$utf8": "7b226122ff"
+      },
+      "expect": "malformed_json"
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.at_byte_limit",
+      "input": "null",
+      "expect": null,
+      "max_bytes": 4
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.multibyte_over_byte_limit",
+      "input": "\u00e9\u00e9\u00e9",
+      "expect": "input_too_large",
+      "max_bytes": 5
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.top_level_scalar",
+      "input": "null",
+      "expect": null
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.over_limit",
+      "input": "abcde",
+      "expect": "input_too_large",
+      "max_bytes": 4
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.round_trip",
+      "input": "{\"a\":[1,2.5,null,true,\"x\\u0041\"]}",
+      "expect": null,
+      "equals": {
+        "a": [
+          1,
+          2.5,
+          null,
+          true,
+          "xA"
+        ]
+      }
+    },
+    {
+      "context": "strict_json",
+      "name": "strict_json.bytes_input",
+      "input": {
+        "$utf8": "7b2261223a317d"
+      },
+      "expect": null,
+      "equals": {
+        "a": 1
+      },
+      "max_bytes": 8
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.https",
+      "input": "https://example.invalid/docs",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.http",
+      "input": "http://example.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.www_without_scheme",
+      "input": "www.example.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.upper_case",
+      "input": "HTTP://EXAMPLE.INVALID",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.zero_width_space",
+      "input": "ht\u200btp://example.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.soft_hyphen",
+      "input": "www\u00ad.example.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.fullwidth_punctuation",
+      "input": "http\uff1a\uff0f\uff0fexample.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.fullwidth_www",
+      "input": "\uff57\uff57\uff57.example.invalid",
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.plain_text",
+      "input": "Read the official documentation",
+      "expect": false
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.host_without_scheme",
+      "input": "example.invalid/docs",
+      "expect": false
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.ftp",
+      "input": "ftp://example.invalid",
+      "expect": false
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.single_slash",
+      "input": "https:/example.invalid",
+      "expect": false
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.digits_only",
+      "input": "123456",
+      "expect": false
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.nested_object",
+      "input": {
+        "action": "See the docs",
+        "source": {
+          "url": "https://example.invalid"
+        }
+      },
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.nested_list",
+      "input": [
+        "plain",
+        "www.example.invalid"
+      ],
+      "expect": true
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.exempt_source",
+      "input": {
+        "url": "https://example.invalid"
+      },
+      "expect": false,
+      "exempt_paths": [
+        "$.url"
+      ]
+    },
+    {
+      "context": "contribution_url",
+      "name": "contribution_url.scalars_only",
+      "input": {
+        "a": [
+          1,
+          true,
+          null
+        ]
+      },
+      "expect": false
+    }
+  ]
+}
