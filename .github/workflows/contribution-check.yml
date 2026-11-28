@@ -1,0 +1,32 @@
+name: Contribution Check
+
+# An issue body is untrusted input. The script reads it from the event file, so no
+# step ever places issue text in a workflow expression or a shell command.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    if: contains(github.event.issue.labels.*.name, 'task-contribution')
+    name: Validate the contributed run report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - run: bun install --frozen-lockfile
+      - name: Check the contribution issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bun scripts/check-contribution-issue.mts
