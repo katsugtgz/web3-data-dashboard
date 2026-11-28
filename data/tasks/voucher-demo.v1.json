@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "kind": "task_ref",
+  "task_id": "voucher-demo",
+  "revision": 1,
+  "title": "Voucher demo (synthetic fixture)",
+  "summary": "Demo only. Check one synthetic eligibility and receipt case against the pinned fixture values. No live claim is verified.",
+  "mode": "synthetic_fixture",
+  "adapter": "fixture_voucher",
+  "review": {
+    "reviewed_by": "@katsugtgz",
+    "reviewed_at": "2026-11-28"
+  },
+  "networks": [
+    "fixture-chain"
+  ],
+  "activation": {
+    "state": "active",
+    "source_ids": []
+  },
+  "required_capabilities": [],
+  "official_sources": [],
+  "steps": [
+    {
+      "id": "check_fixture_eligibility",
+      "title": "Check the fixture eligibility",
+      "actor": "agent",
+      "depends_on": [],
+      "source_ids": [],
+      "check": {
+        "type": "fixture_eligibility"
+      },
+      "checkpoint_id": null
+    },
+    {
+      "id": "voucher_claim_handoff",
+      "title": "Hand off the simulated voucher claim",
+      "actor": "human",
+      "depends_on": [
+        "check_fixture_eligibility"
+      ],
+      "source_ids": [],
+      "check": null,
+      "checkpoint_id": "voucher_claim_handoff"
+    },
+    {
+      "id": "check_fixture_receipt",
+      "title": "Check the synthetic receipt",
+      "actor": "agent",
+      "depends_on": [
+        "voucher_claim_handoff"
+      ],
+      "source_ids": [],
+      "check": {
+        "type": "fixture_receipt"
+      },
+      "checkpoint_id": null
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "voucher_claim_handoff",
+      "type": "wallet_signature",
+      "action": "Demo only: select or supply synthetic receipt after simulated human signing step. Do not sign or send real transaction.",
+      "resume_when": "The synthetic receipt is successful, finalized, and matches pinned chain, contract, event, recipient, and voucher ID."
+    }
+  ],
+  "proof": {
+    "kind": "onchain_receipt",
+    "pins": {
+      "chain": "fixture-chain",
+      "contract": "fixture-voucher-contract",
+      "event": "VoucherRedeemed",
+      "recipient": "fixture-recipient",
+      "voucher_id": "fixture-voucher-001"
+    }
+  },
+  "fixture": {
+    "cases": {
+      "ineligible": {
+        "eligible": false,
+        "receipt": null
+      },
+      "eligible": {
+        "eligible": true,
+        "receipt": null
+      },
+      "matched": {
+        "eligible": true,
+        "receipt": {
+          "chain": "fixture-chain",
+          "contract": "fixture-voucher-contract",
+          "event": "VoucherRedeemed",
+          "recipient": "fixture-recipient",
+          "voucher_id": "fixture-voucher-001",
+          "success": true,
+          "finalized": true
+        }
+      },
+      "wrong": {
+        "eligible": true,
+        "receipt": {
+          "chain": "fixture-chain",
+          "contract": "fixture-voucher-contract",
+          "event": "VoucherRedeemed",
+          "recipient": "fixture-other-recipient",
+          "voucher_id": "fixture-voucher-001",
+          "success": true,
+          "finalized": true
+        }
+      }
+    }
+  }
+}

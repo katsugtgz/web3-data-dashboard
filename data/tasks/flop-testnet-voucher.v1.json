@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "kind": "task_ref",
+  "task_id": "flop-testnet-voucher",
+  "revision": 1,
+  "title": "FLOP testnet voucher (live read-only)",
+  "summary": "Read the official FLOP sources and one public chain endpoint to check the voucher window and the network. The runner never claims or signs.",
+  "mode": "live_read_only",
+  "adapter": "http_read_only",
+  "review": {
+    "reviewed_by": "@katsugtgz",
+    "reviewed_at": "2026-11-28"
+  },
+  "networks": [
+    "polkadot:918abd58fb16306b30ef3886514cfaeb"
+  ],
+  "activation": {
+    "state": "not_active",
+    "source_ids": [
+      "official_registry",
+      "official_timeline"
+    ]
+  },
+  "required_capabilities": [
+    "network_read"
+  ],
+  "official_sources": [
+    {
+      "id": "official_registry",
+      "kind": "official_documentation",
+      "url": "https://ask.flop.finance/docs/official-links"
+    },
+    {
+      "id": "official_timeline",
+      "kind": "official_documentation",
+      "url": "https://ask.flop.finance/docs/testnet-and-timeline"
+    },
+    {
+      "id": "faucet_chain",
+      "kind": "public_read_only_endpoint",
+      "url": "https://faucet.flop.network/chain"
+    }
+  ],
+  "steps": [
+    {
+      "id": "verify_voucher_window",
+      "title": "Verify the voucher window from the official sources",
+      "actor": "agent",
+      "depends_on": [],
+      "source_ids": [
+        "official_registry",
+        "official_timeline"
+      ],
+      "check": {
+        "type": "reviewed_activation"
+      },
+      "checkpoint_id": null
+    },
+    {
+      "id": "verify_network",
+      "title": "Verify the network against the pinned public endpoint",
+      "actor": "agent",
+      "depends_on": [
+        "verify_voucher_window"
+      ],
+      "source_ids": [
+        "faucet_chain"
+      ],
+      "check": {
+        "type": "http_json_pins",
+        "source_id": "faucet_chain",
+        "pins": {
+          "caip2": "polkadot:918abd58fb16306b30ef3886514cfaeb",
+          "genesisHash": "0x918abd58fb16306b30ef3886514cfaebffecb4de43e82b6f8ec4795c43cfd800"
+        }
+      },
+      "checkpoint_id": null
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "await_official_activation",
+      "type": "await_activation",
+      "action": "Wait for official FLOP sources to publish the voucher activation block and supported eligibility path.",
+      "resume_when": "Official finalized activation block and supported eligibility path published."
+    }
+  ],
+  "proof": {
+    "kind": "unknown_until_active"
+  },
+  "fixture": null
+}
